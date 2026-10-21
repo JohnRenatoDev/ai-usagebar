@@ -45,6 +45,16 @@
   still apply, and SuperGrok can now be selected for the top bar (GNOME
   extension 0.5.0).
 
+- **Factory Droid subscription quota (`--vendor droid`, opt-in).** Reuses the
+  login the official `droid` CLI keeps on Linux: the `~/.factory/auth.v2.keyring`
+  session is opened with the `Factory CLI/auth-encryption-key` Secret Service
+  item, read-only — ai-usagebar never logs in, renews the JWT, or writes the
+  credential back, and an expired login is reported as "run `droid` once". The
+  bar shows the busiest active Standard window and the panel lists the
+  Standard 5-hour/weekly/monthly windows, the Droid Core bucket, and the
+  extra-usage balance. Other `auth.v2.*` stores and non-Linux platforms fail
+  closed. Enable with `[droid] enabled = true`.
+
 - **AI clients can query usage through a built-in MCP server.** Run
   `ai-usagebar mcp` as a local stdio server to expose read-only `get_usage`
   and `list_providers` tools. Usage can be narrowed to a provider or named

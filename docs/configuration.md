@@ -30,7 +30,7 @@ ai-usagebar-tui --config ./config.test.toml
 #                         # | zai | openrouter | deepseek | deepinfra | kimi | kilo | novita
 #                         # | moonshot | grok | supergrok | grokbot | antigravity | cursor
 #                         # | minimax | kiro | nous | opencode-go | commandcode
-#                         # | orcarouter | modelstudio | lyceum | devin | cline | muse-code
+#                         # | orcarouter | modelstudio | lyceum | devin | cline | muse-code | droid
 # Which vendors the Overview lists, in this order. The TUI tab bar leads with
 # the same list; enabled vendors left off it follow in the canonical order.
 # Omit for every enabled vendor. A repeated slug keeps its first occurrence;
@@ -286,7 +286,22 @@ enabled = false            # disabled by default; enable after signing in with D
 # (the CLI's documented paths; macOS is untested here).
 # An explicit credentials_path needs no home directory to resolve.
 # credentials_path = "/home/you/.local/share/devin/credentials.toml"
+
+[droid]
+enabled = false            # disabled by default; enable after signing in with `droid` on Linux
+# Factory Droid subscription quota. Reuses the login the official `droid` CLI
+# keeps on Linux: `~/.factory/auth.v2.keyring`, opened with the
+# `Factory CLI/auth-encryption-key` Secret Service item. Read-only — the
+# token is never refreshed or written back, and an expired login is reported
+# with the fix (run `droid` once). Other `auth.v2.*` stores and non-Linux
+# platforms are not supported.
 ```
+
+Droid remains opt-in when its CLI login is present. First-run detection and
+`detect --all` do not enable it; set `enabled = true` explicitly to activate
+the provider. It reports the Standard quota's 5-hour, weekly and monthly
+windows plus the Droid Core bucket (an unstarted window shows its percentage
+with no reset) and the extra-usage balance.
 
 Devin remains opt-in when its CLI login is present. First-run detection and
 `detect --all` do not enable it; set `enabled = true` explicitly to activate

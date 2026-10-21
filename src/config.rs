@@ -74,6 +74,7 @@ pub struct Config {
     pub modelstudio: ModelStudioConfig,
     pub lyceum: LyceumConfig,
     pub devin: DevinConfig,
+    pub droid: DroidConfig,
     #[serde(rename = "muse-code")]
     pub muse: MuseConfig,
     /// Quota-threshold desktop notifications (`[notifications]`).
@@ -1312,6 +1313,15 @@ pub struct DevinConfig {
     /// `%APPDATA%\devin\credentials.toml` on Windows and
     /// `${XDG_DATA_HOME:-~/.local/share}/devin/credentials.toml` elsewhere.
     pub credentials_path: Option<PathBuf>,
+}
+
+/// Factory Droid (`droid` CLI) quota — reuses the login the CLI keeps in the
+/// Linux Secret Service keyring, read-only. The provider is opt-in and takes
+/// no key or path: it only reads the CLI's documented `~/.factory` store.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct DroidConfig {
+    pub enabled: bool,
 }
 
 impl Default for OpenCodeGoConfig {
@@ -2567,6 +2577,7 @@ impl Config {
             VendorId::ModelStudio => self.modelstudio.enabled,
             VendorId::Lyceum => self.lyceum.enabled,
             VendorId::Devin => self.devin.enabled,
+            VendorId::Droid => self.droid.enabled,
             VendorId::MuseCode => self.muse.enabled,
         }
     }
@@ -2610,7 +2621,8 @@ impl Config {
             | VendorId::CommandCode
             | VendorId::ModelStudio
             | VendorId::Devin
-            | VendorId::MuseCode => id.api_key_env(),
+            | VendorId::MuseCode
+            | VendorId::Droid => id.api_key_env(),
         }
     }
 
@@ -2648,7 +2660,8 @@ impl Config {
             | VendorId::CommandCode
             | VendorId::ModelStudio
             | VendorId::Devin
-            | VendorId::MuseCode => None,
+            | VendorId::MuseCode
+            | VendorId::Droid => None,
         };
         raw.filter(|key| !key.is_empty())
     }
@@ -3288,6 +3301,7 @@ mod tests {
             VendorId::OrcaRouter,
             VendorId::ModelStudio,
             VendorId::Devin,
+            VendorId::Droid,
         ] {
             assert!(!c.is_enabled(opt_in), "{opt_in:?}");
         }
@@ -3805,6 +3819,21 @@ enabled = false
             .unwrap();
         assert!(!path.starts_with("~"), "{}", path.display());
         assert!(path.ends_with("bl"), "{}", path.display());
+    }
+
+    #[test]
+    fn droid_is_opt_in_and_takes_no_api_key() {
+        let defaults = DroidConfig::default();
+        assert!(!defaults.enabled);
+
+        let config = Config::default();
+        assert_eq!(config.api_key_env_for(VendorId::Droid), "");
+        assert_eq!(config.inline_api_key(VendorId::Droid), None);
+
+        let file = write_toml("[droid]\nenabled = true\n");
+        let config = Config::load_from(file.path()).unwrap();
+        assert!(config.is_enabled(VendorId::Droid));
+        assert!(config.enabled_vendors().contains(&VendorId::Droid));
     }
 
     #[test]
