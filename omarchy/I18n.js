@@ -92,7 +92,7 @@ var NOTE_KEYS = {
 var MESSAGES = {
   en: {
     "priority.title": "Usage priorities",
-    "priority.meta": "Which AI to use first, by quota left over at reset",
+    "priority.meta": "Which AI to use first",
     "priority.section": "PRIORITIES",
     "priority.enable": "Enable usage priorities",
     "priority.enable_desc": "Lists the AIs in the order worth using them, inside this popup.",
@@ -301,7 +301,7 @@ var MESSAGES = {
   },
   ru: {
     "priority.title": "Приоритеты использования",
-    "priority.meta": "Какой ИИ использовать первым, по остатку квоты при сбросе",
+    "priority.meta": "Какой ИИ использовать первым",
     "priority.section": "ПРИОРИТЕТЫ",
     "priority.enable": "Включить приоритеты использования",
     "priority.enable_desc": "Показывает ИИ в том порядке, в котором их стоит использовать, прямо в этом окне.",
@@ -510,7 +510,7 @@ var MESSAGES = {
   },
   "pt-BR": {
     "priority.title": "Prioridades de uso",
-    "priority.meta": "Qual IA usar primeiro, pela sobra prevista na renovação",
+    "priority.meta": "Qual IA usar primeiro",
     "priority.section": "PRIORIDADES",
     "priority.enable": "Ativar prioridades de uso",
     "priority.enable_desc": "Lista as IAs na ordem em que vale usar, dentro deste popup.",
@@ -719,7 +719,7 @@ var MESSAGES = {
   },
   ko: {
     "priority.title": "사용 우선순위",
-    "priority.meta": "초기화 때 남을 할당량 기준으로 먼저 쓸 AI",
+    "priority.meta": "먼저 쓸 AI",
     "priority.section": "우선순위",
     "priority.enable": "사용 우선순위 활성화",
     "priority.enable_desc": "이 팝업 안에서 AI를 사용하기 좋은 순서대로 보여 줍니다.",
@@ -928,7 +928,7 @@ var MESSAGES = {
   },
   es: {
     "priority.title": "Prioridades de uso",
-    "priority.meta": "Qué IA usar primero, según la cuota que sobrará al renovarse",
+    "priority.meta": "Qué IA usar primero",
     "priority.section": "PRIORIDADES",
     "priority.enable": "Activar prioridades de uso",
     "priority.enable_desc": "Lista las IA en el orden en que conviene usarlas, dentro de este panel.",
