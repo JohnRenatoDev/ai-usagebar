@@ -1100,6 +1100,7 @@ Panel {
       onTextKey: function(text) {
         if (!root.settingsOpen && (text === "r" || text === "R")) root.refresh()
         else if (!root.settingsOpen && (text === "s" || text === "S")) root.openSettings()
+        else if (!root.settingsOpen && (text === "p" || text === "P")) root.openPriorities()
       }
 
       // The optional priorities module is a second view of the same data, not

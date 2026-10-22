@@ -2159,6 +2159,7 @@ console.log('Omarchy model tests passed');
 assert.match(panelSource, /readonly property bool showPriorities:/);
 assert.match(panelSource, /visible: root\.priorityOpen && !root\.settingsOpen/);
 assert.match(panelSource, /Keys\.onEscapePressed: root\.priorityOpen = false/);
+assert.match(panelSource, /\(text === "p" \|\| text === "P"\)\) root\.openPriorities\(\)/);
 assert.doesNotMatch(panelSource, /ai-priorities|execDetached/);
 assert.match(settingsViewSource, /signal showPrioritiesRequested\(bool enabled\)/);
 // A quota at risk of being lost turns the bar red even without the shortcut.

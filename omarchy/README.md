@@ -69,9 +69,10 @@ omarchy plugin remove akitaonrails.ai-usagebar
   section is open at a time and the first is open by default. A folded section
   keeps what you typed, so Save still covers it.
   `h`/`l` or Left/Right switches provider, `j`/`k` or Up/Down scrolls, `r`,
-  Enter, or Space refreshes, Tab moves to the neighboring bar panel, and Esc
-  closes. Mouse-wheel and touchpad scrolling cover long settings forms faster;
-  changes to settings take effect only after the Save button at the bottom.
+  Enter, or Space refreshes, `p` opens usage priorities (when enabled), Tab
+  moves to the neighboring bar panel, and Esc closes. Mouse-wheel and touchpad
+  scrolling cover long settings forms faster; changes to settings take effect
+  only after the Save button at the bottom.
 - Shell: `omarchy-shell shell summon akitaonrails.ai-usagebar '{}'` opens the
   panel and `omarchy-shell shell hide akitaonrails.ai-usagebar` closes it.
 
@@ -323,8 +324,9 @@ optional shortcut is off. Clicking it opens the priorities view.
 
 Hover a compact block for 300ms to preview its rationale, or click/press
 Enter/Space to pin it. The expanded block has a separate View limits action.
-Escape returns to the consumption view. All priority messages are translated
-in the same five locales as the rest of the plugin.
+`p` opens the view from the usage panel; Escape returns to the consumption
+view. All priority messages are translated in the same five locales as the rest
+of the plugin.
 
 ```bash
 omarchy bar set akitaonrails.ai-usagebar recentHours 6 --json
