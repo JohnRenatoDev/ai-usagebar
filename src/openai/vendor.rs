@@ -210,12 +210,21 @@ fn render_tooltip(
 
     if let Some(session) = snap.session.as_ref() {
         push_window(&mut lines, "  󰔟  Codex 5h", session, theme, now, None);
+    } else if snap.weekly.is_some() {
+        lines.push(TooltipLine::Body(format!(
+            " <span foreground='{dim}'>  Codex 5h — Not reported</span>"
+        )));
     }
     if let Some(weekly) = snap.weekly.as_ref() {
         if snap.session.is_some() {
             lines.push(TooltipLine::Body("".into()));
         }
         push_window(&mut lines, "  󰃰  Codex weekly", weekly, theme, now, None);
+    } else if snap.session.is_some() {
+        lines.push(TooltipLine::Body("".into()));
+        lines.push(TooltipLine::Body(format!(
+            " <span foreground='{dim}'>  Codex weekly — Not reported</span>"
+        )));
     }
     if snap.session.is_none() && snap.weekly.is_none() {
         lines.push(TooltipLine::Body(format!(
@@ -447,14 +456,14 @@ mod tests {
     }
 
     #[test]
-    fn weekly_only_snapshot_uses_weekly_default_and_hides_session() {
+    fn weekly_only_snapshot_uses_weekly_default_and_marks_session_unreported() {
         let mut s = sample();
         s.session = None;
         s.weekly.as_mut().unwrap().utilization_pct = 66;
         let out = render(&oc(s.clone()), &s, &Theme::default(), &opts(), Utc::now());
         assert!(out.text.contains("66%"));
         assert!(out.tooltip.contains("Codex weekly"));
-        assert!(!out.tooltip.contains("Codex 5h"));
+        assert!(out.tooltip.contains("Codex 5h — Not reported"));
 
         let values = build_placeholders(&s, &opts(), Utc::now());
         assert_eq!(values["oai_session_pct"], "");
@@ -477,13 +486,13 @@ mod tests {
     }
 
     #[test]
-    fn session_only_snapshot_renders_default_with_weekly_placeholders_empty() {
+    fn session_only_snapshot_marks_weekly_unreported_and_keeps_placeholders_empty() {
         let mut s = sample();
         s.weekly = None;
         let out = render(&oc(s.clone()), &s, &Theme::default(), &opts(), Utc::now());
         assert!(out.text.contains("1%"));
         assert!(out.tooltip.contains("Codex 5h"));
-        assert!(!out.tooltip.contains("Codex weekly"));
+        assert!(out.tooltip.contains("Codex weekly — Not reported"));
 
         let values = build_placeholders(&s, &opts(), Utc::now());
         assert_eq!(values["oai_session_pct"], "1");

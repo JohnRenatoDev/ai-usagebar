@@ -920,9 +920,13 @@ fn openai_sections(
     }]);
     if let Some(session) = &s.session {
         push_window(&mut v, "Codex 5h", session, now, tol, true);
+    } else if s.weekly.is_some() {
+        push_unreported_window(&mut v, "Codex 5h");
     }
     if let Some(weekly) = &s.weekly {
         push_window(&mut v, "Codex weekly", weekly, now, tol, true);
+    } else if s.session.is_some() {
+        push_unreported_window(&mut v, "Codex weekly");
     }
     if s.session.is_none() && s.weekly.is_none() {
         v.push(Section::Spacer);
@@ -983,6 +987,14 @@ fn openai_sections(
         push_reset_block(&mut v, credits, now);
     }
     v
+}
+
+fn push_unreported_window(sections: &mut SectionBuilder, label: &str) {
+    sections.push(Section::Spacer);
+    sections.push(Section::Text {
+        label: label.into(),
+        value: "Not reported".into(),
+    });
 }
 
 fn copilot_sections(s: &crate::copilot::types::Snapshot, now: DateTime<Utc>) -> SectionBuilder {
@@ -3266,7 +3278,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_weekly_only_omits_session_section() {
+    fn openai_weekly_only_marks_the_session_window_as_not_reported() {
         let snap = OpenAiSnapshot {
             plan: "ChatGPT Prolite".into(),
             session: None,
@@ -3290,6 +3302,40 @@ mod tests {
         assert!(!sections.iter().any(|section| matches!(
             section,
             Section::Metric { label, .. } if label == "Codex 5h"
+        )));
+        assert!(sections.iter().any(|section| matches!(
+            section,
+            Section::Text { label, value }
+                if label == "Codex 5h" && value == "Not reported"
+        )));
+    }
+
+    #[test]
+    fn openai_session_only_marks_the_weekly_window_as_not_reported() {
+        let snap = OpenAiSnapshot {
+            plan: "ChatGPT Plus".into(),
+            session: Some(UsageWindow {
+                utilization_pct: 12,
+                resets_at: None,
+                window_duration: chrono::Duration::hours(5),
+            }),
+            weekly: None,
+            code_review: None,
+            additional_limits: Vec::new(),
+            unavailable_models: Vec::new(),
+            credits: None,
+            reset_credits: None,
+            source: OpenAiSource::CodexOauth,
+        };
+        let sections = sections_for(&ready(VendorSnapshot::Openai(snap)), now(), 5);
+        assert!(sections.iter().any(|section| matches!(
+            section,
+            Section::Metric { label, .. } if label == "Codex 5h"
+        )));
+        assert!(sections.iter().any(|section| matches!(
+            section,
+            Section::Text { label, value }
+                if label == "Codex weekly" && value == "Not reported"
         )));
     }
 

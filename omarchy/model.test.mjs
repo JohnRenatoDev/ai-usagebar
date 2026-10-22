@@ -476,7 +476,10 @@ const raw = JSON.stringify({primary: 'openai', entries: [
   },
   {
     id: 'openai', name: 'openai', display_name: 'Codex', short_name: 'gpt', plan: 'Plus', error: null,
-    sections: [{type: 'metric', label: 'Codex weekly', percent: 95, value: '95%', detail: '', severity: 'critical'}]
+    sections: [
+      {type: 'text', label: 'Codex 5h', value: 'Not reported'},
+      {type: 'metric', label: 'Codex weekly', percent: 95, value: '95%', detail: '', severity: 'critical'}
+    ]
   }
 ]});
 
@@ -489,6 +492,10 @@ assert.equal(parsed.entries[0].brand, 'anthropic');
 assert.equal(parsed.entries[0].sections[1].reset_at, '2026-08-14T14:00:00Z');
 assert.equal(model.providerName(parsed.entries[0]), 'Claude · work');
 assert.equal(model.providerName(parsed.entries[1]), 'Codex');
+assert.deepEqual(JSON.parse(JSON.stringify(parsed.entries[1].sections[0])), {
+  type: 'text', label: 'Codex 5h', value: 'Not reported'
+});
+assert.equal(model.headline(parsed.entries[1]).text, '95%');
 assert.deepEqual(Array.from(model.filteredEntries(parsed.entries, '')).map(entry => entry.id), ['anthropic@work', 'openai']);
 assert.deepEqual(Array.from(model.filteredEntries(parsed.entries, 'anthropic')).map(entry => entry.id), ['anthropic@work']);
 assert.deepEqual(Array.from(model.filteredEntries(parsed.entries, 'openai')).map(entry => entry.id), ['openai']);

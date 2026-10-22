@@ -9,6 +9,13 @@
   from the usage panel. Fetching controls remain available in a separate
   advanced section.
 
+### Fixed
+
+- **A partial Codex quota response now names the missing window.** When OpenAI
+  reports only the weekly or 5-hour quota, the provider panel and widget
+  tooltip show the other window as `Not reported` instead of silently omitting
+  it, making clear that the upstream response supplied no figure.
+
 ## [1.42.0] — 2026-10-22
 
 ### Security
