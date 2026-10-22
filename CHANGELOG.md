@@ -16,14 +16,14 @@
   all five locales.
 - **Omarchy: a quota at risk of going unused turns red in the bar.** A quota
   whose weekly window resets within `alertHours` (default 24) with at least
-  `alertUnusedPercent` (default 50) projected unused shows as a red
-  `󰀦 Provider` chip after the usage chips, even with the shortcut off;
-  `priorityAlert` turns it off. The CLI takes the same thresholds as
-  `--alert-unused-percent` and `--alert-hours`. Each provider is measured on
-  its weekly window (the most used one when there are several), so a 5-hour
-  session never alerts, and the projected unused share never exceeds what is
-  left of the week. A cached reading up to six hours old is still ranked and
-  labelled as cached.
+  `alertUnusedPercent` (default 50) projected unused shows as a red `󰀦
+  Provider` chip after the usage chips, even with the shortcut off;
+  `priorityAlert` turns it off; providers hidden from the bar do not alert.
+  The CLI takes the same thresholds as `--alert-unused-percent` and
+  `--alert-hours`. Each provider is measured on its weekly window (the most
+  used one when there are several), so a 5-hour session never alerts, and the
+  projected unused share never exceeds what is left of the week. A cached
+  reading up to six hours old is still ranked and labelled as cached.
 - **Omarchy: provider tabs line up.** The usage tabs share one width, show
   each provider's brand mark, and balance their rows so they line up in
   columns, still wrapping instead of clipping (#173). Each tab shows the logo

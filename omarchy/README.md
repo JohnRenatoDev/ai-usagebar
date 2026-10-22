@@ -321,7 +321,9 @@ on-track quotas are never marked urgent to consume.
 
 With `priorityAlert` on (default), an urgent quota also appears in the bar as a
 red `󰀦 Provider` chip (a red alert glyph on a vertical bar), even when the
-optional shortcut is off. Clicking it opens the priorities view.
+optional shortcut is off. Clicking it opens the priorities view. A provider
+hidden from the bar neither alerts nor is recommended there; the priorities
+view still lists it.
 
 Hover a compact block for 300ms to preview its rationale, or click/press
 Enter/Space to pin it. The expanded block has a separate View limits action.

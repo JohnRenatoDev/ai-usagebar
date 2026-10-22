@@ -2203,7 +2203,7 @@ assert.match(panelSource, /return why \? root\.tr\("notice\." \+ why\.category\)
 assert.match(panelSource, /value: "usage", label: root\.tr\("view\.usage"\), icon: "󱨅"/);
 assert.match(panelSource, /icon: root\.urgentPriority \? "󰀦" : "󰉻"/);
 assert.match(panelSource, /fallback: root\.priorityOpen \? "󰉻"/);
-assert.match(barWidgetSource, /"  󰉻 " \+ root\.panelItem\.recommendation\.name/);
+assert.match(barWidgetSource, /"  󰉻 " \+ root\.panelItem\.barRecommendation\.name/);
 // Metric values: figure emphasised, % and surrounding words secondary, all on
 // the label's baseline. Locale word order is preserved.
 {
@@ -2234,3 +2234,6 @@ assert.ok(barWidgetSource.indexOf('id: chipRepeater') < barWidgetSource.indexOf(
 assert.match(barWidgetSource, /id: priorityHit[\s\S]*?buttonCode === Qt\.RightButton\) root\.launchDashboard\(\)[\s\S]*?root\.panelItem\.togglePriorities\(\)/);
 assert.match(panelSource, /function togglePriorities\(\) \{\s*if \(opened && priorityOpen\) close\(\)\s*else openPriorities\(\)/);
 assert.match(panelSource, /recommendation = current \? \(priorityReport\.recommendation \|\| null\) : null/);
+// Providers hidden from the bar (#487) neither alert nor get recommended there.
+assert.match(panelSource, /Priority\.stateKey\(ranking\[i\]\) === "urgent" && !hiddenFromBar\(ranking\[i\]\.entry_id\)/);
+assert.match(panelSource, /ranking\[i\]\.status === "priority" && !hiddenFromBar\(ranking\[i\]\.entry_id\)/);

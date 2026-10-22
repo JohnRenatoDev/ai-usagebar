@@ -66,7 +66,18 @@ Panel {
   readonly property var urgentPriority: {
     if (!showPriorities || !priorityAlert) return null
     for (var i = 0; i < ranking.length; i++)
-      if (Priority.stateKey(ranking[i]) === "urgent") return ranking[i]
+      if (Priority.stateKey(ranking[i]) === "urgent" && !hiddenFromBar(ranking[i].entry_id)) return ranking[i]
+    return null
+  }
+  // The bar follows "show in the bar" (hiddenBarEntries) for priorities too:
+  // a provider hidden from the bar neither alerts nor is recommended there.
+  // The panel's own list still shows every provider.
+  function hiddenFromBar(id) {
+    return Array.isArray(hiddenBarEntries) && hiddenBarEntries.indexOf(id) >= 0
+  }
+  readonly property var barRecommendation: {
+    for (var i = 0; i < ranking.length; i++)
+      if (ranking[i].status === "priority" && !hiddenFromBar(ranking[i].entry_id)) return ranking[i]
     return null
   }
   readonly property string tuiBinary: String(setting("tuiBinary", "ai-usagebar-tui"))

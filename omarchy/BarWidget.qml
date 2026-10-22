@@ -435,7 +435,7 @@ BarWidget {
           textFormat: Text.PlainText
           text: !root.panelItem ? ""
             : root.urgentPriority ? "  󰀦 " + root.urgentPriority.name + "  "
-            : root.panelItem.recommendation ? "  󰉻 " + root.panelItem.recommendation.name + "  "
+            : root.panelItem.barRecommendation ? "  󰉻 " + root.panelItem.barRecommendation.name + "  "
             : "  " + root.panelItem.tr("priority.title") + "  "
           color: root.urgentPriority ? root.priorityAlertColor : button.foreground
           font.bold: !!root.urgentPriority
