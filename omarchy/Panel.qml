@@ -82,6 +82,12 @@ Panel {
     if (!opened) open()
     if (panelFlick) panelFlick.contentY = 0
   }
+  // The bar's priority chip toggles like a provider chip: a second press on the
+  // view already showing closes the panel.
+  function togglePriorities() {
+    if (opened && priorityOpen) close()
+    else openPriorities()
+  }
   function priorityTr() { return function(key, params) { return root.tr(key, params) } }
   function priorityRow(row) {
     return Object.assign({}, row, {window: I18n.displayLabel(uiLocale, row.window)})
@@ -602,7 +608,8 @@ Panel {
         && alert.unused_percent === alertUnusedPercent && alert.hours === alertHours
       ranking = current ? (priorityReport.ranking || []) : []
       priorityHistoryAvailable = priorityReport.priority_history_available !== false
-      recommendation = priorityReport.recommendation || null
+      // Same rule as the ranking: a recommendation from other settings is stale.
+      recommendation = current ? (priorityReport.recommendation || null) : null
       primaryProvider = parsed.primary
       entries = parsed.entries
       loadError = ""

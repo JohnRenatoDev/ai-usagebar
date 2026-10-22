@@ -2226,3 +2226,8 @@ assert.match(barWidgetSource, /"  󰉻 " \+ root\.panelItem\.recommendation\.nam
 }
 // Bar: usage chips first, the priority indicator after them.
 assert.ok(barWidgetSource.indexOf('id: chipRepeater') < barWidgetSource.indexOf('id: priorityHit'), 'usage chips precede the priority indicator');
+// The bar's priority chip behaves like a provider chip, and a recommendation
+// computed with other settings is dropped together with its ranking.
+assert.match(barWidgetSource, /id: priorityHit[\s\S]*?buttonCode === Qt\.RightButton\) root\.launchDashboard\(\)[\s\S]*?root\.panelItem\.togglePriorities\(\)/);
+assert.match(panelSource, /function togglePriorities\(\) \{\s*if \(opened && priorityOpen\) close\(\)\s*else openPriorities\(\)/);
+assert.match(panelSource, /recommendation = current \? \(priorityReport\.recommendation \|\| null\) : null/);

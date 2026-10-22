@@ -422,9 +422,13 @@ BarWidget {
         width: visible ? priorityLabel.implicitWidth : 0
         height: button.height
         onVisibleChanged: Qt.callLater(root.syncChipTargets)
+        // Same buttons as a provider chip: right launches the dashboard,
+        // middle switches provider, left toggles the priorities view.
         function triggerPress(buttonCode) {
           root.armClickLock()
-          if (root.panelItem) root.panelItem.openPriorities()
+          if (buttonCode === Qt.RightButton) root.launchDashboard()
+          else if (buttonCode === Qt.MiddleButton) root.nextEntry()
+          else if (root.panelItem) root.panelItem.togglePriorities()
         }
         Text {
           id: priorityLabel
