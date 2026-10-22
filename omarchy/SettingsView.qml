@@ -19,7 +19,7 @@ Column {
   property string fontFamily: Style.font.family
   property int recentHours: 3
   signal recentHoursRequested(int hours)
-  property bool showPriorities: true
+  property bool showPriorities: false
   property bool showPriorityShortcut: false
   property string binaryPath: "ai-usagebar"
   signal showPrioritiesRequested(bool enabled)
@@ -41,7 +41,7 @@ Column {
   property string showAs: "used"
   property bool brandIcons: true
   property var barProviderChoices: []
-  property bool tabNames: false
+  property bool tabNames: true
   signal tabNamesRequested(bool enabled)
   property var metricEntries: []
   property string openMetricEntry: ""

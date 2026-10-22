@@ -29,7 +29,7 @@
       "refreshIntervalSec": 300,
       "showValue": true,
       "brandIcons": true,
-      "tabNames": false,
+      "tabNames": true,
       "showProvider": false,
       "colorCodeUsage": false,
       "showAll": false,
@@ -42,7 +42,7 @@
       "showCursorCredits": true,
       "showAntigravityGemini": true,
       "showAntigravityClaudeGpt": true,
-      "showPriorities": true,
+      "showPriorities": false,
       "showPriorityShortcut": false,
       "recentHours": 3,
       "priorityAlert": true,
@@ -86,8 +86,8 @@
         "key": "tabNames",
         "type": "boolean",
         "label": "Show provider names on tabs",
-        "description": "Add each provider's name beside its logo in the panel tabs. Off shows logos only, with the name on hover. Always on when provider logos are off.",
-        "defaultValue": false
+        "description": "Show each provider's name beside its logo in the panel tabs. Off shows logos only, with the name on hover. Always on when provider logos are off. On by default.",
+        "defaultValue": true
       },
       {
         "key": "showProvider",
@@ -195,8 +195,8 @@
         "key": "showPriorities",
         "type": "boolean",
         "label": "Enable usage priorities",
-        "description": "Show the recommended order of use inside the same popup. A quota at risk of going unused before its reset turns red in the bar.",
-        "defaultValue": true
+        "description": "Show the recommended order of use inside the same popup. A quota at risk of going unused before its reset turns red in the bar. Off by default; while off, nothing is recorded.",
+        "defaultValue": false
       },
       {
         "key": "showPriorityShortcut",

@@ -11,8 +11,9 @@
 - **Omarchy: usage priorities in the native popup.** The popup lists compact
   cards with the rationale on hover or click. A native switcher between the
   usage and priorities views stays pinned to the panel footer, and Settings →
-  Priorities toggles the view, an optional bar shortcut and the window.
-  Translated in all five locales.
+  Priorities toggles the view, an optional bar shortcut and the window. Off
+  by default (`showPriorities`); while off nothing is recorded. Translated in
+  all five locales.
 - **Omarchy: a quota at risk of going unused turns red in the bar.** A quota
   whose weekly window resets within `alertHours` (default 24) with at least
   `alertUnusedPercent` (default 50) projected unused shows as a red
@@ -25,9 +26,9 @@
   labelled as cached.
 - **Omarchy: provider tabs line up.** The usage tabs share one width, show
   each provider's brand mark, and balance their rows (five providers read
-  3 + 2), still wrapping instead of clipping (#173). Tabs show logos only by
-  default, with the name on hover; `tabNames` adds the name beside each logo,
-  and names always show when provider logos are off.
+  3 + 2), still wrapping instead of clipping (#173). Each tab shows the logo
+  and the name; turning `tabNames` off leaves logos only, with the name on
+  hover, and names always show when provider logos are off.
 - **Omarchy: errors read as a structured notice.** A status or provider
   error shows an icon and a plain title (sign-in needed, connection problem,
   rate limited, refresh failed, cached data), the message without its

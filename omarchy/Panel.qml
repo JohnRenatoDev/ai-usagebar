@@ -59,7 +59,7 @@ Panel {
   property var ranking: []
   property var recommendation: null
   property bool priorityOpen: false
-  readonly property bool showPriorities: Model.booleanSetting(setting("showPriorities", true), true)
+  readonly property bool showPriorities: Model.booleanSetting(setting("showPriorities", false), false)
   readonly property bool showPriorityShortcut: showPriorities && Model.booleanSetting(setting("showPriorityShortcut", false), false)
   // Quota at risk of being lost at its reset; the bar paints it red even when
   // the optional shortcut is off. Rust owns the urgency rule.
@@ -152,9 +152,9 @@ Panel {
   readonly property bool showAntigravityGemini: Model.booleanSetting(setting("showAntigravityGemini", true), true)
   readonly property bool showAntigravityClaudeGpt: Model.booleanSetting(setting("showAntigravityClaudeGpt", true), true)
   readonly property bool brandIcons: Model.booleanSetting(setting("brandIcons", true), true)
-  // Provider tabs show logos only by default; names are opt-in, and always
-  // shown when logos are off so a tab is never empty.
-  readonly property bool tabNamesSetting: Model.booleanSetting(setting("tabNames", false), false)
+  // Provider tabs show logo and name by default; names can be turned off for
+  // logos only, and always show when logos are off so a tab is never empty.
+  readonly property bool tabNamesSetting: Model.booleanSetting(setting("tabNames", true), true)
   readonly property bool tabNames: tabNamesSetting || !brandIcons
   readonly property string showAs: Model.normalizeShowAs(setting("showAs", "used"))
   readonly property var hiddenMetrics: Model.normalizeHiddenMetrics(setting("hiddenMetrics", {}))

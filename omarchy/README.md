@@ -280,12 +280,13 @@ reload. If the running shell keeps the old panel after a change, use
 
 The optional priorities view stays inside the native popup. It uses the same
 `Button`, `BorderSurface`, typography, theme colors and locale catalog as the
-provider view. It does not open another application. When enabled, a native
-`Usage | Priorities` switcher is pinned to the panel footer, always visible
-while the content scrolls; the header keeps only refresh and settings. Settings
-→ Priorities controls visibility, the optional bar shortcut, the recent usage
-window, and the bar alert with its thresholds. Turning the module off removes
-the switcher, the alert and the shortcut.
+provider view. It does not open another application. It is off by default: turn
+it on in Settings → Priorities. When enabled, a native `Usage | Priorities`
+switcher is pinned to the panel footer, always visible while the content
+scrolls; the header keeps only refresh and settings. Settings → Priorities
+controls visibility, the optional bar shortcut, the recent usage window, and
+the bar alert with its thresholds. Turning the module off removes the switcher,
+the alert and the shortcut.
 
 While the view is enabled the plugin runs `usage --json --priorities` with the
 settings below; turned off, it runs the plain `usage --json` and records

@@ -320,7 +320,10 @@ assert.match(panelSource, /var rows = Math\.ceil\(n \/ Math\.min\(n, fit\)\)/);
 assert.match(panelSource, /brand: Model\.brandIconFile\(providerTab\.modelData\)/);
 assert.match(panelSource, /Accessible\.name: Model\.providerName\(modelData\)/);
 // Logos only by default, names opt-in, and never an empty tab without logos.
-assert.equal(manifest.barWidget.defaults.tabNames, false);
+assert.equal(manifest.barWidget.defaults.tabNames, true);
+// Usage priorities are opt-in: off by default, so nothing changes for anyone who does not turn them on.
+assert.equal(manifest.barWidget.defaults.showPriorities, false);
+assert.match(panelSource, /Model\.booleanSetting\(setting\("showPriorities", false\), false\)/);
 assert.match(panelSource, /readonly property bool tabNames: tabNamesSetting \|\| !brandIcons/);
 assert.match(panelSource, /tooltipText: root\.tabNames \? "" : Model\.providerName\(modelData\)/);
 // The scroll content keeps a hairline of slack on both sides of the
@@ -2089,9 +2092,9 @@ assert.equal(model.cursorPoolOf(null), '');
   assert.match(panel, /brand: root\.priorityOpen \|\| root\.settingsOpen \|\| !root\.brandIcons \? "" : Model\.brandIconFile\(root\.entry\)/);
   assert.match(settingsForm, /signal brandIconsRequested\(bool enabled\)/);
   const displayKeys = ['showValue', 'brandIcons', 'tabNames', 'showProvider', 'colorCodeUsage', 'showAll'];
-  assert.deepEqual(displayKeys.map(key => manifest.barWidget.defaults[key]), [true, true, false, false, false, false]);
+  assert.deepEqual(displayKeys.map(key => manifest.barWidget.defaults[key]), [true, true, true, false, false, false]);
   assert.deepEqual(manifest.barWidget.schema.filter(row => displayKeys.includes(row.key)).map(row => row.key), displayKeys);
-  assert.deepEqual(manifest.barWidget.schema.filter(row => displayKeys.includes(row.key)).map(row => row.defaultValue), [true, true, false, false, false, false]);
+  assert.deepEqual(manifest.barWidget.schema.filter(row => displayKeys.includes(row.key)).map(row => row.defaultValue), [true, true, true, false, false, false]);
   assert.deepEqual(
     Array.from(settingsForm.matchAll(/label: root\.tr\("toggle\.(\w+)"\)/g), match => match[1]),
     ['show_value', 'brand_icons', 'tab_names', 'show_provider', 'color_code', 'show_all']);
