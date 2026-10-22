@@ -25,8 +25,8 @@
   left of the week. A cached reading up to six hours old is still ranked and
   labelled as cached.
 - **Omarchy: provider tabs line up.** The usage tabs share one width, show
-  each provider's brand mark, and balance their rows (five providers read
-  3 + 2), still wrapping instead of clipping (#173). Each tab shows the logo
+  each provider's brand mark, and balance their rows so they line up in
+  columns, still wrapping instead of clipping (#173). Each tab shows the logo
   and the name; turning `tabNames` off leaves logos only, with the name on
   hover, and names always show when provider logos are off.
 - **Omarchy: errors read as a structured notice.** A status or provider
