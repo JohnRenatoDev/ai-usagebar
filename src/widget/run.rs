@@ -1741,4 +1741,52 @@ mod tests {
         assert!(validate_vendor_options(&cli, Vendor::Openrouter).is_err());
         assert!(validate_vendor_options(&cli, Vendor::Anthropic).is_ok());
     }
+
+    #[tokio::test]
+    async fn nous_output_returns_loading_on_transient_failure_and_propagates_auth_error() {
+        use crate::nous::credentials::{CredentialDocument, CredentialStore, NousCredential};
+        use crate::nous::fetch::Endpoints;
+
+        let mut server = mockito::Server::new_async().await;
+        let transient_mock = server
+            .mock("GET", "/account")
+            .with_status(503)
+            .create_async()
+            .await;
+        let root = tempfile::TempDir::new().unwrap();
+        let store = CredentialStore::at(root.path().join("config").join("credentials.json"));
+        store
+            .write(&CredentialDocument::new(Some(NousCredential {
+                client_id: "hermes-cli".into(),
+                access_token: "test-access-token".into(),
+                refresh_token: "test-refresh-token".into(),
+                expires_at: Utc::now() + chrono::Duration::hours(1),
+            })))
+            .unwrap();
+        let endpoints = Endpoints {
+            account: format!("{}/account", server.url()),
+            token: format!("{}/token", server.url()),
+        };
+        let mut cli = cli_default();
+        cli.icon = Some("N".into());
+
+        let res = nous_output_with(&cli, &store, &endpoints).await;
+        let out = res.unwrap();
+        let expected = WaybarOutput::loading(Some("N"));
+        assert_eq!(out.text, expected.text);
+        assert_eq!(out.tooltip, expected.tooltip);
+        assert_eq!(out.class, expected.class);
+        transient_mock.assert_async().await;
+
+        let auth_mock = server
+            .mock("GET", "/account")
+            .with_status(401)
+            .create_async()
+            .await;
+        let res = nous_output_with(&cli, &store, &endpoints).await;
+        let err = res.unwrap_err();
+        assert!(!err.is_transient(), "{err:?}");
+        assert_eq!(fallback(&err, &cli).text, "⚠");
+        auth_mock.assert_async().await;
+    }
 }
