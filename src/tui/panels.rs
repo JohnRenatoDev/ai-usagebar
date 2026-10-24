@@ -2345,7 +2345,7 @@ fn droid_sections(
         });
         for (label, window) in standard {
             if let Some(window) = window {
-                push_window(&mut sections, label, window, now, tol, true);
+                push_droid_window(&mut sections, label, window, now, tol);
             }
         }
     }
@@ -2354,7 +2354,19 @@ fn droid_sections(
         ("Weekly quota", snapshot.core_weekly.as_ref()),
         ("Monthly quota", snapshot.core_monthly.as_ref()),
     ];
-    if core.iter().any(|(_, w)| w.is_some()) {
+    let core_idle = core
+        .iter()
+        .flat_map(|(_, w)| w)
+        .all(|w| w.resets_at.is_none() && w.utilization_pct == 0);
+    if core.iter().any(|(_, w)| w.is_some()) && core_idle {
+        // Three empty bars say nothing a single line does not: an account
+        // that never touched Droid Core reads as one row.
+        sections.push(Section::Spacer);
+        sections.push(Section::Text {
+            label: "Droid Core".into(),
+            value: "not used yet".into(),
+        });
+    } else if core.iter().any(|(_, w)| w.is_some()) {
         sections.push(Section::Spacer);
         sections.push(Section::Text {
             label: "Droid Core".into(),
@@ -2362,7 +2374,7 @@ fn droid_sections(
         });
         for (label, window) in core {
             if let Some(window) = window {
-                push_window(&mut sections, label, window, now, tol, true);
+                push_droid_window(&mut sections, label, window, now, tol);
             }
         }
     }
@@ -2383,6 +2395,34 @@ fn droid_sections(
         });
     }
     sections
+}
+
+/// Droid reports `windowEnd: null` for a window the account has not started:
+/// there is no reset and no elapsed time to pace against, so the footnote
+/// says so instead of "Resets in — · 0% elapsed · on track".
+fn push_droid_window(
+    sections: &mut SectionBuilder,
+    label: &str,
+    w: &crate::usage::UsageWindow,
+    now: DateTime<Utc>,
+    tol: u32,
+) {
+    if w.resets_at.is_some() {
+        return push_window(sections, label, w, now, tol, true);
+    }
+    let pct = w.utilization_pct.clamp(0, 100) as u16;
+    sections.push(Section::Spacer);
+    sections.push_metric_in_window(
+        Section::Metric {
+            label: label.into(),
+            pct,
+            severity: severity_for(pct as i32),
+            value_label: format!("{pct}%"),
+            footnote: "Not started".into(),
+        },
+        None,
+        w.window_duration,
+    );
 }
 
 fn push_window(
@@ -4041,6 +4081,65 @@ mod tests {
             window(100, true),
         );
         assert_eq!(headline_pct(&unstarted), None);
+    }
+
+    #[test]
+    fn droid_unstarted_windows_say_so_and_an_idle_core_is_one_row() {
+        let window = |pct: i32, started: bool| {
+            Some(crate::usage::UsageWindow {
+                utilization_pct: pct,
+                resets_at: started.then(|| now() + chrono::Duration::hours(2)),
+                window_duration: chrono::Duration::hours(5),
+            })
+        };
+        let snapshot = |core_session| crate::usage::DroidSnapshot {
+            session: window(0, false),
+            weekly: window(23, true),
+            monthly: None,
+            core_session,
+            core_weekly: window(0, false),
+            core_monthly: window(0, false),
+            extra_balance_cents: Some(0),
+        };
+        let footnotes = |sections: &[Section]| {
+            sections
+                .iter()
+                .filter_map(|s| match s {
+                    Section::Metric {
+                        label, footnote, ..
+                    } => Some((label.clone(), footnote.clone())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let idle = sections_for(
+            &ready(VendorSnapshot::Droid(snapshot(window(0, false)))),
+            now(),
+            5,
+        );
+        let rows = footnotes(&idle);
+        assert_eq!(rows.len(), 2, "Standard only: {rows:?}");
+        assert_eq!(rows[0], ("5-hour quota".into(), "Not started".into()));
+        assert!(rows[1].1.starts_with("Resets in"), "{rows:?}");
+        assert!(idle.iter().any(|s| matches!(
+            s,
+            Section::Text { label, value } if label == "Droid Core" && value == "not used yet"
+        )));
+
+        // Any Core use brings its windows back, unstarted ones labeled.
+        let used = sections_for(
+            &ready(VendorSnapshot::Droid(snapshot(window(4, true)))),
+            now(),
+            5,
+        );
+        let rows = footnotes(&used);
+        assert_eq!(rows.len(), 5, "{rows:?}");
+        assert_eq!(rows[3].1, "Not started");
+        assert!(!used.iter().any(|s| matches!(
+            s,
+            Section::Text { value, .. } if value == "not used yet"
+        )));
     }
 
     #[test]

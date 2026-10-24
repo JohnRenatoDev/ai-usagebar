@@ -5,9 +5,10 @@
 //! a 256-bit key the CLI keeps in the Secret Service keyring as the item
 //! `service="Factory CLI" account="auth-encryption-key"` (a base64 string
 //! decoding to 32 bytes). The plaintext is a JSON document whose
-//! `access_token` is a short-lived JWT the CLI itself renews; only that token
-//! is read. The `refresh_token` and `whoami` fields are never inspected,
-//! stored, or sent anywhere.
+//! `access_token` is a short-lived JWT the CLI itself renews. Only that token
+//! and `active_organization_id` (hashed, to scope the cache) are read. The
+//! `refresh_token` and `whoami` fields are never inspected, stored, or sent
+//! anywhere.
 //!
 //! The `secret-tool lookup` is a read-only subprocess; the key arrives on
 //! stdout, never in argv. Every error here is a fixed string: the key, the
@@ -55,10 +56,23 @@ type DroidGcm = AesGcm<aes_gcm::aes::Aes256, aes_gcm::aead::consts::U16>;
 #[derive(Clone)]
 pub struct Credentials {
     pub(crate) access_token: String,
+    /// Hash of `active_organization_id`, so the cache survives the CLI
+    /// rotating its ~24h access token; the token's own hash when the login
+    /// names no organization.
     pub fingerprint: String,
+    /// The JWT's `exp`, when it carries one.
+    pub expires_at: Option<DateTime<Utc>>,
     /// The JWT's `exp` is already past. The fetch layer answers this from
     /// the cache with the re-login note — the token is never sent for a 401.
     pub expired: bool,
+}
+
+impl Credentials {
+    /// Expired, or expiring within `margin` of `now`: the window in which
+    /// asking the CLI to renew the login pays off.
+    pub fn expires_within(&self, margin: chrono::Duration, now: DateTime<Utc>) -> bool {
+        self.expired || self.expires_at.is_some_and(|exp| exp - margin <= now)
+    }
 }
 
 impl std::fmt::Debug for Credentials {
@@ -66,6 +80,7 @@ impl std::fmt::Debug for Credentials {
         f.debug_struct("Credentials")
             .field("access_token", &"[REDACTED]")
             .field("fingerprint", &self.fingerprint)
+            .field("expires_at", &self.expires_at)
             .field("expired", &self.expired)
             .finish()
     }
@@ -154,6 +169,13 @@ fn missing_file_error(dir: &Path, path: &Path) -> AppError {
 /// itself is never echoed.
 #[cfg(target_os = "linux")]
 pub fn keyring_key() -> Result<[u8; KEY_LEN]> {
+    keyring_key_with(keyring_command().output())
+}
+
+/// The lookup command with its safety settings, built apart from the spawn
+/// so a test can inspect it.
+#[cfg(target_os = "linux")]
+fn keyring_command() -> std::process::Command {
     let mut command = std::process::Command::new("secret-tool");
     command
         .args([
@@ -170,7 +192,7 @@ pub fn keyring_key() -> Result<[u8; KEY_LEN]> {
     for var in crate::vendor::vendor_secret_env_vars_to_remove(&[]) {
         command.env_remove(var);
     }
-    keyring_key_with(command.output())
+    command
 }
 
 /// Interpret the `secret-tool lookup` result — the command seam, split from
@@ -267,13 +289,21 @@ fn parse_plaintext(bytes: &[u8], now: DateTime<Utc>) -> Result<Credentials> {
         .filter(|token| !token.is_empty() && token.bytes().all(|b| b.is_ascii_graphic()))
         .map(str::to_string)
         .ok_or_else(malformed)?;
-    let expired = crate::jwt::claims(&access_token)
+    let expires_at = crate::jwt::claims(&access_token)
         .and_then(|claims| claims.get("exp").and_then(serde_json::Value::as_i64))
-        .is_some_and(|exp| exp <= now.timestamp());
-    let fingerprint = crate::cache::fingerprint_of(&access_token);
+        .and_then(|exp| DateTime::from_timestamp(exp, 0));
+    let expired = expires_at.is_some_and(|exp| exp <= now);
+    let fingerprint = root
+        .get("active_organization_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|org| !org.is_empty())
+        .map(|org| crate::cache::fingerprint_of(&format!("droid-org:{org}")))
+        .unwrap_or_else(|| crate::cache::fingerprint_of(&access_token));
     Ok(Credentials {
         access_token,
         fingerprint,
+        expires_at,
         expired,
     })
 }
@@ -337,9 +367,51 @@ mod tests {
         assert_eq!(credentials.access_token, token);
         assert_eq!(
             credentials.fingerprint,
-            crate::cache::fingerprint_of(&token)
+            crate::cache::fingerprint_of("droid-org:org-1")
         );
         assert_eq!(credentials.fingerprint.len(), 16);
+    }
+
+    #[test]
+    fn the_cache_scope_follows_the_organization_across_token_rotation() {
+        let td = TempDir::new().unwrap();
+        let resolve_token = |token: String, org: Option<&str>| {
+            let mut doc = serde_json::json!({"access_token": token});
+            if let Some(org) = org {
+                doc["active_organization_id"] = org.into();
+            }
+            write(&td, &seal(&TEST_KEY, doc.to_string().as_bytes()));
+            resolve_with(td.path(), ok_key, now()).unwrap().fingerprint
+        };
+        let before = resolve_token(jwt(now().timestamp() + 60), Some("org-1"));
+        let rotated = resolve_token(jwt(now().timestamp() + 86_400), Some("org-1"));
+        let other_org = resolve_token(jwt(now().timestamp() + 86_400), Some("org-2"));
+        assert_eq!(before, rotated);
+        assert_ne!(rotated, other_org);
+
+        // No organization: the token itself scopes the cache.
+        let token = jwt(now().timestamp() + 60);
+        assert_eq!(
+            resolve_token(token.clone(), None),
+            crate::cache::fingerprint_of(&token)
+        );
+        assert_eq!(
+            resolve_token(token.clone(), Some("  ")),
+            crate::cache::fingerprint_of(&token)
+        );
+    }
+
+    #[test]
+    fn expiry_is_read_from_the_jwt_and_drives_the_renewal_window() {
+        let td = TempDir::new().unwrap();
+        let exp = now().timestamp() + 300;
+        let doc = serde_json::json!({"access_token": jwt(exp)}).to_string();
+        write(&td, &seal(&TEST_KEY, doc.as_bytes()));
+        let credentials = resolve_with(td.path(), ok_key, now()).unwrap();
+        assert_eq!(credentials.expires_at.unwrap().timestamp(), exp);
+        assert!(!credentials.expired);
+        assert!(credentials.expires_within(chrono::Duration::minutes(10), now()));
+        assert!(!credentials.expires_within(chrono::Duration::minutes(1), now()));
     }
 
     #[test]
@@ -504,5 +576,33 @@ mod tests {
             keyring_key_with(output(0, key.as_bytes(), b"")).unwrap(),
             TEST_KEY
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_keyring_lookup_keeps_the_key_off_argv_and_drops_provider_secrets() {
+        let command = keyring_command();
+        assert_eq!(command.get_program(), "secret-tool");
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                "lookup",
+                "service",
+                KEYRING_SERVICE,
+                "account",
+                KEYRING_ACCOUNT
+            ]
+        );
+        let removed: Vec<_> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+        let expected = crate::vendor::vendor_secret_env_vars_to_remove(&[]);
+        assert!(!expected.is_empty());
+        for var in expected {
+            assert!(removed.iter().any(|key| key == var), "{var} not removed");
+        }
     }
 }

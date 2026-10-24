@@ -889,7 +889,10 @@ async fn ollama_live() {
 #[tokio::test]
 #[ignore = "live API; run explicitly with an existing `droid` CLI login on Linux"]
 async fn droid_live() {
-    let config = ai_usagebar::config::DroidConfig { enabled: true };
+    let config = ai_usagebar::config::DroidConfig {
+        enabled: true,
+        ..Default::default()
+    };
     let Ok(keyring_path) = ai_usagebar::droid::keyring_path() else {
         eprintln!("droid_live: no home directory — skipping");
         return;

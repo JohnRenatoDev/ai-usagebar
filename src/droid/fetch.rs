@@ -15,7 +15,7 @@ use crate::usage::{DroidSnapshot, UsageWindow};
 use crate::vendor::{MAX_BODY_BYTES, read_body_capped};
 
 use super::creds::{self, Credentials};
-use super::types;
+use super::{renew, types};
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(15);
@@ -73,7 +73,10 @@ pub async fn fetch_snapshot(
     cache: &Cache,
     cache_ttl: Duration,
 ) -> Result<FetchOutcome> {
-    let credentials = super::resolve_credentials(cfg)?;
+    let mut credentials = super::resolve_credentials(cfg)?;
+    if cfg.cli_renewal && credentials.expires_within(renew::RENEW_MARGIN, chrono::Utc::now()) {
+        credentials = renew_login(cfg, cache, credentials).await?;
+    }
     fetch_snapshot_with(
         http_client()?,
         &credentials,
@@ -82,6 +85,28 @@ pub async fn fetch_snapshot(
         cache_ttl,
     )
     .await
+}
+
+/// Let the `droid` CLI renew a login that is expiring, then read it again.
+/// Under the vendor lock, so two bars refreshing together spawn the CLI once;
+/// the login is re-read first because the other one may already have done it.
+async fn renew_login(
+    cfg: &crate::config::DroidConfig,
+    cache: &Cache,
+    credentials: Credentials,
+) -> Result<Credentials> {
+    cache.ensure_dir()?;
+    let _lock = acquire_lock_async(&cache.lock_path(), LOCK_TIMEOUT).await?;
+    let current = super::resolve_credentials(cfg)?;
+    if !current.expires_within(renew::RENEW_MARGIN, chrono::Utc::now()) {
+        return Ok(current);
+    }
+    if renew::renew(cfg, cache).await {
+        // A renewal the CLI could not finish leaves the old login in place,
+        // which the expired path below answers like before.
+        return super::resolve_credentials(cfg).or(Ok(credentials));
+    }
+    Ok(current)
 }
 
 async fn fetch_snapshot_with(
@@ -278,6 +303,7 @@ mod tests {
         Credentials {
             access_token: CANARY.to_string(),
             fingerprint: crate::cache::fingerprint_of(CANARY),
+            expires_at: None,
             expired: false,
         }
     }
@@ -578,6 +604,7 @@ mod tests {
         let old = Credentials {
             access_token: "old-account-token".to_string(),
             fingerprint: crate::cache::fingerprint_of("old-account-token"),
+            expires_at: None,
             expired: false,
         };
         let mut old_snapshot = snapshot();
@@ -603,5 +630,189 @@ mod tests {
             outcome.snapshot.session.as_ref().unwrap().utilization_pct,
             42
         );
+    }
+
+    #[tokio::test]
+    async fn a_429_arms_the_backoff_and_the_next_refresh_stays_off_the_wire() {
+        let credentials = credentials();
+        let mut server = mockito::Server::new_async().await;
+        let request = request_mock(&mut server)
+            .with_status(429)
+            .with_body(format!("credential echo: {CANARY}"))
+            .expect(1)
+            .create_async()
+            .await;
+        let (_cache_dir, cache) = cache_fixture();
+        let endpoints = Endpoints { base: server.url() };
+
+        let error = fetch_snapshot_with(
+            &safe_client(),
+            &credentials,
+            &cache,
+            &endpoints,
+            Duration::ZERO,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, AppError::Http { status: 429, .. }),
+            "{error:?}"
+        );
+        assert!(!error.to_string().contains(CANARY));
+        assert!(
+            cache
+                .backoff_remaining_at(std::time::SystemTime::now())
+                .is_some()
+        );
+
+        // Armed: the second refresh is refused before any request.
+        let error = fetch_snapshot_with(
+            &safe_client(),
+            &credentials,
+            &cache,
+            &endpoints,
+            Duration::ZERO,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, AppError::Http { status: 429, .. }),
+            "{error:?}"
+        );
+        request.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_429_with_a_cache_keeps_serving_the_last_good_payload() {
+        let credentials = credentials();
+        let mut server = mockito::Server::new_async().await;
+        let request = request_mock(&mut server)
+            .with_status(429)
+            .expect(1)
+            .create_async()
+            .await;
+        let (_cache_dir, cache) = cache_fixture();
+        cache
+            .write_payload(
+                &serde_json::to_vec(&snapshot_to_cache(&snapshot(), &credentials.fingerprint))
+                    .unwrap(),
+            )
+            .unwrap();
+        let endpoints = Endpoints { base: server.url() };
+
+        for _ in 0..2 {
+            let outcome = fetch_snapshot_with(
+                &safe_client(),
+                &credentials,
+                &cache,
+                &endpoints,
+                Duration::ZERO,
+            )
+            .await
+            .unwrap();
+            assert_eq!(outcome.snapshot, snapshot());
+        }
+        request.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn an_oversized_body_is_refused_without_echoing_it() {
+        let credentials = credentials();
+        let mut server = mockito::Server::new_async().await;
+        let request = request_mock(&mut server)
+            .with_status(200)
+            .with_body(format!("{CANARY}{}", "x".repeat(MAX_BODY_BYTES + 1)))
+            .create_async()
+            .await;
+        let (_cache_dir, cache) = cache_fixture();
+
+        let error = fetch_snapshot_with(
+            &safe_client(),
+            &credentials,
+            &cache,
+            &Endpoints { base: server.url() },
+            Duration::ZERO,
+        )
+        .await
+        .unwrap_err();
+
+        request.assert_async().await;
+        assert!(matches!(error, AppError::Schema(_)), "{error:?}");
+        assert!(!error.to_string().contains(CANARY));
+        assert!(!cache.payload_path().exists());
+    }
+
+    #[tokio::test]
+    async fn a_silent_server_times_out_and_falls_back_to_the_cache() {
+        // Accepts the connection and never answers.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let _server = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        let client = build_client(Duration::from_millis(300)).unwrap();
+        let credentials = credentials();
+        let (_cache_dir, cache) = cache_fixture();
+        let endpoints = Endpoints {
+            base: format!("http://{address}"),
+        };
+
+        let error = fetch_snapshot_with(&client, &credentials, &cache, &endpoints, Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, AppError::Transport(message) if message.contains("timed out")),
+            "{error:?}"
+        );
+
+        cache
+            .write_payload(
+                &serde_json::to_vec(&snapshot_to_cache(&snapshot(), &credentials.fingerprint))
+                    .unwrap(),
+            )
+            .unwrap();
+        let outcome =
+            fetch_snapshot_with(&client, &credentials, &cache, &endpoints, Duration::ZERO)
+                .await
+                .unwrap();
+        assert!(outcome.stale);
+        assert_eq!(outcome.snapshot, snapshot());
+    }
+
+    #[tokio::test]
+    async fn a_rotated_token_for_the_same_organization_reuses_the_cache() {
+        let mut server = mockito::Server::new_async().await;
+        let request = server
+            .mock("GET", LIMITS_PATH)
+            .expect(0)
+            .create_async()
+            .await;
+        let (_cache_dir, cache) = cache_fixture();
+        let scope = crate::cache::fingerprint_of("droid-org:org-1");
+        cache
+            .write_payload(&serde_json::to_vec(&snapshot_to_cache(&snapshot(), &scope)).unwrap())
+            .unwrap();
+        let rotated = Credentials {
+            access_token: "rotated-token".to_string(),
+            fingerprint: scope,
+            expires_at: None,
+            expired: false,
+        };
+
+        let outcome = fetch_snapshot_with(
+            &safe_client(),
+            &rotated,
+            &cache,
+            &Endpoints { base: server.url() },
+            Duration::from_secs(3600),
+        )
+        .await
+        .unwrap();
+
+        request.assert_async().await;
+        assert_eq!(outcome.snapshot, snapshot());
     }
 }

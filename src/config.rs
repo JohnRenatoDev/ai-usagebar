@@ -1317,11 +1317,27 @@ pub struct DevinConfig {
 
 /// Factory Droid (`droid` CLI) quota — reuses the login the CLI keeps in the
 /// Linux Secret Service keyring, read-only. The provider is opt-in and takes
-/// no key or path: it only reads the CLI's documented `~/.factory` store.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+/// no key: it only reads the CLI's documented `~/.factory` store.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DroidConfig {
     pub enabled: bool,
+    /// When the login is about to expire, run `droid doctor --checks auth`
+    /// so the CLI renews it itself (at most every 15 minutes). Off leaves an
+    /// expired login to the user, who runs `droid` once.
+    pub cli_renewal: bool,
+    /// The `droid` executable for that renewal; `droid` on `PATH` by default.
+    pub cli_path: Option<PathBuf>,
+}
+
+impl Default for DroidConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cli_renewal: true,
+            cli_path: None,
+        }
+    }
 }
 
 impl Default for OpenCodeGoConfig {
@@ -3825,6 +3841,8 @@ enabled = false
     fn droid_is_opt_in_and_takes_no_api_key() {
         let defaults = DroidConfig::default();
         assert!(!defaults.enabled);
+        assert!(defaults.cli_renewal);
+        assert_eq!(defaults.cli_path, None);
 
         let config = Config::default();
         assert_eq!(config.api_key_env_for(VendorId::Droid), "");
