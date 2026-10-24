@@ -212,12 +212,23 @@ fn dispatch_is_eligible(cli: &Cli, config: &Config, vendor: Vendor) -> bool {
 
 /// Nous Research authenticates with the independent OAuth credential store.
 async fn nous_output(cli: &Cli) -> Result<WaybarOutput> {
-    let client = http_client()?;
     let store = crate::nous::credentials::CredentialStore::default();
     let endpoints = crate::nous::fetch::Endpoints::default();
-    let account =
-        crate::nous::fetch::fetch_account_with_refresh(&client, &store, &endpoints, Utc::now())
-            .await?;
+    nous_output_with(cli, &store, &endpoints).await
+}
+
+async fn nous_output_with(
+    cli: &Cli,
+    store: &crate::nous::credentials::CredentialStore,
+    endpoints: &crate::nous::fetch::Endpoints,
+) -> Result<WaybarOutput> {
+    let account = match fetch_nous_account(store, endpoints).await {
+        Ok(account) => account,
+        Err(error) if error.is_transient() => {
+            return Ok(WaybarOutput::loading(cli.icon.as_deref()));
+        }
+        Err(error) => return Err(error),
+    };
     let snapshot = account.clone();
     // Nous keeps no cache of its own, so every read is a live one.
     let outcome =
@@ -230,6 +241,17 @@ async fn nous_output(cli: &Cli) -> Result<WaybarOutput> {
         &RenderOpts::from_cli(cli),
         Utc::now(),
     ))
+}
+
+async fn fetch_nous_account(
+    store: &crate::nous::credentials::CredentialStore,
+    endpoints: &crate::nous::fetch::Endpoints,
+) -> Result<crate::nous::AccountSnapshot> {
+    let client = http_client()?;
+    let account =
+        crate::nous::fetch::fetch_account_with_refresh(&client, store, endpoints, Utc::now())
+            .await?;
+    Ok(account)
 }
 
 async fn opencode_go_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
