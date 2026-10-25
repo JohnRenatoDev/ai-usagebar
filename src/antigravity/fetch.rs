@@ -244,7 +244,9 @@ pub async fn fetch_snapshot_at(
         }
         _ => cache_ttl,
     };
-    if let Some(bytes) = cache.fresh_payload(cache_ttl)?
+    let auth_rejected = matches!(&origin, Origin::Local(Err(e)) if is_auth_rejection(e));
+    if !auth_rejected
+        && let Some(bytes) = cache.fresh_payload(cache_ttl)?
         && let Ok(outcome) = reuse_cache(bytes, cache, false, account.as_deref(), now)
     {
         return Ok(outcome);
@@ -274,6 +276,11 @@ pub async fn fetch_snapshot_at(
             Ok(crate::outcome::Outcome::fresh(snap))
         }
         Err(e) if e.is_transient() => fallback_silent(cache, now, e),
+        Err(AppError::Http { status, body }) if matches!(status, 401 | 403) => {
+            cache.mark_stale();
+            let _ = cache.write_last_error(status, &body);
+            Err(AppError::Http { status, body })
+        }
         Err(AppError::Http { status, body }) => {
             cache.mark_stale();
             let last_error = Some(cache.write_last_error(status, &body));
