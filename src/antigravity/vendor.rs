@@ -25,6 +25,21 @@ use crate::vendor::{RenderOpts, VendorId, VendorOutcome};
 use crate::waybar::{Class, WaybarOutput};
 
 pub const DEFAULT_FORMAT: &str = "{icon} {session_pct}% · {weekly_pct}%";
+pub const WEEKLY_ONLY_FORMAT: &str = "{icon} {weekly_pct}%";
+pub const SESSION_ONLY_FORMAT: &str = "{icon} {session_pct}%";
+pub const NO_WINDOWS_FORMAT: &str = "{icon}";
+
+/// Select the default format string based on which shared windows are present.
+/// When only weekly quota is reported (such as from CLI discovery), omit the
+/// session percentage slot instead of rendering a bare "%".
+pub fn default_format(snap: &AntigravitySnapshot) -> &'static str {
+    match (snap.session.is_some(), snap.weekly.is_some()) {
+        (true, true) => DEFAULT_FORMAT,
+        (false, true) => WEEKLY_ONLY_FORMAT,
+        (true, false) => SESSION_ONLY_FORMAT,
+        (false, false) => NO_WINDOWS_FORMAT,
+    }
+}
 
 /// Model-group names, as Antigravity's own Model Quota screen labels them.
 /// Both surfaces put these under a "Session"/"Weekly" heading, so the rows
@@ -194,7 +209,7 @@ pub fn render(
     let format = opts
         .format
         .clone()
-        .unwrap_or_else(|| DEFAULT_FORMAT.to_string());
+        .unwrap_or_else(|| default_format(snap).to_string());
     let mut values = build_placeholders(snap, now, opts.pace_tolerance);
     // Both sinks fed by this map (bar text and --tooltip-format) are Pango
     // markup. One pool name carries an `&` ("Claude & GPT OSS") and the plan
@@ -593,5 +608,25 @@ mod tests {
         for glyph in ['↑', '→', '↓'] {
             assert!(!tip.contains(glyph), "{tip}");
         }
+    }
+
+    /// #500: when the product reports no session window, the default format
+    /// omits the session percentage slot instead of rendering a bare "%".
+    #[test]
+    fn default_format_omits_absent_session_window() {
+        let mut snap = snapshot();
+        assert_eq!(default_format(&snap), DEFAULT_FORMAT);
+
+        snap.session = None;
+        assert_eq!(default_format(&snap), WEEKLY_ONLY_FORMAT);
+        let out = render(&outcome(None), &snap, &Theme::default(), &opts(), now());
+        assert!(!out.text.contains(" %"), "bare % in text: {}", out.text);
+        assert!(out.text.contains("8%"), "missing weekly pct: {}", out.text);
+
+        snap.weekly = None;
+        assert_eq!(default_format(&snap), NO_WINDOWS_FORMAT);
+
+        snap.session = Some(window(43, "2026-07-22T14:00:00Z", false));
+        assert_eq!(default_format(&snap), SESSION_ONLY_FORMAT);
     }
 }

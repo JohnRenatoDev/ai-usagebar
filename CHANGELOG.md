@@ -1,12 +1,55 @@
 ## [Unreleased]
 
+### Added
+
+- **Omarchy development now has repeatable visual and accessibility checks.**
+  A headless Quickshell harness renders the real settings view in deterministic
+  dark and light scenarios, while the normal plugin test guards keyboard
+  reachability, activation, focus, and labels for custom controls.
+
 ### Fixed
 
+- **A stale Kimi OAuth holder can no longer delete its replacement lock.** A
+  refresh process delayed past the lock's five-second staleness threshold
+  resumes to find another process has already stolen and rebuilt the lock
+  directory; releasing the old guard used to delete that live replacement
+  (and its heartbeat kept touching it), letting a third caller acquire the
+  same credential while it was genuinely held. Each acquisition now writes a
+  unique owner marker into the lock directory; the heartbeat stops touching a
+  directory it no longer owns, and release only removes a directory that
+  still carries the holder's own marker (#495).
+- **An active HTTP 429 backoff survives an Anthropic API month rollover.**
+  A cached spend from the previous UTC month is correctly rejected as a
+  different figure, but the rejection made every refresh fall through to a
+  live request even while the shared five-minute backoff was armed — a
+  refresh interval shorter than the backoff would re-request and re-arm
+  forever. When the cached figure is unusable and a backoff is active, the
+  refresh now surfaces the shared countdown without contacting the server;
+  last month's spend stays rejected (#496).
+- **Google Antigravity authentication rejection does not serve stale quota.**
+  When discovery or the remote quota endpoint receives HTTP 401 or 403, the
+  widget surfaces the error immediately instead of falling back to a stale
+  cache payload and presenting full weekly windows alongside the failure (#500).
+
+- **Google Antigravity default format omits absent session window.**
+  When Antigravity reports only weekly buckets, the default bar format renders
+  only the weekly percentage slot instead of leaving a bare `%` where the
+  absent session percentage would be (#500).
+
+||||||| d1af986
+- **Clearing an API key also removes it from a TOML inline table.** The TUI
+  settings overlay and native settings bridge previously reported success
+  while leaving the key in a provider configured as `zai = { ... }`.
+  Clearing now preserves the table's other fields and comments while removing
+  the saved key.
+
+||||||| d1af986
 - **The KDE plasmoid no longer uses object spread in its logic module.** QML's V4
   engine rejects the ES2018 spread syntax with "Unexpected token `...`", which
   prevented the widget from loading. Properties are now copied explicitly, and a
   test guards against regression.
 
+||||||| d1af986
 ## [1.43.0] — 2026-10-22
 
 ### Added

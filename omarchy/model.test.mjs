@@ -2,6 +2,23 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
+function qmlBlocks(source, component) {
+  const blocks = [];
+  const start = new RegExp(`(^|\\n)\\s*${component}\\s*\\{`, 'g');
+  for (const match of source.matchAll(start)) {
+    const open = source.indexOf('{', match.index);
+    let depth = 0;
+    for (let i = open; i < source.length; i++) {
+      if (source[i] === '{') depth++;
+      else if (source[i] === '}' && --depth === 0) {
+        blocks.push(source.slice(open + 1, i));
+        break;
+      }
+    }
+  }
+  return blocks;
+}
+
 const source = fs.readFileSync(new URL('./Model.js', import.meta.url), 'utf8');
 const model = {};
 vm.createContext(model);
@@ -2064,6 +2081,29 @@ assert.equal(model.cursorPoolOf(null), '');
   }
   assert.doesNotMatch(settingsForm, /providersOpen|credentialsOpen/);
   assert.doesNotMatch(settingsForm, /^    PanelSectionHeader \{\s*\n\s*text: root\.tr\("section\.(display|language|bar_window|show_as|primary|providers|credentials)"\)/m);
+
+  // Keyboard reachability is a product contract, not a visual convention.
+  // Any new action button must opt into the Quattro tab/focus behavior, while
+  // the one custom pointer target (Disclosure) must keep equivalent keyboard
+  // activation and visibly claim focus on click.
+  const buttons = qmlBlocks(settingsForm, 'Button');
+  assert.equal(buttons.length, 5, 'all settings action buttons are covered');
+  for (const button of buttons)
+    assert.match(button, /\bfocusable:\s*true\b/, 'every settings Button is in the tab order');
+  const panelActionButtons = qmlBlocks(settingsForm, 'PanelActionButton');
+  assert.equal(panelActionButtons.length, 1, 'the credential clear action is covered');
+  assert.match(panelActionButtons[0], /\bfocusable:\s*true\b/);
+  assert.match(panelActionButtons[0], /\btooltipText:/, 'the icon-only action retains an accessible label');
+  const disclosures = qmlBlocks(settingsForm, 'component Disclosure: Item');
+  assert.equal(disclosures.length, 1);
+  assert.match(disclosures[0], /activeFocusOnTab:\s*true/);
+  for (const key of ['Return', 'Enter', 'Space'])
+    assert.match(disclosures[0], new RegExp(`Keys\\.on${key}Pressed:\\s*disclosure\\.toggled\\(\\)`));
+  assert.match(disclosures[0], /onClicked:\s*\{\s*disclosure\.forceActiveFocus\(\)\s*disclosure\.toggled\(\)/);
+  assert.equal(qmlBlocks(settingsForm, 'MouseArea').length, 1,
+    'new custom pointer targets need explicit keyboard-equivalence coverage');
+  assert.match(settingsForm, /focus:\s*visible/);
+  assert.match(settingsForm, /Keys\.onEscapePressed:\s*closeRequested\(\)/);
   assert.match(panel, /labelOnly:\s*chip\.labelOnly/);
   assert.match(panel, /if \(showProvider \|\| chip\.labelOnly === true\)/);
   assert.match(barWidgetSource, /visible:\s*chipHit\.chip\.labelOnly !== true/);
