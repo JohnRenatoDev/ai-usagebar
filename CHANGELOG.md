@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+### Fixed
+
+- **Google Antigravity authentication rejection does not serve stale quota.**
+  When discovery or the remote quota endpoint receives HTTP 401 or 403, the
+  widget surfaces the error immediately instead of falling back to a stale
+  cache payload and presenting full weekly windows alongside the failure (#500).
+
+- **Google Antigravity default format omits absent session window.**
+  When Antigravity reports only weekly buckets, the default bar format renders
+  only the weekly percentage slot instead of leaving a bare `%` where the
+  absent session percentage would be (#500).
+
 ## [1.43.0] — 2026-10-22
 
 ### Added
