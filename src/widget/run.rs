@@ -186,11 +186,14 @@ async fn build_output(cli: &Cli) -> Result<WaybarOutput> {
 
 fn validate_vendor_options(cli: &Cli, vendor: Vendor) -> Result<()> {
     if cli.account.is_some()
-        && !matches!(vendor, Vendor::Anthropic | Vendor::Openai | Vendor::Copilot)
+        && !matches!(
+            vendor,
+            Vendor::Anthropic | Vendor::Openai | Vendor::Copilot | Vendor::Devin
+        )
         && !Config::API_KEY_ACCOUNT_VENDORS.contains(&vendor.to_id())
     {
         return Err(AppError::Other(
-            "--account is supported only for Claude, Codex (OpenAI), GitHub Copilot, and \
+            "--account is supported only for Claude, Codex (OpenAI), GitHub Copilot, Devin, and \
              the API-key vendors with a [[<vendor>.accounts]] array: Z.AI, OpenRouter, \
              DeepSeek, DeepInfra, Kilo, Novita, Moonshot, Grok, MiniMax, and OrcaRouter"
                 .into(),
@@ -213,12 +216,23 @@ fn dispatch_is_eligible(cli: &Cli, config: &Config, vendor: Vendor) -> bool {
 
 /// Nous Research authenticates with the independent OAuth credential store.
 async fn nous_output(cli: &Cli) -> Result<WaybarOutput> {
-    let client = http_client()?;
     let store = crate::nous::credentials::CredentialStore::default();
     let endpoints = crate::nous::fetch::Endpoints::default();
-    let account =
-        crate::nous::fetch::fetch_account_with_refresh(&client, &store, &endpoints, Utc::now())
-            .await?;
+    nous_output_with(cli, &store, &endpoints).await
+}
+
+async fn nous_output_with(
+    cli: &Cli,
+    store: &crate::nous::credentials::CredentialStore,
+    endpoints: &crate::nous::fetch::Endpoints,
+) -> Result<WaybarOutput> {
+    let account = match fetch_nous_account(store, endpoints).await {
+        Ok(account) => account,
+        Err(error) if error.is_transient() => {
+            return Ok(WaybarOutput::loading(cli.icon.as_deref()));
+        }
+        Err(error) => return Err(error),
+    };
     let snapshot = account.clone();
     // Nous keeps no cache of its own, so every read is a live one.
     let outcome =
@@ -231,6 +245,17 @@ async fn nous_output(cli: &Cli) -> Result<WaybarOutput> {
         &RenderOpts::from_cli(cli),
         Utc::now(),
     ))
+}
+
+async fn fetch_nous_account(
+    store: &crate::nous::credentials::CredentialStore,
+    endpoints: &crate::nous::fetch::Endpoints,
+) -> Result<crate::nous::AccountSnapshot> {
+    let client = http_client()?;
+    let account =
+        crate::nous::fetch::fetch_account_with_refresh(&client, store, endpoints, Utc::now())
+            .await?;
+    Ok(account)
 }
 
 async fn opencode_go_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
@@ -556,7 +581,7 @@ async fn grok_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     ))
 }
 
-/// SuperGrok reads billing over the CLI's documented HTTPS endpoint (or, as a
+/// SuperGrok reads billing over the Grok CLI's `/usage` HTTPS endpoint (or, as a
 /// fallback, its ACP process). The login's `key` is used only inside one
 /// outgoing Authorization header — never cached, refreshed, or written back.
 async fn supergrok_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
@@ -1118,16 +1143,29 @@ async fn muse_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     ))
 }
 
+fn devin_cache(cli: &Cli) -> Result<Cache> {
+    Ok(match (cli.cache_dir.as_deref(), cli.account.as_deref()) {
+        (Some(root), Some(label)) => Cache::at(root.join("devin").join(label)),
+        (Some(root), None) => Cache::at(root.join("devin")),
+        (None, Some(label)) => Cache::for_vendor_account("devin", label)?,
+        (None, None) => Cache::for_vendor("devin")?,
+    })
+}
+
 async fn devin_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
-    let cache = vendor_cache(cli, "devin")?;
-    let outcome =
-        match crate::devin::fetch::fetch_snapshot(&config.devin, &cache, DEFAULT_TTL).await {
-            Ok(outcome) => outcome,
-            Err(error) if error.is_transient() => {
-                return Ok(WaybarOutput::loading(cli.icon.as_deref()));
-            }
-            Err(error) => return Err(error),
-        };
+    let creds_path = config
+        .devin
+        .resolve_credentials_path(cli.account.as_deref())?;
+    let mut devin_cfg = config.devin.clone();
+    devin_cfg.credentials_path = Some(creds_path);
+    let cache = devin_cache(cli)?;
+    let outcome = match crate::devin::fetch::fetch_snapshot(&devin_cfg, &cache, DEFAULT_TTL).await {
+        Ok(outcome) => outcome,
+        Err(error) if error.is_transient() => {
+            return Ok(WaybarOutput::loading(cli.icon.as_deref()));
+        }
+        Err(error) => return Err(error),
+    };
     let theme = theme_from_cli(cli);
     let snapshot = outcome.snapshot.clone();
     let vendor_outcome: VendorOutcome = outcome.into();
@@ -1680,6 +1718,8 @@ mod tests {
         assert!(validate_vendor_options(&cli, Vendor::Openai).is_ok());
         // Copilot joined the named-account vendors in #378.
         assert!(validate_vendor_options(&cli, Vendor::Copilot).is_ok());
+        // Devin named accounts select a credentials file via [[devin.accounts]].
+        assert!(validate_vendor_options(&cli, Vendor::Devin).is_ok());
     }
 
     #[test]
@@ -1692,7 +1732,7 @@ mod tests {
             .filter(|id| {
                 !matches!(
                     id,
-                    VendorId::Anthropic | VendorId::Openai | VendorId::Copilot
+                    VendorId::Anthropic | VendorId::Openai | VendorId::Copilot | VendorId::Devin
                 )
             })
             .collect();
@@ -1742,5 +1782,53 @@ mod tests {
         cli.desktop = true;
         assert!(validate_vendor_options(&cli, Vendor::Openrouter).is_err());
         assert!(validate_vendor_options(&cli, Vendor::Anthropic).is_ok());
+    }
+
+    #[tokio::test]
+    async fn nous_output_returns_loading_on_transient_failure_and_propagates_auth_error() {
+        use crate::nous::credentials::{CredentialDocument, CredentialStore, NousCredential};
+        use crate::nous::fetch::Endpoints;
+
+        let mut server = mockito::Server::new_async().await;
+        let transient_mock = server
+            .mock("GET", "/account")
+            .with_status(503)
+            .create_async()
+            .await;
+        let root = tempfile::TempDir::new().unwrap();
+        let store = CredentialStore::at(root.path().join("config").join("credentials.json"));
+        store
+            .write(&CredentialDocument::new(Some(NousCredential {
+                client_id: "hermes-cli".into(),
+                access_token: "test-access-token".into(),
+                refresh_token: "test-refresh-token".into(),
+                expires_at: Utc::now() + chrono::Duration::hours(1),
+            })))
+            .unwrap();
+        let endpoints = Endpoints {
+            account: format!("{}/account", server.url()),
+            token: format!("{}/token", server.url()),
+        };
+        let mut cli = cli_default();
+        cli.icon = Some("N".into());
+
+        let res = nous_output_with(&cli, &store, &endpoints).await;
+        let out = res.unwrap();
+        let expected = WaybarOutput::loading(Some("N"));
+        assert_eq!(out.text, expected.text);
+        assert_eq!(out.tooltip, expected.tooltip);
+        assert_eq!(out.class, expected.class);
+        transient_mock.assert_async().await;
+
+        let auth_mock = server
+            .mock("GET", "/account")
+            .with_status(401)
+            .create_async()
+            .await;
+        let res = nous_output_with(&cli, &store, &endpoints).await;
+        let err = res.unwrap_err();
+        assert!(!err.is_transient(), "{err:?}");
+        assert_eq!(fallback(&err, &cli).text, "⚠");
+        auth_mock.assert_async().await;
     }
 }

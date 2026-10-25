@@ -9,7 +9,8 @@ PLASMOID_ID ?= io.github.akitaonrails.ai-usagebar
 PLASMOID_DIR = $(abspath $(DESTDIR)$(PREFIX))/share/plasma/plasmoids/$(PLASMOID_ID)
 
 .PHONY: build install uninstall install-plasmoid uninstall-plasmoid \
-	test desktop-test plugin-test mint-test mint-runtime-test qml-lint qml-test mjs-probe smoke clippy fmt clean
+	test desktop-test plugin-test omarchy-visual-test mint-test mint-runtime-test \
+	qml-lint qml-test mjs-probe smoke clippy fmt clean
 
 build:
 	cargo build --release
@@ -75,6 +76,12 @@ popover-ssr-test:
 
 plugin-test:
 	node omarchy/model.test.mjs
+
+# Renders the real SettingsView twice through Quickshell's offscreen backend.
+# This is intentionally opt-in: non-Omarchy CI runners do not have Quickshell
+# or the shell's qs.Commons/qs.Ui modules installed.
+omarchy-visual-test:
+	./scripts/omarchy-visual-test.sh
 
 mint-test:
 	PYTHONPATH=linux-mint python3 -m unittest discover -s linux-mint -p 'test_tray_model.py'
