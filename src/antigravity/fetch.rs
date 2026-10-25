@@ -4588,6 +4588,55 @@ mod tests {
         assert!(matches!(err, AppError::Http { status: 401, .. }), "{err}");
     }
 
+    /// #500: a signed-out local server returning HTTP 403 must not fall back to
+    /// an existing cache payload and present full quota alongside an error.
+    #[tokio::test]
+    async fn a_403_auth_rejection_does_not_fall_back_to_a_warm_cache() {
+        let mut server = mockito::Server::new_async().await;
+        let eps = endpoints(&server);
+        let status_path = format!("/{STATUS_RPC}");
+        let _status = server
+            .mock("POST", status_path.as_str())
+            .with_status(403)
+            .with_body(r#"{"error":"forbidden"}"#)
+            .create_async()
+            .await;
+        let quota = quota_mock(&mut server, "KEYRING-AT")
+            .expect(0)
+            .create_async()
+            .await;
+        let blob = keyring_blob(VALID, true);
+        let (_td, cache) = fixture();
+
+        let mut warm_snap = parsed();
+        warm_snap.session = None;
+        if let Some(w) = warm_snap.weekly.as_mut() {
+            w.utilization_pct = 100;
+        }
+        if let Some(w) = warm_snap.third_party_weekly.as_mut() {
+            w.utilization_pct = 100;
+        }
+        let bytes = serde_json::to_vec(&snap_to_json(&warm_snap)).unwrap();
+        cache.write_payload(&bytes).unwrap();
+
+        let err = run(
+            &cache,
+            RemoteOverride {
+                credential: SavedCredential::Blob(&blob),
+                endpoints: Some(&eps),
+                local_bases: Some(vec![server.url().into()]),
+                ..Default::default()
+            },
+            Duration::ZERO,
+        )
+        .await
+        .expect_err("HTTP 403 must not fall back to warm cache");
+
+        quota.assert_async().await;
+        assert!(matches!(err, AppError::Http { status: 403, .. }), "{err}");
+        assert_eq!(cache.read_last_error().map(|(code, _)| code), Some(403));
+    }
+
     /// #405: the reporter's exact setup. The IDE is open but its language
     /// server is signed out (a 403 that would outrank `agy` and mask the
     /// saved session); `ide_language_server = false` takes the IDE out of
