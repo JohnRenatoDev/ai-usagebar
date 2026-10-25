@@ -41,7 +41,11 @@ const IV_LEN: usize = 16;
 const TAG_LEN: usize = 16;
 
 /// The CLI's Secret Service item coordinates for `secret-tool lookup`.
+// Linux-only callers: without the gate the constants are dead on the
+// macOS/Windows Clippy legs, where the keyring path is compiled out.
+#[cfg(target_os = "linux")]
 const KEYRING_SERVICE: &str = "Factory CLI";
+#[cfg(target_os = "linux")]
 const KEYRING_ACCOUNT: &str = "auth-encryption-key";
 
 /// What an expired login and a rejected token both tell the user: the `droid`
@@ -235,6 +239,7 @@ fn keyring_unavailable() -> AppError {
     )
 }
 
+#[cfg(target_os = "linux")]
 fn malformed_key() -> AppError {
     AppError::Credentials(
         "Droid: the `Factory CLI/auth-encryption-key` keyring item is malformed; sign in with `droid` again".into(),
