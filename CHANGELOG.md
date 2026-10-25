@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+### Fixed
+
+- **Cursor still reads the IDE session after 3.27.12's opaque token.** That
+  release replaced the `cursorAuth/accessToken` JWT with an opaque `curs…`
+  string, so the provider's claim decoding failed and reported "session token
+  could not be decoded" for a signed-in IDE (#503). The account identity now
+  comes from `cursorAuth/cachedScopedProfile`'s `authId` — the same
+  `issuer|userId` value the JWT's `sub` used to carry — and the session cookie
+  is built exactly as before from that id and the token, whatever its format.
+  A JWT is still preferred when present, and an opaque token with no cached
+  profile keeps the original sign-in error.
+
 ## [1.44.0] — 2026-10-25
 
 ### Added

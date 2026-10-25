@@ -95,7 +95,7 @@ async fn fetch_snapshot_at(
     // accounts in-place in this database; returning the cache first would show
     // the previous account's private usage until the TTL elapsed.
     let token = db::resolve_access_token(db_path, agent_auth_path)?;
-    let auth = db::session_auth(&token)?;
+    let auth = db::session_auth_for(db_path, &token)?;
 
     // A payload written before credit grants existed has no `credits` key.
     // Serving it fresh would hide a balance the spending page is showing
