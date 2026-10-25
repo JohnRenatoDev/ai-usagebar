@@ -119,6 +119,20 @@ pub async fn fetch_snapshot_at(
     {
         return Ok(outcome);
     }
+    // #496: the cached bytes can be unusable for this refresh — a UTC month
+    // rollover makes last month's spend a *different* figure, which
+    // `reuse_cache` rejects. An active shared backoff still applies: surface
+    // the countdown instead of contacting the server, or a refresh interval
+    // shorter than the backoff window would re-request and re-arm forever.
+    if let Some(remaining) = cache.backoff_remaining() {
+        return Err(AppError::Http {
+            status: 429,
+            body: format!(
+                "rate limited; next attempt in {}",
+                crate::cache::human_backoff(remaining)
+            ),
+        });
+    }
 
     match fetch_live(client, endpoints, admin_key, now).await {
         Ok((spent, covered_through)) => {
@@ -559,6 +573,65 @@ mod tests {
         )
         .await;
         assert!(out.is_err(), "expected an error, got {out:?}");
+    }
+
+    #[tokio::test]
+    async fn an_active_backoff_is_not_bypassed_by_a_month_rollover() {
+        // #496: June's cached spend is unusable in July (`reuse_cache`
+        // rejects it as a different figure), but a 429 backoff armed moments
+        // ago still applies — the refresh must surface the shared countdown
+        // without contacting the server. A refresh interval shorter than the
+        // backoff would otherwise re-request and re-arm forever.
+        let mut server = mockito::Server::new_async().await;
+        // Any live request answers 500 here; the assertion below demands the
+        // backoff 429 instead, so an accidental round-trip fails loudly.
+        server
+            .mock("GET", "/v1/organizations/cost_report")
+            .match_query(mockito::Matcher::Any)
+            .with_status(500)
+            .with_body("must not be contacted during backoff")
+            .create_async()
+            .await;
+
+        let (_td, cache) = cache_fixture();
+        cache
+            .write_payload(
+                serde_json::json!({
+                    "month": month_start_rfc3339(at(2026, 6, 30)),
+                    "target": target_key("k"),
+                    "snapshot": { "spent": 2.5, "limit": null },
+                })
+                .to_string()
+                .as_bytes(),
+            )
+            .unwrap();
+        // Armed against the real clock, like a genuine 429 would be; the
+        // payload above is seconds fresh, so the backoff branch serves it
+        // and the month check rejects it.
+        cache.note_rate_limit_at(std::time::SystemTime::now());
+
+        let client = reqwest::Client::new();
+        let endpoints = Endpoints {
+            cost_report: format!("{}/v1/organizations/cost_report", server.url()),
+        };
+        let err = fetch_snapshot_at(
+            &client,
+            "k",
+            &cache,
+            &endpoints,
+            Duration::from_secs(600),
+            None,
+            at(2026, 7, 1),
+        )
+        .await
+        .unwrap_err();
+        match &err {
+            AppError::Http { status, body } => {
+                assert_eq!(status, &429, "body: {body}");
+                assert!(body.contains("rate limited"), "body: {body}");
+            }
+            other => panic!("expected the shared backoff 429, got {other:?}"),
+        }
     }
 
     #[tokio::test]
