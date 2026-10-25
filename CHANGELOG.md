@@ -1,5 +1,25 @@
 ## [Unreleased]
 
+### Fixed
+
+- **A stale Kimi OAuth holder can no longer delete its replacement lock.** A
+  refresh process delayed past the lock's five-second staleness threshold
+  resumes to find another process has already stolen and rebuilt the lock
+  directory; releasing the old guard used to delete that live replacement
+  (and its heartbeat kept touching it), letting a third caller acquire the
+  same credential while it was genuinely held. Each acquisition now writes a
+  unique owner marker into the lock directory; the heartbeat stops touching a
+  directory it no longer owns, and release only removes a directory that
+  still carries the holder's own marker (#495).
+- **An active HTTP 429 backoff survives an Anthropic API month rollover.**
+  A cached spend from the previous UTC month is correctly rejected as a
+  different figure, but the rejection made every refresh fall through to a
+  live request even while the shared five-minute backoff was armed — a
+  refresh interval shorter than the backoff would re-request and re-arm
+  forever. When the cached figure is unusable and a backoff is active, the
+  refresh now surfaces the shared countdown without contacting the server;
+  last month's spend stays rejected (#496).
+
 ### Added
 
 - **Omarchy development now has repeatable visual and accessibility checks.**
