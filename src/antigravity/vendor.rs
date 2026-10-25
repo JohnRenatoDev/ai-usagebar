@@ -609,4 +609,24 @@ mod tests {
             assert!(!tip.contains(glyph), "{tip}");
         }
     }
+
+    /// #500: when the product reports no session window, the default format
+    /// omits the session percentage slot instead of rendering a bare "%".
+    #[test]
+    fn default_format_omits_absent_session_window() {
+        let mut snap = snapshot();
+        assert_eq!(default_format(&snap), DEFAULT_FORMAT);
+
+        snap.session = None;
+        assert_eq!(default_format(&snap), WEEKLY_ONLY_FORMAT);
+        let out = render(&outcome(None), &snap, &Theme::default(), &opts(), now());
+        assert!(!out.text.contains(" %"), "bare % in text: {}", out.text);
+        assert!(out.text.contains("8%"), "missing weekly pct: {}", out.text);
+
+        snap.weekly = None;
+        assert_eq!(default_format(&snap), NO_WINDOWS_FORMAT);
+
+        snap.session = Some(window(43, "2026-07-22T14:00:00Z", false));
+        assert_eq!(default_format(&snap), SESSION_ONLY_FORMAT);
+    }
 }
