@@ -318,7 +318,7 @@ impl Cache {
 /// minutes rounded *up* above it (`4m01s` reads as `5m` — promising less
 /// wait than the real one would make the next poll look broken), and hours
 /// once the minutes pass sixty (`1h 2m`, `1h`).
-fn human_backoff(remaining: Duration) -> String {
+pub(crate) fn human_backoff(remaining: Duration) -> String {
     let secs = remaining.as_secs();
     if secs < 60 {
         return format!("{secs}s");
