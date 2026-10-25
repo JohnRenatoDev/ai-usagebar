@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+### Added
+
+- **Omarchy development now has repeatable visual and accessibility checks.**
+  A headless Quickshell harness renders the real settings view in deterministic
+  dark and light scenarios, while the normal plugin test guards keyboard
+  reachability, activation, focus, and labels for custom controls.
+
 ## [1.43.0] — 2026-10-22
 
 ### Added
