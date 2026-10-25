@@ -265,7 +265,14 @@ On an Omarchy 4 machine:
 ```bash
 omarchy plugin validate .
 node omarchy/model.test.mjs
+make omarchy-visual-test
 ```
+
+The visual test renders the real settings component in dark and light fixture
+themes through Quickshell's offscreen backend. It does not open a window or
+read credentials. Review the generated PNGs under
+`target/omarchy-visual-scenarios/`; they are local test artifacts, not golden
+pixel snapshots.
 
 `qmllint` cannot resolve the `qs.*` modules that Omarchy injects at shell
 runtime, so it is not a reliable standalone check for plugin entry points.
