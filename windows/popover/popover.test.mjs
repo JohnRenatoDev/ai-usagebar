@@ -92,7 +92,7 @@ import { measurePanelHeight } from './src/panel-size.js';
 import {
   buildCardSvg,
   CARD_IMAGE_SCALE,
-  createCopyQueue,
+  createCopyRegistry,
   findCardElement,
   IMAGE_COPIED_TIMEOUT_MS,
   namespacedCardHtml,
@@ -2364,85 +2364,122 @@ console.log('ok');
 }
 
 {
-  // F3: the pending copies form a FIFO queue and each ack settles its own send. The
-  // correction depends on the host handling the IPCs in order and answering in the same
-  // order (each host's event loop is single-threaded; the copy-image arm answers
-  // synchronously).
-  const realSet = globalThis.setTimeout;
-  const realClear = globalThis.clearTimeout;
-  const fakeTimers = new Map();
-  let timerSeq = 0;
-  globalThis.setTimeout = (task, ms) => {
-    const id = ++timerSeq;
-    fakeTimers.set(id, { task, ms });
-    return id;
+  // Contract v2: the pending copies are keyed by the id sent with each command — no
+  // queue, no order dependency. Each id settles exactly once (its own answer, the
+  // timeout, or a pre-send failure) and leaves the pending set, so an answer for an
+  // unknown, expired or null id is ignored.
+  const makeRegistry = () => {
+    const timers = new Map();
+    let seq = 0;
+    const registry = createCopyRegistry({
+      setTimer: (task, ms) => {
+        const id = ++seq;
+        timers.set(id, { task, ms });
+        return id;
+      },
+      clearTimer: (id) => timers.delete(id),
+    });
+    const expire = () => {
+      for (const [id, t] of [...timers])
+        if (t.ms === 5000) {
+          timers.delete(id);
+          t.task();
+        }
+    };
+    return { registry, expire };
   };
-  globalThis.clearTimeout = (id) => fakeTimers.delete(id);
-  const fireTimers = (ms) => {
-    for (const [id, t] of [...fakeTimers])
-      if (t.ms === ms) {
-        fakeTimers.delete(id);
-        t.task();
-      }
-  };
-  try {
-    assert.equal(IMAGE_COPIED_TIMEOUT_MS, 5000, 'the timeout the queue defaults to is 5 s');
 
-    // Double click: while one send is waiting and not expired, the lock lets only one
-    // send start.
-    const q1 = createCopyQueue();
-    assert.equal(q1.isPending(), false);
+  assert.equal(IMAGE_COPIED_TIMEOUT_MS, 5000, 'the timeout the registry defaults to is 5 s');
+
+  // Ids: the per-instance counter only grows, and copy-<n> matches the contract's shape
+  // ^[A-Za-z0-9_-]{1,64}$.
+  {
+    const { registry } = makeRegistry();
+    const first = registry.begin(() => {});
+    const second = registry.begin(() => {});
+    assert.equal(first.id, 'copy-1');
+    assert.equal(second.id, 'copy-2');
+    assert.match(first.id, /^[A-Za-z0-9_-]{1,64}$/);
+    assert.equal(registry.isBusy(), true);
+    registry.answer(first.id, true);
+    assert.equal(registry.isBusy(), true, 'the second copy still holds the lock');
+    second.settle(false);
+    assert.equal(registry.isBusy(), false);
+  }
+
+  // R1: A's raster is slow, A expires, B is sent before A is. B's own answer settles B;
+  // A's answer is ignored because A's id is no longer pending.
+  {
+    const { registry, expire } = makeRegistry();
+    const notices = [];
+    const a = registry.begin((ok) => notices.push(['a', ok]));
+    expire(); // A times out before its dispatch
+    assert.deepEqual(notices, [['a', false]]);
+    const b = registry.begin((ok) => notices.push(['b', ok]));
+    assert.equal(registry.isBusy(), true);
+    registry.answer(b.id, false); // B's own answer (its IPC arrived before A's) settles B
+    assert.deepEqual(notices, [['a', false], ['b', false]]);
+    registry.answer(a.id, true); // A's late answer: the id expired, so it is ignored
+    assert.equal(notices.length, 2, "A's answer after its timeout settled nothing");
+    assert.equal(registry.isBusy(), false);
+  }
+
+  // R2: A's answer never arrives and A expires; B and C each receive their own true
+  // answer and announce success — nothing is stuck a response behind.
+  {
+    const { registry, expire } = makeRegistry();
+    const notices = [];
+    registry.begin((ok) => notices.push(['a', ok]));
+    expire(); // A never answered: the timeout settles A and removes the id
+    for (const who of ['b', 'c']) {
+      const handle = registry.begin((ok) => notices.push([who, ok]));
+      registry.answer(handle.id, true);
+    }
+    assert.deepEqual(notices, [['a', false], ['b', true], ['c', true]]);
+    assert.equal(registry.isBusy(), false);
+  }
+
+  // Pre-send failure after the timeout: settling removes the id (nothing stays
+  // pending), and a later answer for it cannot settle it twice.
+  {
+    const { registry, expire } = makeRegistry();
+    const notices = [];
+    const a = registry.begin((ok) => notices.push(['a', ok]));
+    expire();
+    a.settle(false); // the raster fails after the timeout: idempotent no-op, nothing pending
+    assert.equal(registry.isBusy(), false);
+    registry.answer(a.id, true);
+    assert.deepEqual(notices, [['a', false]], 'the expired id settled exactly once');
+  }
+
+  // Double click: one send while a copy is pending.
+  {
+    const { registry, expire } = makeRegistry();
     const started = [];
     const click = () => {
-      if (q1.isPending()) return;
+      if (registry.isBusy()) return;
       started.push(1);
-      q1.send(() => {});
+      registry.begin(() => {});
     };
     click();
     click();
-    assert.equal(started.length, 1, 'a second click while a send is waiting starts nothing');
-    assert.equal(q1.isPending(), true, 'the waiting send holds the lock');
-    q1.ack(true);
-    assert.equal(q1.isPending(), false);
+    assert.equal(started.length, 1, 'a second click while a copy is pending starts nothing');
+    assert.equal(registry.isBusy(), true, 'the pending copy holds the lock');
+    expire();
+    assert.equal(registry.isBusy(), false);
+  }
 
-    // The review scenario: A expires, B starts, A's late ack is discarded, B's own ack
-    // settles B with its own result.
-    const queue = createCopyQueue();
+  // null, unknown and already-settled ids are ignored, without throwing.
+  {
+    const { registry, expire } = makeRegistry();
     const notices = [];
-    queue.send((ok) => notices.push(['a', ok]));
-    fireTimers(5000);
-    assert.deepEqual(notices, [['a', false]], 'the timeout settles A with a failure');
-    assert.equal(queue.isPending(), false, 'an expired send does not hold the lock: a new copy is allowed');
-    queue.send((ok) => notices.push(['b', ok]));
-    assert.equal(queue.isPending(), true);
-    queue.ack(true); // A's late answer: consumed by A's tombstone, never B's
-    assert.equal(notices.length, 1, "A's late ack settled nothing");
-    queue.ack(false); // B's own answer settles B
-    assert.deepEqual(notices, [['a', false], ['b', false]]);
-    assert.equal(queue.isPending(), false);
-    queue.ack(true); // a response on an empty queue is ignored, without throwing
-    assert.equal(notices.length, 2);
-
-    // A send cancelled before the IPC was dispatched leaves the queue (no tombstone), so
-    // the next ack still belongs to the next send.
-    const cancelled = queue.send((ok) => notices.push(['c', ok]));
-    cancelled.cancel(false);
-    assert.deepEqual(notices.slice(-1), [['c', false]], 'the cancel reports the failure once, now');
-    queue.send((ok) => notices.push(['d', ok]));
-    queue.ack(true);
-    assert.deepEqual(notices.slice(-1), [['d', true]], 'the cancelled send did not swallow D\'s ack');
-    assert.equal(queue.isPending(), false);
-
-    // A send that expires with nothing else pending settles once (by its timeout), and
-    // its late acks are discarded without re-settling.
-    const notices2 = [];
-    queue.send((ok) => notices2.push(ok));
-    fireTimers(5000);
-    queue.ack(true);
-    queue.ack(true);
-    assert.deepEqual(notices2, [false], 'E settled once, by its timeout');
-  } finally {
-    globalThis.setTimeout = realSet;
-    globalThis.clearTimeout = realClear;
+    registry.answer(null, true); // the host's null-id answer
+    registry.answer('copy-9', true); // no such id was reserved in this instance
+    const live = registry.begin((ok) => notices.push(ok));
+    registry.answer(live.id, true);
+    assert.deepEqual(notices, [true], 'only the live id settled');
+    live.settle(true); // a second settle for the same id is a no-op
+    assert.deepEqual(notices, [true]);
+    expire();
   }
 }

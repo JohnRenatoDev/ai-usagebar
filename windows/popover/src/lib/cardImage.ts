@@ -70,104 +70,78 @@ export function stripPngDataUrlPrefix(dataUrl: string): string {
 }
 
 /**
- * The pending copy-image sends, in FIFO order.
- *
- * What this protects is the association between a send and its own ack: the host
- * answers through one boolean hook (`window.__AIUB_IMAGE_COPIED__(ok)`), so the hook
- * always settles the OLDEST unanswered send — and the correction depends on the host
- * handling the IPCs in order and answering in the same order. Each host's event loop
- * is single-threaded, and the copy-image arm answers synchronously, so an ack always
- * belongs to the oldest send the host actually received.
- *
- * A send that times out is settled with a failure but stays in the queue as a
- * tombstone until its late ack arrives (where it is discarded silently): without the
- * tombstone, the late ack would settle the copy that started after it with a result
- * that is not its own.
+ * The pending copy-image copies, keyed by the id that travels with each command
+ * (contract v2): the host answers `window.__AIUB_IMAGE_COPIED__(id, ok)` with the id it
+ * RECEIVED, so an answer can only ever address the copy it belongs to. There is no queue
+ * and no order dependency: a slow raster that outlives its timeout may dispatch after a
+ * newer copy, and a lost answer cannot touch another copy — each id settles exactly once
+ * (its own answer, the timeout, or a pre-send failure), and settling removes the id, so
+ * a late answer for it is ignored.
  */
-export interface CopyQueueSend {
+export interface CopyRegistry {
   /**
-   * Settle the send before the IPC is dispatched (the pre-send failure path): the host
-   * never received a command, so no ack will ever come and the entry must LEAVE the
-   * queue — a tombstone would swallow the next send's ack.
+   * Reserve a new pending id (`copy-<n>`, the per-instance counter only grows) and arm
+   * its timeout. `onResult(ok)` is reported exactly once: by the host's answer for this
+   * id, by the timeout (false), or by `settle` on the pre-send failure path — and the
+   * id leaves the pending set either way.
    */
-  cancel: (ok: boolean) => void;
-  /** Fire the send's timeout (the queue's own timer calls it; idempotent). */
-  expire: () => void;
+  begin: (onResult: (ok: boolean) => void) => { id: string; settle: (ok: boolean) => void };
+  /** Apply the host's answer for one id. Unknown, already-settled and null ids are ignored. */
+  answer: (id: string | null, ok: boolean) => void;
+  /** A copy is pending: the double-click lock, held from the click until the copy settles. */
+  isBusy: () => boolean;
 }
 
-export interface CopyQueue {
-  /**
-   * Start a send. `onResult(ok)` settles it exactly once: with its own ack (before the
-   * timeout) or with the timeout's false.
-   */
-  send: (onResult: (ok: boolean) => void, timeoutMs?: number) => CopyQueueSend;
-  /** Consume the host's ack for the head of the queue; a response on an empty queue is ignored. */
-  ack: (ok: boolean) => void;
-  /** A send is waiting and not expired: the double-click lock. */
-  isPending: () => boolean;
+interface CopyRegistryOptions {
+  /** Pending-copy timeout in ms (default `IMAGE_COPIED_TIMEOUT_MS`). */
+  timeoutMs?: number;
+  /** Arm an id's timeout (default `globalThis.setTimeout`; tests inject fakes). */
+  setTimer?: (task: () => void, ms: number) => unknown;
+  /** Disarm it (default `globalThis.clearTimeout`). */
+  clearTimer?: (id: unknown) => void;
 }
 
-interface CopyQueueTimers {
-  clear: (id: unknown) => void;
-  set: (task: () => void, ms: number) => unknown;
+interface CopyRegistryEntry {
+  onResult: (ok: boolean) => void;
+  timer: unknown;
 }
 
 /**
- * Build the pending-copy queue. `globalThis` timers by default so the same logic runs
+ * Build the pending-copy registry. `globalThis` timers by default so the same logic runs
  * in the browser; tests inject fake timers to drive the expirations directly.
  */
-export function createCopyQueue(
-  timers: CopyQueueTimers = {
-    clear: (id) => globalThis.clearTimeout(id as number),
-    set: (task, ms) => globalThis.setTimeout(task, ms),
-  },
-): CopyQueue {
-  interface Entry {
-    expired: boolean;
-    onResult: (ok: boolean) => void;
-    settled: boolean;
-    timer: unknown;
-  }
-  const queue: Entry[] = [];
+export function createCopyRegistry(options: CopyRegistryOptions = {}): CopyRegistry {
+  const timeoutMs = options.timeoutMs ?? IMAGE_COPIED_TIMEOUT_MS;
+  const setTimer = options.setTimer ?? ((task: () => void, ms: number) => globalThis.setTimeout(task, ms));
+  const clearTimer = options.clearTimer ?? ((id: unknown) => globalThis.clearTimeout(id as number));
 
-  const send = (onResult: (ok: boolean) => void, timeoutMs: number = IMAGE_COPIED_TIMEOUT_MS): CopyQueueSend => {
-    const entry: Entry = { expired: false, onResult, settled: false, timer: undefined };
-    queue.push(entry);
-    entry.timer = timers.set(() => expire(), timeoutMs);
-    const expire = (): void => {
-      if (entry.settled) return;
-      entry.expired = true;
-      entry.settled = true;
-      timers.clear(entry.timer);
-      onResult(false);
-      // The entry stays: its late ack must still be consumed — and discarded — here.
-    };
-    return {
-      cancel: (ok: boolean): void => {
-        if (entry.settled) return;
-        entry.settled = true;
-        timers.clear(entry.timer);
-        const i = queue.indexOf(entry);
-        if (i !== -1) queue.splice(i, 1);
-        onResult(ok);
-      },
-      expire,
-    };
+  const pending = new Map<string, CopyRegistryEntry>();
+  let counter = 0;
+
+  /** Settle one id exactly once and remove it; a missing id is a no-op. */
+  const settle = (id: string, ok: boolean): void => {
+    const entry = pending.get(id);
+    if (!entry) return;
+    pending.delete(id);
+    clearTimer(entry.timer);
+    entry.onResult(ok);
   };
 
-  const ack = (ok: boolean): void => {
-    const head = queue[0];
-    if (!head) return; // a response with no pending send is ignored
-    queue.shift();
-    if (head.expired) return; // its send already reported the timeout's failure
-    timers.clear(head.timer);
-    head.settled = true;
-    head.onResult(ok);
+  const begin = (onResult: (ok: boolean) => void): { id: string; settle: (ok: boolean) => void } => {
+    counter += 1;
+    const id = `copy-${counter}`;
+    pending.set(id, { onResult, timer: setTimer(() => settle(id, false), timeoutMs) });
+    return { id, settle: (ok: boolean) => settle(id, ok) };
   };
 
-  const isPending = (): boolean => queue.some((entry) => !entry.expired);
+  const answer = (id: string | null, ok: boolean): void => {
+    if (typeof id !== "string" || id.length === 0) return; // null or a malformed id
+    settle(id, ok);
+  };
 
-  return { ack, isPending, send };
+  const isBusy = (): boolean => pending.size > 0;
+
+  return { answer, begin, isBusy };
 }
 
 /**

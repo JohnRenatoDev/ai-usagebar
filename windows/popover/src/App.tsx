@@ -5,7 +5,7 @@ import type { RowLists } from "@/components/dnd";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import type { Layout, Screen } from "@/lib/types";
 import { LanguageProvider } from "@/lib/i18n";
-import { cardImagePng, createCopyQueue, findCardElement, type CopyQueue } from "@/lib/cardImage";
+import { cardImagePng, createCopyRegistry, findCardElement, type CopyRegistry } from "@/lib/cardImage";
 import { m } from "@/paraglide/messages.js";
 import { cn } from "@/lib/utils";
 import { About } from "@/screens/About";
@@ -83,14 +83,14 @@ export default function App() {
   const [rowMenuOpen, setRowMenuOpen] = useState(false);
   const [resetArmed, setResetArmed] = useState(false);
   const [starError, setStarError] = useState("");
-  // The pending card image copies (a FIFO queue): the host answers through
-  // window.__AIUB_IMAGE_COPIED__ (or a timeout reads the silence as a failure) and the
-  // footer notice reports each send with its own result. The queue keeps each send's
-  // association with its ack, so a late answer to an expired send is discarded, never
-  // settled on the copy that started after it.
+  // The pending card image copies, keyed by the id sent with each command (contract v2):
+  // the host answers window.__AIUB_IMAGE_COPIED__(id, ok) for the id it received, so the
+  // association lives in the id, not in the order the IPCs arrived. A copy settles
+  // exactly once — success, failure, timeout or pre-send failure — and its id leaves the
+  // pending set, so a late answer for it is ignored.
   const [copyNotice, setCopyNotice] = useState<{ failed: boolean; text: string } | null>(null);
-  const copyQueueRef = useRef<CopyQueue | null>(null);
-  if (copyQueueRef.current === null) copyQueueRef.current = createCopyQueue();
+  const copyRegistryRef = useRef<CopyRegistry | null>(null);
+  if (copyRegistryRef.current === null) copyRegistryRef.current = createCopyRegistry();
   const copyNoticeTimerRef = useRef(0);
   const [popoverVisible, setPopoverVisible] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -254,9 +254,10 @@ export default function App() {
     // The tray host calls this for the native menu items that open a popover
     // screen (Customize / Settings / About / Check for Updates).
     window.__AIUB_MENU_ACTION__ = (action) => menuActionRef.current(String(action));
-    // The tray host's answer to the OLDEST pending copy-image command: the queue consumes
-    // it (an expired send's ack is discarded and a response with no pending send ignored).
-    window.__AIUB_IMAGE_COPIED__ = (ok) => copyQueueRef.current?.ack(Boolean(ok));
+    // The tray host's answer for one copy-image command: __AIUB_IMAGE_COPIED__(id, ok)
+    // with the id the host received (null when it had none to match). Only a still-pending
+    // id is applied; unknown, expired and null ids are ignored.
+    window.__AIUB_IMAGE_COPIED__ = (id, ok) => copyRegistryRef.current?.answer(id, ok === true);
     sendCommand("ready");
     return () => {
       delete window.__AIUB_APPLY__;
@@ -381,17 +382,20 @@ export default function App() {
     go("provider");
   }
 
-  // Copy one provider's card as an image: rasterize it in the page (self-contained, so the
-  // canvas stays untainted), hand the base64 to the host over IPC, and let the host write the
-  // clipboard natively. Any failure before the host is asked — the card gone, a raster
-  // error (a SecurityError among others) — lands in the failure notice, and the host never
+  // Copy one provider's card as an image: reserve the copy's id, rasterize the card in the
+  // page (self-contained, so the canvas stays untainted), hand the base64 and the id to
+  // the host over IPC, and let the host write the clipboard natively and answer for the id
+  // it received. The id keeps the association: a slow raster that outlives its timeout may
+  // dispatch after a newer copy, and a lost answer cannot settle another copy. Any failure
+  // before the host is asked (the card gone, a raster error — a SecurityError among
+  // others, the send itself throwing) settles the id with a failure, and the host never
   // hears a command that was not sent.
   function copyCardAsImage(cardId: string) {
-    const queue = copyQueueRef.current;
-    if (!queue || queue.isPending()) return; // the double-click lock holds only while a
-    // send is waiting and not expired: a copy after a timeout is allowed, and the queue
-    // discards the expired send's late ack.
-    const send = queue.send((ok) => showCopyNotice(ok));
+    const registry = copyRegistryRef.current;
+    // The double-click lock is held from the click until the copy settles (success,
+    // failure, timeout or pre-send failure): after a timeout, a new copy is allowed.
+    if (!registry || registry.isBusy()) return;
+    const copy = registry.begin((ok) => showCopyNotice(ok));
     void (async () => {
       try {
         // The id is never interpolated into a selector (it may carry a double quote);
@@ -399,11 +403,11 @@ export default function App() {
         const section = findCardElement(shellRef.current, cardId);
         if (!section) throw new Error("the card is not on screen");
         const png = await cardImagePng(section);
-        sendCommand("copy-image", { png });
+        sendCommand("copy-image", { png, id: copy.id });
       } catch {
-        // Anything before a dispatched IPC: no ack will ever come, so the entry leaves
-        // the queue (it must not become a tombstone) and the failure is reported now.
-        send.cancel(false);
+        // Settling with false removes the id from the pending set: nothing keeps waiting
+        // for an answer to a command the host never received.
+        copy.settle(false);
       }
     })();
   }
