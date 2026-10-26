@@ -1376,13 +1376,18 @@ assert.equal(quotaAlternate(null, 'left'), '');
   assert.deepEqual(groups[2].cards.map((card) => card.id), ['my-llm']);
 
   // ACT: the remembered account tab, then the fallbacks
-  // ASSERT: a remembered tab that is one of the provider's cards wins
-  assert.equal(activeAccountTab(groups[1].cards, { ...layout, accountTab: { anthropic: 'anthropic@work' } }, 'anthropic'), 'anthropic@work');
-  // ASSERT: with no value, or one that no card holds anymore, the first card is worth
+  // ASSERT: a remembered tab that is one of the provider's cards wins, over primary
+  assert.equal(activeAccountTab(groups[1].cards, { ...layout, accountTab: { anthropic: 'anthropic@work' } }, 'anthropic', 'anthropic'), 'anthropic@work');
+  // ASSERT: with no value, the payload's primary is worth when it is one of the group's cards
+  assert.equal(activeAccountTab(groups[1].cards, layout, 'anthropic', 'anthropic@work'), 'anthropic@work');
+  // ASSERT: a remembered tab no card holds yields to a valid primary
+  assert.equal(activeAccountTab(groups[1].cards, { ...layout, accountTab: { anthropic: 'anthropic@gone' } }, 'anthropic', 'anthropic@work'), 'anthropic@work');
+  // ASSERT: a primary of another provider (or none) doesn't count; the first card is worth
+  assert.equal(activeAccountTab(groups[1].cards, layout, 'anthropic', 'zai'), 'anthropic');
   assert.equal(activeAccountTab(groups[1].cards, layout, 'anthropic'), 'anthropic');
-  assert.equal(activeAccountTab(groups[1].cards, { ...layout, accountTab: { anthropic: 'anthropic@gone' } }, 'anthropic'), 'anthropic');
-  // ASSERT: a group of one always lands on its card
-  assert.equal(activeAccountTab(groups[0].cards, layout, 'zai'), 'zai');
+  assert.equal(activeAccountTab(groups[1].cards, { ...layout, accountTab: { anthropic: 'anthropic@gone' } }, 'anthropic', 'zai'), 'anthropic');
+  // ASSERT: a group of one always lands on its card, primary or not
+  assert.equal(activeAccountTab(groups[0].cards, layout, 'zai', 'anthropic'), 'zai');
 
   // ACT: the tab labels — "Claude · work" loses its prefix, "anthropic@home" uses its
   // suffix, and the plain account reads the catalog's word

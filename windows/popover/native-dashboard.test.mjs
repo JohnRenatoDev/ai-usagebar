@@ -250,13 +250,13 @@ try {
     ...card, id: 'anthropic@work', title: 'Claude · work',
     rows: [quotaRow('Session', 90), { ...card.rows[1] }],
   };
-  const multiAccount = (accountTab = {}) => renderToStaticMarkup(React.createElement(TooltipProvider, {},
+  const multiAccount = (accountTab = {}, primary = payload.primary) => renderToStaticMarkup(React.createElement(TooltipProvider, {},
     React.createElement(LanguageProvider, { language: 'en' },
       React.createElement(NativeDashboard, {
         cards: [card, workCard, { ...card, id: 'zai', title: 'Z.AI', rows: [quotaRow('Session', 10)] }],
         hint: false,
         layout: { ...emptyLayout(), popoverStyle: 'native', accountTab },
-        nowMs, payload,
+        nowMs, payload: { ...payload, primary },
         onCustomizeProvider() {}, onDismissHint() {}, onOpenCustomize() {}, onOpenSettings() {},
         onRowAction() {}, onRowMenuOpenChange() {}, onSelectAccount() {},
         onSwitchAccount() {}, onToggleCollapse() {}, onToggleShowAs() {},
@@ -273,13 +273,17 @@ try {
   // ASSERT: the tablist is plain — no dot or bullet standing in for a label.
   const tablist = tabs.slice(tabs.indexOf('role="tablist"'), tabs.indexOf('</div>', tabs.indexOf('role="tablist"')));
   assert.doesNotMatch(tablist, /aria-hidden|●|•/);
-  // ASSERT: with no remembered tab the first account's card is the one shown.
+  // ASSERT: with no remembered tab the payload's primary is worth when it is one of the group's cards.
   assert.match(tabs, /data-card-id="anthropic"/);
   assert.doesNotMatch(tabs, /data-card-id="anthropic@work"/);
-  // ASSERT: a remembered tab picks that account's card.
+  // ASSERT: a remembered tab picks that account's card, and wins over the primary.
   assert.match(multiAccount({ anthropic: 'anthropic@work' }), /data-card-id="anthropic@work"/);
-  // ASSERT: a remembered tab no account holds falls back to the first card.
+  assert.match(multiAccount({ anthropic: 'anthropic' }, 'anthropic@work'), /data-card-id="anthropic"/);
+  // ASSERT: with nothing remembered the primary's account is the one shown.
+  assert.match(multiAccount({}, 'anthropic@work'), /data-card-id="anthropic@work"/);
+  // ASSERT: a remembered tab no account holds falls back to the primary, else the first card.
   assert.doesNotMatch(multiAccount({ anthropic: 'anthropic@gone' }), /data-card-id="anthropic@work"/);
+  assert.match(multiAccount({ anthropic: 'anthropic@gone' }, 'anthropic@work'), /data-card-id="anthropic@work"/);
   // ASSERT: the single-account dashboard keeps no account tabs (the old screen).
   assert.doesNotMatch(nativeDashboard, /role="tablist"/);
   const settingsPayload = { ...emptyPayload(''), os: 'macos' };

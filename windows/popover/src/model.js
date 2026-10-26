@@ -1327,19 +1327,25 @@ export function expandGroupOrder(groups, groupIds) {
 
 /**
  * The account a provider's card shows: the remembered choice in
- * `layout.accountTab`, when it still names one of the provider's cards, else
- * the first card (a tab with no value, or one whose account is gone, never
+ * `layout.accountTab`, when it still names one of the provider's cards;
+ * else the payload's primary, when it is one of them (the host's main entry
+ * is the account the selection pointed at before tabs existed); else the
+ * first card (a tab with no value, or one whose account is gone, never
  * blanks the card).
  * @param {import("./lib/types").Card[]} cards the provider's cards, in dashboard order
  * @param {import("./lib/types").Layout} layout
  * @param {string} providerId
+ * @param {string} [primary] the payload's primary card id
  * @returns {string} the card id
  */
-export function activeAccountTab(cards, layout, providerId) {
+export function activeAccountTab(cards, layout, providerId, primary) {
   const ids = (Array.isArray(cards) ? cards : []).map((card) => String(card && card.id)).filter(Boolean);
   if (ids.length === 0) return "";
   const remembered = layout && layout.accountTab ? layout.accountTab[String(providerId)] : "";
-  return ids.indexOf(remembered) >= 0 ? remembered : ids[0];
+  if (ids.indexOf(remembered) >= 0) return remembered;
+  const fallback = String(primary || "");
+  if (fallback !== "" && ids.indexOf(fallback) >= 0) return fallback;
+  return ids[0];
 }
 
 /**

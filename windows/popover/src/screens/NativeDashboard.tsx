@@ -97,7 +97,7 @@ export function NativeDashboard({
   const nameOf = (group: { id: string; cards: Card[] }) =>
     payload.providers?.find((provider) => provider.id === group.id)?.name ?? group.cards[0].title;
   const activeCardOf = (group: { id: string; cards: Card[] }) => {
-    const id = activeAccountTab(group.cards, layout, group.id);
+    const id = activeAccountTab(group.cards, layout, group.id, payload.primary);
     return group.cards.find((card) => card.id === id) ?? group.cards[0];
   };
   const selected = groups.find((group) => group.id === selectedId)
@@ -181,7 +181,13 @@ export function NativeDashboard({
               account={selectedAccount}
               card={selectedCard}
               group={selected.cards.length > 1
-                ? { name: nameOf(selected), cards: selected.cards.map((item) => ({ id: item.id, title: item.title })), activeId: selectedCard.id, onSelect: (cardId) => onSelectAccount(selected.id, cardId) }
+                ? { name: nameOf(selected), cards: selected.cards.map((item) => ({ id: item.id, title: item.title })), activeId: selectedCard.id, onSelect: (cardId) => {
+                  onSelectAccount(selected.id, cardId);
+                  // The tab switched is the selected provider's card: keep the menu-bar chip on the
+                  // new account with the same command the provider's click sends, so the layout,
+                  // the visible card and the chip move together.
+                  if (payload.os === "macos") sendCommand("select-provider", { id: cardId });
+                } }
                 : undefined}
               layout={layout}
               nowMs={nowMs}

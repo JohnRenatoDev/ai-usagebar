@@ -113,7 +113,7 @@ export function Dashboard({
   const nameOf = (group: { id: string; cards: Card[] }) =>
     payload.providers?.find((provider) => provider.id === group.id)?.name ?? group.cards[0].title;
   const activeCardOf = (group: { id: string; cards: Card[] }) => {
-    const id = activeAccountTab(group.cards, layout, group.id);
+    const id = activeAccountTab(group.cards, layout, group.id, payload.primary);
     return group.cards.find((card) => card.id === id) ?? group.cards[0];
   };
   return (
