@@ -2,6 +2,12 @@
 
 ### Fixed
 
+- **A provider's switch in the tray moves when it is clicked.** Turning a
+  provider on or off in Customize or Settings → Providers wrote
+  `config.toml` at once, but the switch stayed put until the next report —
+  every enabled provider fetched again — which took seconds. It moves now,
+  and a catalog read that started before the click can no longer put it
+  back.
 - **Cursor still reads the IDE session after 3.27.12's opaque token.** That
   release replaced the `cursorAuth/accessToken` JWT with an opaque `curs…`
   string, so the provider's claim decoding failed and reported "session token
