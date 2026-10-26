@@ -242,6 +242,46 @@ try {
   assert.match(withUpdate, />Update available</);
   assert.ok(withUpdate.indexOf('>Update available<') < withUpdate.indexOf('native-provider-tabs'));
   assert.doesNotMatch(nativeDashboard, /Atualização disponível/);
+
+  // A provider with several accounts is one tab (named after the provider) and its section
+  // gets the account tabs under the header — no dot, no bullet: the label is the tab. The
+  // card shows the selected account's metrics; with one account there are no tabs at all.
+  const workCard = {
+    ...card, id: 'anthropic@work', title: 'Claude · work',
+    rows: [quotaRow('Session', 90), { ...card.rows[1] }],
+  };
+  const multiAccount = (accountTab = {}) => renderToStaticMarkup(React.createElement(TooltipProvider, {},
+    React.createElement(LanguageProvider, { language: 'en' },
+      React.createElement(NativeDashboard, {
+        cards: [card, workCard, { ...card, id: 'zai', title: 'Z.AI', rows: [quotaRow('Session', 10)] }],
+        hint: false,
+        layout: { ...emptyLayout(), popoverStyle: 'native', accountTab },
+        nowMs, payload,
+        onCustomizeProvider() {}, onDismissHint() {}, onOpenCustomize() {}, onOpenSettings() {},
+        onRowAction() {}, onRowMenuOpenChange() {}, onSelectAccount() {},
+        onSwitchAccount() {}, onToggleCollapse() {}, onToggleShowAs() {},
+      }))));
+  const tabs = multiAccount();
+  // One provider tab per provider, not one per account: Claude and Z.AI.
+  assert.equal((tabs.match(/class="native-tab"/g) || []).length, 2);
+  // ASSERT: the section header names the provider, never the account's "Claude · work" title.
+  assert.doesNotMatch(tabs, /Claude · work/);
+  // ASSERT: the account tabs live under the header, labelled Default (no suffix) and work.
+  assert.match(tabs, /role="tablist" aria-label="Accounts"/);
+  assert.match(tabs, />Default</);
+  assert.match(tabs, />work</);
+  // ASSERT: the tablist is plain — no dot or bullet standing in for a label.
+  const tablist = tabs.slice(tabs.indexOf('role="tablist"'), tabs.indexOf('</div>', tabs.indexOf('role="tablist"')));
+  assert.doesNotMatch(tablist, /aria-hidden|●|•/);
+  // ASSERT: with no remembered tab the first account's card is the one shown.
+  assert.match(tabs, /data-card-id="anthropic"/);
+  assert.doesNotMatch(tabs, /data-card-id="anthropic@work"/);
+  // ASSERT: a remembered tab picks that account's card.
+  assert.match(multiAccount({ anthropic: 'anthropic@work' }), /data-card-id="anthropic@work"/);
+  // ASSERT: a remembered tab no account holds falls back to the first card.
+  assert.doesNotMatch(multiAccount({ anthropic: 'anthropic@gone' }), /data-card-id="anthropic@work"/);
+  // ASSERT: the single-account dashboard keeps no account tabs (the old screen).
+  assert.doesNotMatch(nativeDashboard, /role="tablist"/);
   const settingsPayload = { ...emptyPayload(''), os: 'macos' };
   const settingsProps = {
     cards: [card], layout: { ...emptyLayout(), popoverStyle: 'native' }, nowMs, payload: settingsPayload,

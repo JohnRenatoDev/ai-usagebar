@@ -34,6 +34,13 @@ import {
   providerListRows,
   providerOf,
   reorderProviderRows,
+  providerGroups,
+  expandGroupOrder,
+  activeAccountTab,
+  accountLabel,
+  metricsCountText,
+  multiAccountSubtitle,
+  addAccountDecision,
   seedLayout,
   hintPending,
   absorbPayload,
@@ -1344,6 +1351,80 @@ assert.equal(quotaAlternate(null, 'left'), '');
   // ASSERT: providerOf links an account card to its provider
   assert.equal(providerOf('anthropic@work'), 'anthropic');
   assert.equal(providerOf('anthropic'), 'anthropic');
+}
+
+// --- provider accounts: grouping, tabs, labels, and the "+" decision -------
+
+{
+  // ARRANGE: dashboard order with one provider's two accounts, a plain card, and a
+  // custom provider's card the catalog doesn't know
+  const cards = [
+    { id: 'zai', title: 'Z.AI', icon: 'zai', rows: [{ kind: 'metric' }] },
+    { id: 'anthropic', title: 'Claude', icon: 'anthropic', rows: [{ kind: 'metric' }, { kind: 'metric' }] },
+    { id: 'anthropic@work', title: 'Claude · work', icon: 'anthropic', rows: [{ kind: 'metric' }, { kind: 'metric' }, { kind: 'metric' }] },
+    { id: 'my-llm', title: 'My LLM', icon: 'ollama', rows: [{ kind: 'metric' }] },
+  ];
+  const layout = emptyLayout();
+
+  // ACT: group the dashboard's cards by provider
+  const groups = providerGroups(cards);
+
+  // ASSERT: groups follow the first-card order; several accounts land in one
+  // group; a catalog-less card is a group of one
+  assert.deepEqual(groups.map((group) => group.id), ['zai', 'anthropic', 'my-llm']);
+  assert.deepEqual(groups[1].cards.map((card) => card.id), ['anthropic', 'anthropic@work']);
+  assert.deepEqual(groups[2].cards.map((card) => card.id), ['my-llm']);
+
+  // ACT: the remembered account tab, then the fallbacks
+  // ASSERT: a remembered tab that is one of the provider's cards wins
+  assert.equal(activeAccountTab(groups[1].cards, { ...layout, accountTab: { anthropic: 'anthropic@work' } }, 'anthropic'), 'anthropic@work');
+  // ASSERT: with no value, or one that no card holds anymore, the first card is worth
+  assert.equal(activeAccountTab(groups[1].cards, layout, 'anthropic'), 'anthropic');
+  assert.equal(activeAccountTab(groups[1].cards, { ...layout, accountTab: { anthropic: 'anthropic@gone' } }, 'anthropic'), 'anthropic');
+  // ASSERT: a group of one always lands on its card
+  assert.equal(activeAccountTab(groups[0].cards, layout, 'zai'), 'zai');
+
+  // ACT: the tab labels — "Claude · work" loses its prefix, "anthropic@home" uses its
+  // suffix, and the plain account reads the catalog's word
+  // ASSERT
+  assert.equal(accountLabel({ id: 'anthropic@work', title: 'Claude · work' }, 'Claude'), 'work');
+  assert.equal(accountLabel({ id: 'anthropic@home', title: 'Claude' }, 'Claude'), 'home');
+  assert.equal(accountLabel({ id: 'anthropic', title: 'Claude' }, 'Claude'), 'Default');
+  assert.equal(accountLabel({ id: 'anthropic', title: 'Claude' }, 'Claude', 'pt-BR'), 'Padrão');
+
+  // ACT: the multi-account subtitle joins the labels and the provider's total count
+  // ASSERT
+  const rowCards = [
+    { id: 'anthropic', title: 'Claude', metrics: 2 },
+    { id: 'anthropic@work', title: 'Claude · work', metrics: 3 },
+  ];
+  assert.equal(multiAccountSubtitle(rowCards, 5, 'Claude', 'en'), 'Default, work · 5 metrics');
+  assert.equal(metricsCountText(1, 'en'), '1 metric');
+  assert.equal(metricsCountText(5, 'en'), '5 metrics');
+  assert.equal(metricsCountText(5, 'pt-BR'), '5 métricas');
+
+  // ACT: the "+" decision — nothing when off or kindless, the kind's action when there
+  // is one, a menu when there are several
+  // ASSERT
+  assert.equal(addAccountDecision({ enabled: false, addAccounts: ['code'] }), null);
+  assert.equal(addAccountDecision({ enabled: true, addAccounts: [] }), null);
+  assert.deepEqual(addAccountDecision({ enabled: true, addAccounts: ['codex'] }), { kind: 'direct', value: 'codex' });
+  assert.deepEqual(addAccountDecision({ enabled: true, addAccounts: ['code', 'desktop'] }), { kind: 'menu', value: ['code', 'desktop'] });
+
+  // ACT: dragging the Claude group to the top expands it to its accounts in their own
+  // order; groups the drag order left out still keep their cards
+  // ASSERT
+  assert.deepEqual(expandGroupOrder(groups, ['anthropic', 'zai', 'my-llm']), ['anthropic', 'anthropic@work', 'zai', 'my-llm']);
+  assert.deepEqual(expandGroupOrder(groups, ['zai']), ['zai', 'anthropic', 'anthropic@work', 'my-llm']);
+
+  // ACT: the layout round-trip remembers the tab per provider
+  const storage = memoryStorage();
+  saveLayout(storage, { ...layout, accountTab: { anthropic: 'anthropic@work' } });
+  const loaded = loadLayout(storage);
+  assert.deepEqual(loaded.accountTab, { anthropic: 'anthropic@work' });
+  // ASSERT: syncLayout keeps it, and a fresh layout starts without tabs
+  assert.deepEqual(syncLayout(loaded, cards.map((card) => card.id)).accountTab, { anthropic: 'anthropic@work' });
+  assert.deepEqual(normalizeLayout({}).accountTab, {});
 }
 
 // --- grouped metrics (Antigravity Session / Weekly) and duplicate labels -----

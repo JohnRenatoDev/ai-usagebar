@@ -276,5 +276,8 @@
   "1_hour": "1 hora",
   "add_claude_code_account": "Añadir cuenta de Claude Code",
   "add_claude_desktop_account": "Añadir cuenta de Claude Desktop",
-  "add_codex_account": "Añadir cuenta de Codex"
+  "add_codex_account": "Añadir cuenta de Codex",
+  "add_account": "Añadir cuenta",
+  "default_account": "Predeterminada",
+  "accounts": "Cuentas"
 }

@@ -998,6 +998,7 @@ export function prettyMetricLabel(entryId, raw, group) {
 /** @returns {Layout} */
 export function emptyLayout() {
   return {
+    accountTab: {},
     alwaysShowPace: false,
     usageGoal: false,
     cardOrder: [],
@@ -1032,6 +1033,18 @@ function normalizeShowAs(value) {
 
 function normalizeTheme(value) {
   return value === "light" || value === "dark" ? value : "system";
+}
+
+/** The remembered account tab per provider (provider id → card id). */
+function normalizeAccountTab(raw) {
+  const tabs = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return tabs;
+  for (const id of Object.keys(raw)) {
+    const key = clean(id, 180).trim();
+    const value = clean(raw[id], 180).trim();
+    if (key && value) tabs[key] = value;
+  }
+  return tabs;
 }
 
 /** @returns {Record<string, string[]>} */
@@ -1187,6 +1200,7 @@ export function normalizeLayout(raw) {
   layout.stars = normalizeStars(raw.stars);
   layout.stripStyle = "bars";
   layout.theme = normalizeTheme(raw.theme);
+  layout.accountTab = normalizeAccountTab(raw.accountTab);
   if (raw.rows && typeof raw.rows === "object" && !Array.isArray(raw.rows)) {
     for (const id of Object.keys(raw.rows)) {
       const prefs = raw.rows[id];
@@ -1252,6 +1266,143 @@ export function providerOf(id) {
 }
 
 /**
+ * The dashboard's cards grouped by provider, in the order each provider's
+ * first card appears: a provider with several accounts becomes one group the
+ * dashboards render as one card with a tab per account, and a card whose
+ * provider is not in the catalog (a custom provider) is a group of one.
+ * @param {import("./lib/types").Card[]} cards the ordered visible list
+ * @returns {{ id: string, cards: import("./lib/types").Card[] }[]} one group per provider
+ */
+export function providerGroups(cards) {
+  const groups = [];
+  const byProvider = new Map();
+  for (const card of Array.isArray(cards) ? cards : []) {
+    if (!card || !card.id) continue;
+    const id = providerOf(card.id);
+    if (!byProvider.has(id)) {
+      const group = { id, cards: [] };
+      byProvider.set(id, group);
+      groups.push(group);
+    }
+    byProvider.get(id).cards.push(card);
+  }
+  return groups;
+}
+
+/**
+ * The card order to save after dragging a grouped dashboard: each group id
+ * in the new order expands to its own cards in their relative order, so the
+ * accounts of a provider stay together wherever it lands.
+ * @param {{ id: string, cards: import("./lib/types").Card[] }[]} groups
+ * @param {string[]} groupIds the groups' ids in the new order
+ * @returns {string[]} the card ids
+ */
+export function expandGroupOrder(groups, groupIds) {
+  const list = Array.isArray(groups) ? groups : [];
+  const byId = new Map(list.map((group) => [String(group && group.id), group]));
+  const ids = [];
+  const seen = new Set();
+  for (const id of Array.isArray(groupIds) ? groupIds : []) {
+    const group = byId.get(String(id));
+    if (!group) continue;
+    for (const card of group.cards) {
+      if (card && card.id && !seen.has(card.id)) {
+        seen.add(card.id);
+        ids.push(card.id);
+      }
+    }
+  }
+  // Groups the drag order left out keep their cards at the end, so a drop
+  // never loses an account from `cardOrder`.
+  for (const group of list) {
+    for (const card of group.cards) {
+      if (card && card.id && !seen.has(card.id)) {
+        seen.add(card.id);
+        ids.push(card.id);
+      }
+    }
+  }
+  return ids;
+}
+
+/**
+ * The account a provider's card shows: the remembered choice in
+ * `layout.accountTab`, when it still names one of the provider's cards, else
+ * the first card (a tab with no value, or one whose account is gone, never
+ * blanks the card).
+ * @param {import("./lib/types").Card[]} cards the provider's cards, in dashboard order
+ * @param {import("./lib/types").Layout} layout
+ * @param {string} providerId
+ * @returns {string} the card id
+ */
+export function activeAccountTab(cards, layout, providerId) {
+  const ids = (Array.isArray(cards) ? cards : []).map((card) => String(card && card.id)).filter(Boolean);
+  if (ids.length === 0) return "";
+  const remembered = layout && layout.accountTab ? layout.accountTab[String(providerId)] : "";
+  return ids.indexOf(remembered) >= 0 ? remembered : ids[0];
+}
+
+/**
+ * The account's tab label. A title of `"<providerName> · <label>"` loses its
+ * prefix ("Claude · work" → "work"); an id with an account suffix uses it
+ * ("openai@work" → "work"); the default account has no suffix, so it reads
+ * the catalog's word for that.
+ * @param {{ id: string, title: string }} card
+ * @param {string} providerName the provider's display name
+ * @param {string} [locale]
+ * @returns {string}
+ */
+export function accountLabel(card, providerName, locale) {
+  const name = String(providerName || "");
+  const title = String((card && card.title) || "");
+  const prefix = `${name} · `;
+  if (name && title.startsWith(prefix)) {
+    const rest = title.slice(prefix.length).trim();
+    if (rest) return rest;
+  }
+  const id = String((card && card.id) || "");
+  const at = id.indexOf("@");
+  const suffix = at >= 0 ? id.slice(at + 1).trim() : "";
+  return suffix || m.default_account({}, { locale: lang(locale) });
+}
+
+/** "1 metric" / "6 metrics", in the layout's language. */
+export function metricsCountText(count, locale) {
+  const total = Number(count) || 0;
+  return `${total} ${total === 1 ? m.metric_singular({}, { locale: lang(locale) }) : m.metric_plural({}, { locale: lang(locale) })}`;
+}
+
+/**
+ * The list row's subtitle for a provider with several accounts: the account
+ * labels joined by ", ", then the provider's total metric count
+ * ("Default, work · 6 metrics").
+ * @param {{ id: string, title: string }[]} cards the provider's accounts
+ * @param {number} total the provider's total metric count
+ * @param {string} providerName
+ * @param {string} [locale]
+ * @returns {string}
+ */
+export function multiAccountSubtitle(cards, total, providerName, locale) {
+  const list = Array.isArray(cards) ? cards : [];
+  const labels = list.map((card) => accountLabel(card, providerName, locale));
+  return `${labels.join(", ")} · ${metricsCountText(total, locale)}`;
+}
+
+/**
+ * What the list row's "+" does: nothing (the provider is off, or the
+ * catalog offers no account kinds), the one kind's `add-account` directly,
+ * or a menu with one item per kind.
+ * @param {{ enabled: boolean, addAccounts: string[] }} row
+ * @returns {null | { kind: "direct", value: string } | { kind: "menu", value: string[] }}
+ */
+export function addAccountDecision(row) {
+  const kinds = row && Array.isArray(row.addAccounts) ? row.addAccounts.map(String) : [];
+  if (!row || row.enabled !== true || kinds.length === 0) return null;
+  if (kinds.length === 1) return { kind: "direct", value: kinds[0] };
+  return { kind: "menu", value: kinds.slice() };
+}
+
+/**
  * Reconcile the stored layout with the ids a payload carries.
  *
  * Settings outlive a payload that lacks their id: a provider switched off, or
@@ -1313,6 +1464,7 @@ export function syncLayout(layout, cardIds) {
     stripStyle: "bars",
     theme: normalizeTheme(layout.theme),
     timeFormat: normalizeTimeFormat(layout.timeFormat),
+    accountTab: Object.assign({}, layout.accountTab || {}),
   };
 }
 
@@ -1447,6 +1599,7 @@ export function providerListRows(providers, cards, layout) {
     action: provider ? provider.action : "",
     addAccounts: provider ? provider.addAccounts : [],
     cards: list.map((card) => ({ id: card.id, title: card.title, metrics: metricCount(card) })),
+    metrics: list.reduce((total, card) => total + metricCount(card), 0),
   });
   const enabled = [];
   for (const [id, list] of grouped) {

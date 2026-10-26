@@ -12,6 +12,8 @@ export type PopoverStyle = "classic" | "native";
 export type MenuBarLook = "chart" | "logos" | "quattro";
 
 export interface Layout {
+  /** The account tab each provider's card shows (provider id → card id); the first card when absent. */
+  accountTab: Record<string, string>;
   alwaysShowPace: boolean;
   usageGoal: boolean;
   cardOrder: string[];
@@ -294,6 +296,8 @@ export interface ProviderListRow {
   addAccounts: Array<"code" | "codex" | "desktop">;
   /** The provider's cards in the dashboard's order; a custom row carries its one. */
   cards: Array<{ id: string; metrics: number; title: string }>;
+  /** The provider's total metric count across its accounts. */
+  metrics: number;
 }
 
 export interface Payload {

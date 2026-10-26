@@ -14,6 +14,7 @@ import MdiClockStart from "~icons/mdi/clock-start";
 import MdiCheck from "~icons/mdi/check";
 import { Chip } from "@/components/Chip";
 import { Hint } from "@/components/Hint";
+import { AccountTabs } from "@/components/AccountTabs";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { ResetPopover } from "@/components/ResetPopover";
 import { RowMenu, type RowAction } from "@/components/RowMenu";
@@ -73,6 +74,14 @@ interface ProviderSectionProps {
   account?: CardAccount | null;
   card: Card;
   handle?: SectionHandle;
+  /** The provider's accounts, when it has two or more: the header reads the provider's name
+   * and the account tabs sit between the header and the card. */
+  group?: {
+    name: string;
+    cards: Array<{ id: string; title: string }>;
+    activeId: string;
+    onSelect: (id: string) => void;
+  };
   layout: Layout;
   lifted?: boolean;
   nowMs: number;
@@ -96,6 +105,7 @@ export function ProviderSection({
   account,
   card,
   handle,
+  group,
   layout,
   lifted,
   nowMs,
@@ -107,6 +117,9 @@ export function ProviderSection({
   onToggleShowAs,
 }: ProviderSectionProps) {
   const { language } = useI18n();
+  // A provider with several accounts titles its card after itself; the single-account
+  // screen — including the per-account desktop title — reads the card's own title.
+  const grouped = group && group.cards.length > 1;
   const prefs = prefsForCard(card, layout);
   const expanded = layout.collapsed?.[card.id] !== true;
   const opts = { hideExtras: layout.hideExtras, prefs };
@@ -167,7 +180,13 @@ export function ProviderSection({
         nowMs={nowMs}
         onCustomize={onCustomize}
         onSwitchAccount={onSwitchAccount}
+        title={grouped ? group.name : undefined}
       />
+      {grouped ? (
+        <div className="px-[var(--card-pad)]">
+          <AccountTabs cards={group.cards} providerName={group.name} selected={group.activeId} onSelect={group.onSelect} />
+        </div>
+      ) : null}
       <div
         className={cn(
           "pt-[var(--card-gutter)]",
@@ -238,6 +257,8 @@ interface ProviderSectionHeaderProps {
   card: Card;
   handle?: SectionHandle;
   nowMs?: number;
+  /** The header's name; the card's own title when absent (a multi-account provider names itself). */
+  title?: string;
   onCustomize?: () => void;
   onSwitchAccount?: () => void;
 }
@@ -254,10 +275,12 @@ export function ProviderSectionHeader({
   card,
   handle,
   nowMs = 0,
+  title,
   onCustomize,
   onSwitchAccount,
 }: ProviderSectionHeaderProps) {
   const plan = displayPlan(card.title, card.plan);
+  const name = title || card.title;
   const { language } = useI18n();
   const age = card.stale && card.fetchedAt && nowMs > card.fetchedAt ? ` · ${formatAgo(nowMs - card.fetchedAt, language)}` : "";
   return (
@@ -266,9 +289,9 @@ export function ProviderSectionHeader({
       {...handle?.attributes}
       {...handle?.listeners}
     >
-      <ProviderIcon className="text-label-2" size="var(--sz-icon)" slug={card.icon} title={card.title} />
+      <ProviderIcon className="text-label-2" size="var(--sz-icon)" slug={card.icon} title={name} />
       <div className="flex min-w-0 items-baseline gap-[var(--gap-inline)]">
-        <TruncatedText className="min-w-0 text-[length:var(--sz-header)] font-semibold">{card.title}</TruncatedText>
+        <TruncatedText className="min-w-0 text-[length:var(--sz-header)] font-semibold">{name}</TruncatedText>
         {plan ? <span className="shrink-0 text-[length:var(--sz-badge)] text-label-2">{plan}</span> : null}
         {card.stale ? <span className="text-[length:var(--sz-badge)] text-label-3">{m.stale()}{age}</span> : null}
       </div>
@@ -283,9 +306,9 @@ export function ProviderSectionHeader({
       ) : null}
       <span className="min-w-[var(--gap-controls)] flex-1" />
       {account ? <DesktopPrepareControl account={account} card={card} nowMs={nowMs} /> : null}
-      {account ? <AccountControl account={account} title={card.title} onSwitch={onSwitchAccount} /> : null}
+      {account ? <AccountControl account={account} title={name} onSwitch={onSwitchAccount} /> : null}
       {onCustomize ? (
-        <HeaderAction icon={<MdiTune />} label={`${m.customize()} ${card.title}`} onClick={onCustomize} />
+        <HeaderAction icon={<MdiTune />} label={`${m.customize()} ${name}`} onClick={onCustomize} />
       ) : null}
     </header>
   );

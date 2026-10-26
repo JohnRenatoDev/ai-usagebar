@@ -2,14 +2,20 @@
 
 ### Changed
 
-- **The tray lists providers once.** Customize and Settings → Providers
-  showed the dashboard's cards (a switch that only hid a card) above an
-  All providers list (a switch that turned the provider off in
-  `config.toml`). They are one list now: each provider has one switch,
-  which turns it on or off in `config.toml`; providers that are on come
-  first, in the dashboard's order, and drag to reorder. A provider with
-  several accounts lists them under its row. Cards hidden with the old
-  switch show again; turn the provider off instead.
+- **The tray lists providers once, and accounts live in tabs.** Customize
+  and Settings → Providers showed the dashboard's cards (a switch that
+  only hid a card) above an All providers list (a switch that turned the
+  provider off in `config.toml`). They are one list now: each provider has
+  one switch, which turns it on or off in `config.toml`; providers that
+  are on come first, in the dashboard's order, and drag to reorder. Cards
+  hidden with the old switch show again; turn the provider off instead.
+  The accounts of a provider no longer list under the row: every row is
+  uniform — name, a subtitle ("Default, work · 6 metrics" with several
+  accounts), a discreet "+" that adds an account, the switch, the
+  chevron — and the dashboard groups a provider's accounts into one card,
+  its tabs under the header (the native style's provider tabs are per
+  provider too), with the choice remembered per provider; the provider
+  detail carries the same selector at the top.
 
 ### Fixed
 
