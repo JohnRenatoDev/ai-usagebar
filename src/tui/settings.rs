@@ -2519,6 +2519,47 @@ api_key_env = "OPENROUTER_WORK_API_KEY"
     }
 
     #[test]
+    fn save_updates_a_key_and_enables_a_toml_inline_table() {
+        let (_dir, path) = temp_config(Some(
+            "zai = { enabled = false, api_key = \"old-secret\", plan_tier = \"pro\" } # keep me\n\
+             [ui]\nprimary = \"anthropic\"\n",
+        ));
+        let cfg = Config::load_from(&path).unwrap();
+        let mut state = SettingsState::from_config_with(&cfg, |_| false);
+        let input = &mut state.keys[key_index(VendorId::Zai)];
+        input.buf = "new-secret".into();
+        input.dirty = true;
+
+        save_to_path(&state, &path).unwrap();
+
+        let reloaded = Config::load_from(&path).unwrap();
+        assert_eq!(reloaded.zai.api_key.as_deref(), Some("new-secret"));
+        assert!(reloaded.zai.enabled);
+        assert_eq!(reloaded.zai.plan_tier.as_deref(), Some("pro"));
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("old-secret"));
+        assert!(raw.contains("new-secret"));
+        assert!(raw.contains("zai = {"));
+        assert!(raw.contains("# keep me"));
+    }
+
+    #[test]
+    fn enable_vendor_at_enables_a_toml_inline_table() {
+        let (_dir, path) = temp_config(Some(
+            "zai = { enabled = false, plan_tier = \"pro\" } # keep me\n\
+             [ui]\nprimary = \"anthropic\"\n",
+        ));
+        enable_vendor_at(&path, VendorId::Zai).unwrap();
+
+        let reloaded = Config::load_from(&path).unwrap();
+        assert!(reloaded.zai.enabled);
+        assert_eq!(reloaded.zai.plan_tier.as_deref(), Some("pro"));
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("zai = {"));
+        assert!(raw.contains("# keep me"));
+    }
+
+    #[test]
     fn untouched_key_field_is_left_alone() {
         // Not dirty => the file's existing secret must survive a save.
         let (_dir, path) = temp_config(Some("[zai]\napi_key = \"keep-me\"\n"));

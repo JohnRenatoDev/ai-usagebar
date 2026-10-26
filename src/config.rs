@@ -6533,6 +6533,14 @@ enabled = true
     }
 
     #[test]
+    fn set_value_updates_fields_in_a_toml_inline_table() {
+        let mut doc: toml_edit::DocumentMut =
+            "tray = { shortcut = \"Ctrl+U\" } # mine\n".parse().unwrap();
+        set_value(&mut doc, "tray", "shortcut", Some("Alt+U".into())).unwrap();
+        assert_eq!(doc.to_string(), "tray = { shortcut = \"Alt+U\" } # mine\n");
+    }
+
+    #[test]
     fn enable_vendors_in_creates_a_missing_config() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("sub").join("config.toml");
@@ -6634,6 +6642,20 @@ api_key = \"k\"
 
         assert_eq!(written, vec![VendorId::Grok]);
         assert!(Config::load_from(&path).unwrap().is_enabled(VendorId::Grok));
+    }
+
+    #[test]
+    fn enable_vendors_in_enables_a_toml_inline_table() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "grok = { api_key = \"k\" }\n").unwrap();
+
+        let written = enable_vendors_in(&path, &[VendorId::Grok]).unwrap();
+
+        assert_eq!(written, vec![VendorId::Grok]);
+        assert!(Config::load_from(&path).unwrap().is_enabled(VendorId::Grok));
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("grok = {"));
     }
 
     #[test]
