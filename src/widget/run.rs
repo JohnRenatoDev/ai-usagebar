@@ -1400,6 +1400,8 @@ mod tests {
                 scoped: vec![],
                 extra: None,
                 reset_credits: Default::default(),
+                cloud_credits: None,
+                usage_credits: None,
             },
             stale: false,
             last_error: None,

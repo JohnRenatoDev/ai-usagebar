@@ -86,6 +86,45 @@ pub struct AnthropicSnapshot {
     /// Codex's rate-limit reset credits and SuperGrok's remaining resets.
     /// Empty when the account has no grant or the endpoint withheld the block.
     pub reset_credits: ResetCredits,
+    /// Claude Code's cloud session credits, from the `iguana_necktie` block:
+    /// the dollar limit its cloud sessions draw from, what is left, when it
+    /// expires, and whether the grant is locked. `None` unless the response
+    /// reports a usable limit.
+    pub cloud_credits: Option<CloudCredits>,
+    /// The prepaid usage-credit balance, from `spend.balance`. `None` unless
+    /// the response reports a balance we can express — a balance the
+    /// response does not report is never shown, never as $0.
+    pub usage_credits: Option<UsageCredits>,
+}
+
+/// Cloud session credits (the usage response's `iguana_necktie` block).
+/// Both amounts are whole cents in USD — the wire is dollars, converted at
+/// the parse boundary so the snapshot, which derives `Eq`, stays integer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloudCredits {
+    pub limit: Cents,
+    pub remaining: Cents,
+    /// `resets_at` as RFC 3339. `None` when the wire omitted it or it does
+    /// not parse.
+    pub expires_at: Option<DateTime<Utc>>,
+    /// `locked_reason` was a non-empty string: the grant exists but cannot
+    /// currently be drawn on.
+    pub locked: bool,
+}
+
+/// The prepaid usage-credit balance (the usage response's `spend.balance`).
+/// The filled-in shape of `balance` has never been observed on the wire, so
+/// the parse interprets it after the fact and only then lifts it here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageCredits {
+    /// Balance in minor units of `currency`, at the scale of
+    /// `decimal_places`.
+    pub balance: Cents,
+    pub decimal_places: u32,
+    pub currency: Option<String>,
+    /// Whether the balance auto-reloads, when the response says so —
+    /// `None` means "not reported", not "off".
+    pub auto_reload: Option<bool>,
 }
 
 /// A usage window scoped to a specific model, labeled by the API
@@ -1273,6 +1312,8 @@ mod tests {
                 status: ExtraUsageStatus::Active,
             }),
             reset_credits: Default::default(),
+            cloud_credits: None,
+            usage_credits: None,
         }
     }
 

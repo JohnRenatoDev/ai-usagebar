@@ -542,6 +542,61 @@ fn render_default_tooltip(input: &RenderInput) -> String {
         }
     }
 
+    if let Some(cloud) = snap.cloud_credits.as_ref() {
+        // The same figures as the panel's "Cloud session credits" metric,
+        // in the tooltip's one-line style: what is left of what, when it
+        // expires, and whether the grant is locked. Everything here came
+        // off the wire (or is a constant), and the whole line still goes
+        // through `escape` at the sink.
+        let mut detail = format!(
+            "{} left of {}",
+            crate::format::usd(cloud.remaining.0 as f64 / 100.0),
+            crate::format::usd(cloud.limit.0 as f64 / 100.0)
+        );
+        if let Some(when) = cloud.expires_at {
+            detail.push_str(" · expires ");
+            detail.push_str(&crate::format::local_date_hm(when));
+        }
+        if cloud.locked {
+            detail.push_str(" · locked");
+        }
+        lines.push(Line::Body("".into()));
+        lines.push(Line::Sep);
+        lines.push(Line::Body(format!(
+            " <span foreground='{fg}'>  󰀓  Cloud session credits</span>"
+        )));
+        lines.push(Line::Body(format!(
+            " <span foreground='{dim}'>  {detail}</span>",
+            detail = escape(&detail)
+        )));
+    }
+
+    if let Some(usage) = snap.usage_credits.as_ref() {
+        lines.push(Line::Body("".into()));
+        lines.push(Line::Sep);
+        lines.push(Line::Body(format!(
+            " <span foreground='{fg}'>  󰀓  Usage credits</span>"
+        )));
+        // The currency code is response text, so the line is escaped at the
+        // sink like every other line here.
+        lines.push(Line::Body(format!(
+            " <span foreground='{dim}'>  balance: {balance}</span>",
+            balance = escape(&crate::usage::fmt_minor(
+                usage.balance.0,
+                usage.decimal_places,
+                usage.currency.as_deref(),
+            ))
+        )));
+        // `None` means "not reported": the row is absent, never an invented
+        // "off".
+        if let Some(auto_reload) = usage.auto_reload {
+            lines.push(Line::Body(format!(
+                " <span foreground='{dim}'>  auto-reload: {state}</span>",
+                state = if auto_reload { "on" } else { "off" }
+            )));
+        }
+    }
+
     if snap.reset_credits.available > 0 {
         lines.push(Line::Body("".into()));
         lines.push(Line::Sep);
@@ -627,7 +682,9 @@ fn wrap_words(s: &str, width: usize) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::anthropic::fetch::FetchOutcome;
-    use crate::usage::{AnthropicSnapshot, Cents, ExtraUsage, UsageWindow};
+    use crate::usage::{
+        AnthropicSnapshot, Cents, CloudCredits, ExtraUsage, UsageCredits, UsageWindow,
+    };
     use chrono::TimeZone;
 
     fn now() -> DateTime<Utc> {
@@ -664,6 +721,8 @@ mod tests {
                 status: crate::usage::ExtraUsageStatus::Active,
             }),
             reset_credits: Default::default(),
+            cloud_credits: None,
+            usage_credits: None,
         };
         FetchOutcome {
             snapshot: snap,
@@ -860,6 +919,85 @@ mod tests {
         assert!(out.text.contains(escaped), "{}", out.text);
         assert!(!out.text.contains("<5x>"), "{}", out.text);
         assert_eq!(out.tooltip, escaped);
+    }
+
+    #[test]
+    fn tooltip_lists_cloud_session_and_usage_credits() {
+        let mut oc = sample_outcome();
+        oc.snapshot.cloud_credits = Some(CloudCredits {
+            limit: Cents(25000),
+            remaining: Cents(25000),
+            expires_at: Some(now() + chrono::Duration::days(10)),
+            locked: false,
+        });
+        oc.snapshot.usage_credits = Some(UsageCredits {
+            balance: Cents(1500),
+            decimal_places: 2,
+            currency: Some("USD".into()),
+            auto_reload: Some(true),
+        });
+        let theme = Theme::default();
+        let out = render_anthropic(&input(&oc, &theme));
+        let t = &out.tooltip;
+        assert!(t.contains("Cloud session credits"), "{}", t);
+        assert!(
+            t.contains("$250.00 left of $250.00 · expires "),
+            "cloud line: {}",
+            t
+        );
+        assert!(t.contains("Usage credits"), "{}", t);
+        assert!(t.contains("balance: $15.00"), "{}", t);
+        assert!(t.contains("auto-reload: on"), "{}", t);
+        // The blocks sit after the Extra usage section and before the
+        // footer — the tooltip lists them under the account, in order.
+        let extra_at = t.find("Extra usage").unwrap();
+        let cloud_at = t.find("Cloud session credits").unwrap();
+        let usage_at = t.find("Usage credits").unwrap();
+        let updated_at = t.find("Updated").unwrap();
+        assert!(
+            extra_at < cloud_at && cloud_at < usage_at && usage_at < updated_at,
+            "{}",
+            t
+        );
+
+        // And a balance the response does not report stays out of the
+        // tooltip: no row, never a $0.00.
+        let quiet = sample_outcome();
+        let out = render_anthropic(&input(&quiet, &theme));
+        assert!(
+            !out.tooltip.contains("Cloud session credits"),
+            "{}",
+            out.tooltip
+        );
+        assert!(!out.tooltip.contains("Usage credits"), "{}", out.tooltip);
+        assert!(!out.tooltip.contains("balance: $0.00"), "{}", out.tooltip);
+    }
+
+    #[test]
+    fn tooltip_lock_line_escapes_a_hostile_locked_reason() {
+        // The `locked_reason` text is untrusted: it never leaves the parser
+        // as text — only the boolean lock does — so the tooltip shows the
+        // lock and not a single raw `<` from the reason.
+        let raw = r#"{
+            "five_hour": {"utilization": 12},
+            "seven_day": {"utilization": 34},
+            "iguana_necktie": {"resets_at": "2026-11-05T07:59:00Z",
+                               "limit_dollars": 250, "remaining_dollars": 250,
+                               "locked_reason": "<b>org_migrating</b>"}
+        }"#;
+        let resp: crate::anthropic::types::UsageResponse = serde_json::from_str(raw).unwrap();
+        let mut oc = sample_outcome();
+        oc.snapshot = resp.into_snapshot("Max 5x".into());
+        let theme = Theme::default();
+        let out = render_anthropic(&input(&oc, &theme));
+        assert!(
+            out.tooltip.contains("Cloud session credits"),
+            "{}",
+            out.tooltip
+        );
+        assert!(out.tooltip.contains("locked"), "{}", out.tooltip);
+        assert!(!out.tooltip.contains("<b>"), "{}", out.tooltip);
+        assert!(!out.tooltip.contains("org_migrating"), "{}", out.tooltip);
     }
 
     #[test]

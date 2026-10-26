@@ -926,6 +926,60 @@ fn anthropic_sections(
             None,
         );
     }
+    if let Some(c) = &s.cloud_credits {
+        v.push(Section::Spacer);
+        // The meter shows the used share, (limit − remaining) / limit. The
+        // parse gate guarantees a finite limit > 0, so there is no
+        // denominator to guard; `clamp_pct` rounds and holds the result to
+        // 0..=100.
+        let pct = clamp_pct((c.limit.0 - c.remaining.0) as f64 * 100.0 / c.limit.0 as f64);
+        let value_label = format!(
+            "{} left of {}",
+            usd(c.remaining.0 as f64 / 100.0),
+            usd(c.limit.0 as f64 / 100.0)
+        );
+        // The second argument of push_metric stays None: this is an expiry,
+        // not a reset instant the account can bank.
+        let footnote = [
+            c.expires_at
+                .map(|when| format!("expires {}", crate::format::local_date_hm(when))),
+            c.locked.then(|| "locked".to_string()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
+        v.push_metric(
+            Section::Metric {
+                label: "Cloud session credits".into(),
+                pct,
+                severity: severity_for(pct as i32),
+                value_label,
+                footnote,
+            },
+            None,
+        );
+    }
+    if let Some(u) = &s.usage_credits {
+        v.push(Section::Spacer);
+        let mut body = vec![format!(
+            "balance: {}",
+            crate::usage::fmt_minor(u.balance.0, u.decimal_places, u.currency.as_deref())
+        )];
+        // `None` means "not reported": the row is absent, never an invented
+        // "off".
+        if let Some(auto_reload) = u.auto_reload {
+            body.push(if auto_reload {
+                "auto-reload: on".into()
+            } else {
+                "auto-reload: off".into()
+            });
+        }
+        v.push(Section::Block {
+            label: "Usage credits".into(),
+            body,
+        });
+    }
     push_reset_credits(&mut v, &s.reset_credits, now);
     v
 }
@@ -2678,8 +2732,9 @@ fn render_block(f: &mut Frame, area: Rect, bubble: &BubbleTheme, label: &str, bo
 mod tests {
     use super::*;
     use crate::usage::{
-        AnthropicSnapshot, Cents, ExtraUsage, KimiSnapshot, OpenAiCredits, OpenAiSnapshot,
-        OpenAiSource, OpenRouterSnapshot, ResetCredit, ResetCredits, UsageWindow, ZaiSnapshot,
+        AnthropicSnapshot, Cents, CloudCredits, ExtraUsage, KimiSnapshot, OpenAiCredits,
+        OpenAiSnapshot, OpenAiSource, OpenRouterSnapshot, ResetCredit, ResetCredits, UsageCredits,
+        UsageWindow, ZaiSnapshot,
     };
     use chrono::TimeZone;
 
@@ -3059,6 +3114,8 @@ mod tests {
                 status: crate::usage::ExtraUsageStatus::Active,
             }),
             reset_credits: Default::default(),
+            cloud_credits: None,
+            usage_credits: None,
         };
         let sections = sections_for(&ready(VendorSnapshot::Anthropic(snap)), now(), 5);
         // Title (carries "Updated …" inline now) + 4 metrics (3 windows +
@@ -3104,6 +3161,8 @@ mod tests {
                 status: crate::usage::ExtraUsageStatus::OutOfCredits,
             }),
             reset_credits: Default::default(),
+            cloud_credits: None,
+            usage_credits: None,
         };
         let sections = sections_for(&ready(VendorSnapshot::Anthropic(snap)), now(), 5);
         let extra = sections
@@ -3148,6 +3207,8 @@ mod tests {
             scoped: vec![],
             extra: None,
             reset_credits: Default::default(),
+            cloud_credits: None,
+            usage_credits: None,
         };
         let sections = sections_for(&ready(VendorSnapshot::Anthropic(snap)), now(), 5);
         let metric_count = sections
@@ -3155,6 +3216,250 @@ mod tests {
             .filter(|s| matches!(s, Section::Metric { .. }))
             .count();
         assert_eq!(metric_count, 2);
+    }
+
+    fn claude_snapshot_with_credits(
+        cloud: Option<CloudCredits>,
+        usage: Option<UsageCredits>,
+    ) -> VendorSnapshot {
+        VendorSnapshot::Anthropic(AnthropicSnapshot {
+            plan: "Max 5x".into(),
+            session: UsageWindow {
+                utilization_pct: 12,
+                resets_at: Some(now() + chrono::Duration::hours(2)),
+                window_duration: chrono::Duration::hours(5),
+            },
+            weekly: UsageWindow {
+                utilization_pct: 34,
+                resets_at: None,
+                window_duration: chrono::Duration::days(7),
+            },
+            sonnet: None,
+            scoped: vec![],
+            extra: None,
+            reset_credits: Default::default(),
+            cloud_credits: cloud,
+            usage_credits: usage,
+        })
+    }
+
+    #[test]
+    fn anthropic_cloud_session_credits_render_as_a_metric() {
+        // The real 2026-10-26 payload shape: $250 of $250 left — 0% used,
+        // with the exact value label and footnote the report carries.
+        let snap = claude_snapshot_with_credits(
+            Some(CloudCredits {
+                limit: Cents(25000),
+                remaining: Cents(25000),
+                expires_at: Some("2026-11-05T07:59:00Z".parse().unwrap()),
+                locked: false,
+            }),
+            None,
+        );
+        let sections = sections_for(&ready(snap), now(), 5);
+        let metric = sections
+            .iter()
+            .find_map(|s| match s {
+                Section::Metric {
+                    label,
+                    pct,
+                    severity,
+                    value_label,
+                    footnote,
+                    ..
+                } if label == "Cloud session credits" => {
+                    Some((*pct, *severity, value_label.clone(), footnote.clone()))
+                }
+                _ => None,
+            })
+            .expect("a cloud session credits metric under the Claude account");
+        assert_eq!(metric.0, 0);
+        assert_eq!(metric.1, severity_for(0));
+        assert_eq!(metric.2, "$250.00 left of $250.00");
+        // The footnote carries the expiry and nothing else. The exact date
+        // is local-timezone output, so the shape is pinned, not the zone.
+        assert!(metric.3.starts_with("expires "), "{:?}", metric.3);
+        assert!(!metric.3.contains("locked"), "{:?}", metric.3);
+    }
+
+    #[test]
+    fn anthropic_cloud_credits_meter_the_used_share() {
+        // 100 of 250 spent: the meter shows the used share, 40%.
+        let snap = claude_snapshot_with_credits(
+            Some(CloudCredits {
+                limit: Cents(25000),
+                remaining: Cents(15000),
+                expires_at: None,
+                locked: false,
+            }),
+            None,
+        );
+        let sections = sections_for(&ready(snap), now(), 5);
+        let metric = sections
+            .iter()
+            .find_map(|s| match s {
+                Section::Metric {
+                    label,
+                    pct,
+                    severity,
+                    value_label,
+                    ..
+                } if label == "Cloud session credits" => {
+                    Some((*pct, *severity, value_label.clone()))
+                }
+                _ => None,
+            })
+            .expect("a cloud session credits metric");
+        assert_eq!(metric.0, 40);
+        assert_eq!(metric.1, severity_for(40));
+        assert_eq!(metric.2, "$150.00 left of $250.00");
+    }
+
+    #[test]
+    fn anthropic_locked_cloud_credits_without_an_expiry_says_locked() {
+        // No expires_at → the lock stands alone, with no leading separator.
+        let snap = claude_snapshot_with_credits(
+            Some(CloudCredits {
+                limit: Cents(25000),
+                remaining: Cents(25000),
+                expires_at: None,
+                locked: true,
+            }),
+            None,
+        );
+        let sections = sections_for(&ready(snap), now(), 5);
+        let footnote = sections
+            .iter()
+            .find_map(|s| match s {
+                Section::Metric {
+                    label, footnote, ..
+                } if label == "Cloud session credits" => Some(footnote.clone()),
+                _ => None,
+            })
+            .expect("a cloud session credits metric");
+        assert_eq!(footnote, "locked");
+    }
+
+    #[test]
+    fn anthropic_cloud_and_usage_credits_sit_between_extra_usage_and_resets() {
+        let credits = ResetCredits {
+            available: 1,
+            credits: vec![ResetCredit {
+                title: Some("Opus launch reset".into()),
+                expires_at: Some(now() + chrono::Duration::days(20)),
+            }],
+        };
+        let mut snap = claude_snapshot_with_credits(
+            Some(CloudCredits {
+                limit: Cents(25000),
+                remaining: Cents(25000),
+                expires_at: Some(now() + chrono::Duration::days(10)),
+                locked: false,
+            }),
+            Some(UsageCredits {
+                balance: Cents(1500),
+                decimal_places: 2,
+                currency: Some("USD".into()),
+                auto_reload: Some(true),
+            }),
+        );
+        if let VendorSnapshot::Anthropic(a) = &mut snap {
+            a.extra = Some(ExtraUsage {
+                limit: Some(Cents(5000)),
+                spent: Cents(250),
+                currency: None,
+                decimal_places: Some(2),
+                status: crate::usage::ExtraUsageStatus::Active,
+            });
+            a.reset_credits = credits;
+        }
+        let sections = sections_for(&ready(snap), now(), 5);
+        let index_of = |probe: &str| {
+            sections
+                .iter()
+                .position(|s| {
+                    matches!(
+                        s,
+                        Section::Metric { label, .. }
+                            | Section::Block { label, .. } if label == probe
+                    )
+                })
+                .unwrap_or_else(|| panic!("missing section {probe}"))
+        };
+        let extra = index_of("Extra usage");
+        let cloud = index_of("Cloud session credits");
+        let usage = index_of("Usage credits");
+        let resets = index_of("Reset credits");
+        assert!(
+            extra < cloud && cloud < usage && usage < resets,
+            "order must be Extra usage < Cloud < Usage credits < Reset credits: {extra} < {cloud} < {usage} < {resets}"
+        );
+    }
+
+    #[test]
+    fn anthropic_usage_credits_render_as_a_block_with_the_balance_and_flag() {
+        for (auto_reload, expected) in [
+            (Some(true), vec!["balance: $15.00", "auto-reload: on"]),
+            (Some(false), vec!["balance: $15.00", "auto-reload: off"]),
+            (None, vec!["balance: $15.00"]),
+        ] {
+            let snap = claude_snapshot_with_credits(
+                None,
+                Some(UsageCredits {
+                    balance: Cents(1500),
+                    decimal_places: 2,
+                    currency: Some("USD".into()),
+                    auto_reload,
+                }),
+            );
+            let sections = sections_for(&ready(snap), now(), 5);
+            let body = sections
+                .iter()
+                .find_map(|s| match s {
+                    Section::Block { label, body } if label == "Usage credits" => {
+                        Some(body.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("usage credits block, auto_reload {auto_reload:?}"));
+            assert_eq!(body, expected, "auto_reload {auto_reload:?}");
+        }
+
+        // A reported zero balance renders at the currency's own scale —
+        // not as a $0.00 claim for a zero-exponent currency.
+        let snap = claude_snapshot_with_credits(
+            None,
+            Some(UsageCredits {
+                balance: Cents(0),
+                decimal_places: 0,
+                currency: Some("KRW".into()),
+                auto_reload: None,
+            }),
+        );
+        let sections = sections_for(&ready(snap), now(), 5);
+        let body = sections
+            .iter()
+            .find_map(|s| match s {
+                Section::Block { label, body } if label == "Usage credits" => Some(body.clone()),
+                _ => None,
+            })
+            .expect("a reported balance renders even at zero");
+        assert_eq!(body, vec!["balance: 0 KRW"]);
+    }
+
+    #[test]
+    fn anthropic_omits_credit_sections_when_the_response_brought_none() {
+        let snap = claude_snapshot_with_credits(None, None);
+        let sections = sections_for(&ready(snap), now(), 5);
+        assert!(!sections.iter().any(|s| matches!(
+            s,
+            Section::Metric { label, .. }
+                if label == "Cloud session credits"
+        )));
+        assert!(!sections.iter().any(|s| matches!(
+            s,
+            Section::Block { label, .. } if label == "Usage credits"
+        )));
     }
 
     #[test]
@@ -3530,6 +3835,8 @@ mod tests {
             scoped: Vec::new(),
             extra: None,
             reset_credits: credits,
+            cloud_credits: None,
+            usage_credits: None,
         };
 
         for snapshot in [

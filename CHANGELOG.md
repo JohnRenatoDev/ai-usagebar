@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+### Added
+
+- **Claude shows its cloud session credits and usage-credit balance.**
+  The usage response carries the credit Claude Code's cloud sessions draw
+  from and, when usage credits hold a prepaid balance, that balance and
+  whether auto-reload is on. The tray, the TUI, `usage --json` and the
+  Waybar tooltip now list them under the account, e.g. `Cloud session
+  credits — $250.00 left of $250.00, expires Nov 5`. A balance the
+  response does not report is not shown, never as `$0`.
+
 ### Fixed
 
 - **Cursor still reads the IDE session after 3.27.12's opaque token.** That
