@@ -113,19 +113,44 @@ pub fn build_placeholders(
 }
 
 /// The Credits block's balance line, shared by the Waybar tooltip and the
-/// TUI: `unlimited` stands alone, a numeric balance is a count of Codex
-/// credits so it reads `62500 credits`, and a non-numeric string is shown
-/// as the vendor sent it, without a unit it does not have. The deserializer
-/// (`types.rs`) normalizes every numeric input to a bare count, so this one
-/// place decides "is it a count?" and the two renderers cannot disagree.
+/// TUI. The block is already labelled Credits, so the line is the figure
+/// alone: `unlimited`, a count of Codex credits with its thousands grouped
+/// (`62,500`), or a non-numeric string as the vendor sent it. The
+/// deserializer (`types.rs`) normalizes every numeric input to a bare count,
+/// so this one place decides "is it a count?" and the two renderers cannot
+/// disagree.
 pub(crate) fn credit_balance_label(c: &crate::usage::OpenAiCredits) -> String {
     if c.unlimited {
         return "unlimited".into();
     }
     if credit_balance_is_count(&c.balance) {
-        return format!("{} credits", c.balance);
+        return group_thousands(c.balance.trim());
     }
     c.balance.clone()
+}
+
+/// `62500` → `62,500`, `-1234.5` → `-1,234.5`: commas between the integer
+/// part's groups of three, the sign and the fraction left as they were.
+fn group_thousands(count: &str) -> String {
+    let (sign, unsigned) = match count.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", count),
+    };
+    let (int, frac) = match unsigned.split_once('.') {
+        Some((int, frac)) => (int, Some(frac)),
+        None => (unsigned, None),
+    };
+    let mut grouped = String::with_capacity(int.len() + int.len() / 3);
+    for (i, digit) in int.chars().enumerate() {
+        if i > 0 && (int.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    match frac {
+        Some(frac) => format!("{sign}{grouped}.{frac}"),
+        None => format!("{sign}{grouped}"),
+    }
 }
 
 /// Whether a stored balance is a count of credits. The deserializer turns
@@ -321,7 +346,7 @@ fn render_tooltip(
             " <span foreground='{fg}'>  󰄑  Credits</span>"
         )));
         lines.push(TooltipLine::Body(format!(
-            " <span foreground='{dim}'>     balance: {b}</span>",
+            " <span foreground='{dim}'>     {b}</span>",
             b = escape(&label)
         )));
     }
@@ -514,6 +539,21 @@ mod tests {
     }
 
     #[test]
+    fn a_credit_count_groups_its_thousands_and_nothing_else() {
+        for (count, shown) in [
+            ("0", "0"),
+            ("999", "999"),
+            ("1000", "1,000"),
+            ("62500", "62,500"),
+            ("1234567.89", "1,234,567.89"),
+            ("12.5", "12.5"),
+            ("-1234", "-1,234"),
+        ] {
+            assert_eq!(group_thousands(count), shown, "{count}");
+        }
+    }
+
+    #[test]
     fn tooltip_includes_credits_block_when_present() {
         let mut s = sample();
         s.credits = Some(crate::usage::OpenAiCredits {
@@ -527,11 +567,7 @@ mod tests {
         assert!(out.tooltip.contains("Credits"));
         // The balance is a count of Codex credits, not dollars: it reads as
         // a bare number followed by `credits`.
-        assert!(
-            out.tooltip.contains("balance: 62500 credits"),
-            "{}",
-            out.tooltip
-        );
+        assert!(out.tooltip.contains("     62,500<"), "{}", out.tooltip);
         assert!(!out.tooltip.contains("$"), "{}", out.tooltip);
         // The estimated message counts are no longer listed under the block,
         // even though the response reports both ranges.
@@ -560,11 +596,7 @@ mod tests {
             approx_cloud_messages: Some((30, 50)),
         });
         let out = render(&oc(s.clone()), &s, &Theme::default(), &opts(), Utc::now());
-        assert!(
-            out.tooltip.contains("balance: 62500 credits"),
-            "{}",
-            out.tooltip
-        );
+        assert!(out.tooltip.contains("     62,500<"), "{}", out.tooltip);
         assert!(!out.tooltip.contains("local messages"), "{}", out.tooltip);
         assert!(!out.tooltip.contains("cloud messages"), "{}", out.tooltip);
     }
@@ -582,7 +614,7 @@ mod tests {
             approx_cloud_messages: None,
         });
         let out = render(&oc(s.clone()), &s, &Theme::default(), &opts(), Utc::now());
-        assert!(out.tooltip.contains("balance: $5.00"), "{}", out.tooltip);
+        assert!(out.tooltip.contains("     $5.00"), "{}", out.tooltip);
         assert!(!out.tooltip.contains("$5.00 credits"), "{}", out.tooltip);
     }
 
@@ -597,11 +629,7 @@ mod tests {
             approx_cloud_messages: None,
         });
         let out = render(&oc(s.clone()), &s, &Theme::default(), &opts(), Utc::now());
-        assert!(
-            out.tooltip.contains("balance: unlimited"),
-            "{}",
-            out.tooltip
-        );
+        assert!(out.tooltip.contains("     unlimited"), "{}", out.tooltip);
         assert!(!out.tooltip.contains("credits"), "{}", out.tooltip);
     }
 

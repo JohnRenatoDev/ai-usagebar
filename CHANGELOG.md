@@ -4,7 +4,7 @@
 
 - **Codex credits read as credits, not dollars.** The usage response's
   credit balance is a count of Codex credits, but the tooltip, the TUI and
-  the tray showed it as `$62500.00`. It now reads `balance: 62500 credits`,
+  the tray showed it as `$62500.00`. It now shows `62,500` under Credits,
   and `{oai_credit_balance}` carries the bare number. The estimated local
   and cloud message counts are no longer listed under it; the
   `{oai_local_msgs}` and `{oai_cloud_msgs}` placeholders still carry them.

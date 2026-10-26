@@ -987,10 +987,7 @@ fn openai_sections(
     }
     if let Some(c) = &s.credits {
         v.push(Section::Spacer);
-        let body = vec![format!(
-            "balance: {}",
-            crate::openai::vendor::credit_balance_label(c)
-        )];
+        let body = vec![crate::openai::vendor::credit_balance_label(c)];
         v.push(Section::Block {
             label: "Credits".into(),
             body,
@@ -3402,7 +3399,7 @@ mod tests {
         // followed by `credits`, the same line the Waybar tooltip renders. The
         // block holds only that line — the estimated message counts (reported
         // by both ranges here) are no longer listed under it.
-        assert_eq!(body, Some(vec!["balance: 62500 credits".to_string()]));
+        assert_eq!(body, Some(vec!["62,500".to_string()]));
     }
 
     #[test]
@@ -3434,10 +3431,7 @@ mod tests {
             .expect("the Credits block is rendered");
         // With both ranges reported, no line of the block may carry a message
         // estimate; the balance line still does.
-        assert!(
-            body.iter()
-                .any(|line| line.contains("balance: 62500 credits"))
-        );
+        assert!(body.iter().any(|line| line.contains("62,500")));
         assert!(
             !body
                 .iter()
@@ -3472,7 +3466,7 @@ mod tests {
         // Vendor text that is not a number keeps its own text: no `credits`.
         assert_eq!(
             body.as_ref().and_then(|b| b.first()),
-            Some(&"balance: $5.00".to_string())
+            Some(&"$5.00".to_string())
         );
     }
 
