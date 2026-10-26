@@ -56,6 +56,9 @@
 /** @typedef {{}} Click_To_Record_A_ShortcutInputs */
 /** @typedef {{}} CloseInputs */
 /** @typedef {{}} Connection_Retry_HintInputs */
+/** @typedef {{}} Copied_To_ClipboardInputs */
+/** @typedef {{}} Copy_As_ImageInputs */
+/** @typedef {{}} Copy_Image_FailedInputs */
 /** @typedef {{}} Couldn_T_Load_UsageInputs */
 /** @typedef {{}} Couldn_T_Read_Local_FilesInputs */
 /** @typedef {{}} Couldn_T_Read_Usage_DataInputs */
@@ -502,6 +505,18 @@ export const close = /** @type {(inputs: CloseInputs) => LocalizedString} */ () 
 
 export const connection_retry_hint = /** @type {(inputs: Connection_Retry_HintInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`Check your connection, then Refresh.`)
+};
+
+export const copied_to_clipboard = /** @type {(inputs: Copied_To_ClipboardInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Copied to clipboard`)
+};
+
+export const copy_as_image = /** @type {(inputs: Copy_As_ImageInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Copy as image`)
+};
+
+export const copy_image_failed = /** @type {(inputs: Copy_Image_FailedInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Could not copy the image`)
 };
 
 export const couldn_t_load_usage = /** @type {(inputs: Couldn_T_Load_UsageInputs) => LocalizedString} */ () => {

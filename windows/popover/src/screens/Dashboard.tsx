@@ -18,6 +18,7 @@ interface DashboardProps {
   payload: Payload;
   visible: Card[];
   onCustomizeProvider: (id: string) => void;
+  onCopyImage: (id: string) => void;
   onDismissHint: () => void;
   onOpenCustomize: () => void;
   onReorder: (ids: string[]) => void;
@@ -72,6 +73,7 @@ export function Dashboard({
   payload,
   visible,
   onCustomizeProvider,
+  onCopyImage,
   onDismissHint,
   onOpenCustomize,
   onReorder,
@@ -127,6 +129,7 @@ export function Dashboard({
                 layout={layout}
                 nowMs={nowMs}
                 onCustomize={() => onCustomizeProvider(card.id)}
+                onCopyImage={() => onCopyImage(card.id)}
                 onRowAction={(key, action) => onRowAction(card.id, key, action)}
                 onRowMenuOpenChange={onRowMenuOpenChange}
                 onSwitchAccount={() => {

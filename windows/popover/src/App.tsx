@@ -5,6 +5,7 @@ import type { RowLists } from "@/components/dnd";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import type { Layout, Screen } from "@/lib/types";
 import { LanguageProvider } from "@/lib/i18n";
+import { beginImageCopy, cardImagePng, type ImageCopy } from "@/lib/cardImage";
 import { m } from "@/paraglide/messages.js";
 import { cn } from "@/lib/utils";
 import { About } from "@/screens/About";
@@ -44,6 +45,9 @@ type Direction = "back" | "forward";
 /** Screens ordered as the OpenUsage pager lays them out: dashboard ← customize/provider → settings. */
 const SCREEN_DEPTH: Record<Screen, number> = { dashboard: 0, customize: 1, provider: 2, settings: 3, about: 4 };
 
+/** How long the footer's copy-image notice stays up before it fades on its own. */
+const COPY_NOTICE_MS = 2500;
+
 function resolveStorage() {
   try {
     const ls = window.localStorage;
@@ -79,6 +83,12 @@ export default function App() {
   const [rowMenuOpen, setRowMenuOpen] = useState(false);
   const [resetArmed, setResetArmed] = useState(false);
   const [starError, setStarError] = useState("");
+  // The in-flight card image copy: the host answers through window.__AIUB_IMAGE_COPIED__
+  // (or a timeout reads the silence as a failure) and the footer notice reports it.
+  const [copyNotice, setCopyNotice] = useState<{ failed: boolean; text: string } | null>(null);
+  const pendingCopyRef = useRef<ImageCopy | null>(null);
+  const copyBusyRef = useRef(false);
+  const copyNoticeTimerRef = useRef(0);
   const [popoverVisible, setPopoverVisible] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -219,12 +229,14 @@ export default function App() {
       setPopoverVisible(visible);
       if (visible) return;
       // Closing the popover resets navigation: back to the dashboard, scrolled to the top,
-      // menus closed (OpenUsage "Closing").
+      // menus closed (OpenUsage "Closing"), the copy notice gone.
       setOptionsOpen(false);
       setRowMenuOpen(false);
       setUpdateDialogOpen(false);
       setResetArmed(false);
       setScreen("dashboard");
+      setCopyNotice(null);
+      if (copyNoticeTimerRef.current) window.clearTimeout(copyNoticeTimerRef.current);
       if (scrollRef.current) scrollRef.current.scrollTop = 0;
     };
     window.__AIUB_LOCKCLICKS__ = (ms) => {
@@ -239,12 +251,18 @@ export default function App() {
     // The tray host calls this for the native menu items that open a popover
     // screen (Customize / Settings / About / Check for Updates).
     window.__AIUB_MENU_ACTION__ = (action) => menuActionRef.current(String(action));
+    // The tray host's answer to a copy-image command: settle the pending copy. The handler
+    // is called through a ref (via the pending handle itself), so a stale closure can't
+    // report a finished copy.
+    window.__AIUB_IMAGE_COPIED__ = (ok) => pendingCopyRef.current?.settle(Boolean(ok));
     sendCommand("ready");
     return () => {
       delete window.__AIUB_APPLY__;
       delete window.__AIUB_LOCKCLICKS__;
       delete window.__AIUB_VISIBLE__;
       delete window.__AIUB_MENU_ACTION__;
+      delete window.__AIUB_IMAGE_COPIED__;
+      if (copyNoticeTimerRef.current) window.clearTimeout(copyNoticeTimerRef.current);
     };
   }, []);
 
@@ -361,6 +379,45 @@ export default function App() {
     go("provider");
   }
 
+  // Copy one provider's card as an image: rasterize it in the page (self-contained, so the
+  // canvas stays untainted), hand the base64 to the host over IPC, and let the host write the
+  // clipboard natively. If the raster fails (a SecurityError among others) the failure notice
+  // shows and the host never hears the command.
+  function copyCardAsImage(cardId: string) {
+    const section = shellRef.current?.querySelector<HTMLElement>(`[data-card-id="${cardId}"]`);
+    if (!section || copyBusyRef.current) return;
+    copyBusyRef.current = true;
+    const copy = beginImageCopy();
+    pendingCopyRef.current = copy;
+    void (async () => {
+      let ok: boolean;
+      try {
+        const png = await cardImagePng(section);
+        sendCommand("copy-image", { png });
+        ok = await copy.done;
+      } catch {
+        ok = false;
+      }
+      pendingCopyRef.current = null;
+      copyBusyRef.current = false;
+      showCopyNotice(ok);
+    })();
+  }
+
+  /** The footer's short copy-image notice: success in the footer's tone, failure in the meter's red. */
+  function showCopyNotice(ok: boolean) {
+    if (copyNoticeTimerRef.current) window.clearTimeout(copyNoticeTimerRef.current);
+    copyNoticeTimerRef.current = window.setTimeout(() => {
+      copyNoticeTimerRef.current = 0;
+      setCopyNotice(null);
+    }, COPY_NOTICE_MS);
+    setCopyNotice(
+      ok
+        ? { failed: false, text: m.copied_to_clipboard({}, { locale: layout.language }) }
+        : { failed: true, text: m.copy_image_failed({}, { locale: layout.language }) },
+    );
+  }
+
   function reorderRows(lists: RowLists) {
     if (!currentCard) return;
     const prevOff = prefsForCard(currentCard, layout).off || {};
@@ -375,6 +432,10 @@ export default function App() {
   function onRowAction(id: string, key: string, action: RowAction) {
     const card = cards.find((item) => item.id === id);
     if (!card) return;
+    if (action === "copy-image") {
+      copyCardAsImage(id);
+      return;
+    }
     if (action === "customize") {
       openProvider(id, "dashboard");
       return;
@@ -442,6 +503,7 @@ export default function App() {
                 nowMs={nowMs}
                 payload={payload}
                 onCustomizeProvider={(id) => openProvider(id, "dashboard")}
+                onCopyImage={copyCardAsImage}
                 onDismissHint={() => commit({ ...layout, hintDismissed: true })}
                 onOpenCustomize={() => go("customize")}
                 onOpenSettings={() => go("settings")}
@@ -465,6 +527,7 @@ export default function App() {
               payload={payload}
               visible={visible}
               onCustomizeProvider={(id) => openProvider(id, "dashboard")}
+              onCopyImage={copyCardAsImage}
               onDismissHint={() => commit({ ...layout, hintDismissed: true })}
               onOpenCustomize={() => go("customize")}
               onReorder={(ids) => commit({ ...layout, cardOrder: mergeVisibleOrder(layout.cardOrder, ids) })}
@@ -556,6 +619,7 @@ export default function App() {
         </div>
       </div>
       <Footer
+        notice={copyNotice}
         nowMs={nowMs}
         optionsOpen={optionsOpen}
         payload={payload}

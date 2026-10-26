@@ -19,6 +19,7 @@ interface NativeDashboardProps {
   nowMs: number;
   payload: Payload;
   onCustomizeProvider: (id: string) => void;
+  onCopyImage: (id: string) => void;
   onDismissHint: () => void;
   onOpenCustomize: () => void;
   onOpenSettings: () => void;
@@ -75,6 +76,7 @@ export function NativeDashboard({
   nowMs,
   payload,
   onCustomizeProvider,
+  onCopyImage,
   onDismissHint,
   onOpenCustomize,
   onOpenSettings,
@@ -162,6 +164,7 @@ export function NativeDashboard({
               layout={layout}
               nowMs={nowMs}
               onCustomize={() => onCustomizeProvider(selected.id)}
+              onCopyImage={() => onCopyImage(selected.id)}
               onRowAction={(key, action) => onRowAction(selected.id, key, action)}
               onRowMenuOpenChange={onRowMenuOpenChange}
               onSwitchAccount={() => {

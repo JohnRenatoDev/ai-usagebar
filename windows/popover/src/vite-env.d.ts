@@ -10,5 +10,6 @@ declare global {
     __AIUB_LOCKCLICKS__?: (ms: number) => void;
     __AIUB_VISIBLE__?: (visible: boolean) => void;
     __AIUB_MENU_ACTION__?: (action: string) => void;
+    __AIUB_IMAGE_COPIED__?: (ok: boolean) => void;
   }
 }

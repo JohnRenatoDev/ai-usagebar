@@ -89,6 +89,15 @@ import {
   menuAction,
 } from './src/model.js';
 import { measurePanelHeight } from './src/panel-size.js';
+import {
+  beginImageCopy,
+  buildCardSvg,
+  CARD_IMAGE_SCALE,
+  IMAGE_COPIED_TIMEOUT_MS,
+  namespacedCardHtml,
+  PNG_DATA_URL_PREFIX,
+  stripPngDataUrlPrefix,
+} from './src/lib/cardImage.ts';
 
 const englishMessages = JSON.parse(readFileSync(new URL('./messages/en.json', import.meta.url), 'utf8'));
 
@@ -2282,4 +2291,56 @@ console.log('ok');
   const [stale, fresh] = projectCards(payload, 0, 'en');
   assert.equal(stale.fetchedAt, Date.parse('2026-10-16T12:00:00Z'));
   assert.equal(fresh.fetchedAt, 0);
+}
+
+// --- card image export (copy one provider's card as a PNG) --------------------------
+{
+  // A 320 px card becomes a 960 px PNG: the fixed scale is part of the contract.
+  assert.equal(CARD_IMAGE_SCALE, 3);
+
+  // The SVG document: the SVG namespace on the root with the CSS-px dimensions, an
+  // opaque rounded background (the export's surface color, the card's radius), and the
+  // card HTML inside a foreignObject wrapped in the XHTML namespace — without it the
+  // data-URL SVG's XML re-parse drops the HTML semantics and the card renders blank.
+  const svg = buildCardSvg({ html: '<section data-card-id="anthropic"></section>', height: 180, radius: 10, surface: '#ffffff', width: 320 });
+  assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="320" height="180">/);
+  assert.match(svg, /<rect x="0" y="0" width="320" height="180" rx="10" fill="#ffffff"\/>/);
+  assert.ok(svg.includes('<foreignObject width="100%" height="100%">'));
+  assert.ok(svg.includes('xmlns="http://www.w3.org/1999/xhtml"'));
+  assert.ok(svg.includes('<section data-card-id="anthropic"></section>'));
+}
+
+{
+  // Nested <svg> icons are re-namespaced for the XML re-parse (they would inherit the
+  // XHTML namespace and vanish); an icon that already declares the SVG namespace keeps
+  // its single declaration.
+  const html = '<div><svg viewBox="0 0 24 24"></svg><svg xmlns="http://www.w3.org/2000/svg" width="10"></svg><svg width="12" aria-hidden="true"></svg></div>';
+  const out = namespacedCardHtml(html);
+  assert.match(out, /<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="0 0 24 24">/);
+  assert.match(out, /<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="12" aria-hidden="true">/);
+  assert.ok(!out.includes('xmlns="http://www.w3.org/2000/svg" xmlns='));
+  assert.equal((out.match(/<svg/g) || []).length, 3);
+}
+
+{
+  // Only the PNG data-URL prefix comes off, and only off a PNG data URL.
+  assert.equal(stripPngDataUrlPrefix(`${PNG_DATA_URL_PREFIX}iVBORw0KGgo`), 'iVBORw0KGgo');
+  assert.throws(() => stripPngDataUrlPrefix('data:image/jpeg;base64,zzz'));
+  assert.throws(() => stripPngDataUrlPrefix('iVBORw0KGgo'));
+}
+
+{
+  // The host's answer arrives with a timeout: a silent host reads as a failure, the
+  // host's own refusal reads as a failure, the confirmation resolves true — and a late
+  // answer after the timeout cannot change what the timeout already decided.
+  assert.equal(IMAGE_COPIED_TIMEOUT_MS, 5000);
+  const silent = beginImageCopy(40);
+  assert.equal(await silent.done, false);
+  silent.settle(true);
+  const refused = beginImageCopy(5000);
+  refused.settle(false);
+  assert.equal(await refused.done, false);
+  const confirmed = beginImageCopy(5000);
+  confirmed.settle(true);
+  assert.equal(await confirmed.done, true);
 }
