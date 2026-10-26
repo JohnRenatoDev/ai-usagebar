@@ -676,7 +676,7 @@ pub(crate) fn set_bool(
     let table = doc
         .entry(section)
         .or_insert_with(toml_edit::table)
-        .as_table_mut()
+        .as_table_like_mut()
         .ok_or_else(|| AppError::Other(format!("config.toml: [{section}] is not a table")))?;
 
     if let Some(item) = table.get_mut(key)
@@ -711,7 +711,7 @@ pub(crate) fn set_value(
     let table = doc
         .entry(section)
         .or_insert_with(toml_edit::table)
-        .as_table_mut()
+        .as_table_like_mut()
         .ok_or_else(|| AppError::Other(format!("config.toml: [{section}] is not a table")))?;
 
     let Some(mut new_value) = new_value else {

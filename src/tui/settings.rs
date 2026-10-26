@@ -711,7 +711,7 @@ pub fn save_to_path(state: &SettingsState, path: &Path) -> Result<()> {
     // neither reads nor supports would be misleading and unsafe.
     if let Some(table) = doc
         .get_mut("copilot")
-        .and_then(toml_edit::Item::as_table_mut)
+        .and_then(toml_edit::Item::as_table_like_mut)
     {
         table.remove("token");
         table.remove("token_env");
@@ -810,7 +810,7 @@ fn set_string(doc: &mut DocumentMut, section: &str, key: &str, new_value: &str) 
     let table = doc
         .entry(section)
         .or_insert_with(toml_edit::table)
-        .as_table_mut()
+        .as_table_like_mut()
         .ok_or_else(|| AppError::Other(format!("config.toml: [{section}] is not a table")))?;
 
     if let Some(item) = table.get_mut(key)
