@@ -97,7 +97,7 @@ export function ProviderList({ cards, error, headerExtra, layout, onOpen, onReor
 
 interface ProviderRowProps {
   handle?: Parameters<typeof DragHandle>[0];
-  /** Drawn in the disabled block: faded, no drag handle, no chevron. */
+  /** Drawn in the disabled block: faded, no drag handle, an inert chevron. */
   off?: boolean;
   onOpen: (id: string) => void;
   onToggle: (id: string, on: boolean) => void;
@@ -208,7 +208,13 @@ function ProviderRow({ row, handle, off = false, onOpen, onToggle }: ProviderRow
           <button type="button" aria-label={`${m.open()} ${row.cards.length > 1 ? row.name : first.title}`} className="plain-btn hover-icon grid size-[var(--row-icon-box)] place-items-center" onClick={() => onOpen(first.id)}>
             <MdiChevronRight className="size-[var(--icon-row)] text-label-3" />
           </button>
-        ) : null}
+        ) : (
+          // Nothing to open (the provider is off, or has no card yet): the
+          // chevron stays, inert and dimmed, so every switch keeps its column.
+          <span aria-hidden className="grid size-[var(--row-icon-box)] place-items-center">
+            <MdiChevronRight className="size-[var(--icon-row)] text-label-3 opacity-40" />
+          </span>
+        )}
       </div>
     </div>
   );
