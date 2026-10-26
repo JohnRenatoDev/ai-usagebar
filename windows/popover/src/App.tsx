@@ -5,7 +5,7 @@ import type { RowLists } from "@/components/dnd";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import type { Layout, Screen } from "@/lib/types";
 import { LanguageProvider } from "@/lib/i18n";
-import { beginImageCopy, cardImagePng, type ImageCopy } from "@/lib/cardImage";
+import { cardImagePng, createCopyQueue, findCardElement, type CopyQueue } from "@/lib/cardImage";
 import { m } from "@/paraglide/messages.js";
 import { cn } from "@/lib/utils";
 import { About } from "@/screens/About";
@@ -83,11 +83,14 @@ export default function App() {
   const [rowMenuOpen, setRowMenuOpen] = useState(false);
   const [resetArmed, setResetArmed] = useState(false);
   const [starError, setStarError] = useState("");
-  // The in-flight card image copy: the host answers through window.__AIUB_IMAGE_COPIED__
-  // (or a timeout reads the silence as a failure) and the footer notice reports it.
+  // The pending card image copies (a FIFO queue): the host answers through
+  // window.__AIUB_IMAGE_COPIED__ (or a timeout reads the silence as a failure) and the
+  // footer notice reports each send with its own result. The queue keeps each send's
+  // association with its ack, so a late answer to an expired send is discarded, never
+  // settled on the copy that started after it.
   const [copyNotice, setCopyNotice] = useState<{ failed: boolean; text: string } | null>(null);
-  const pendingCopyRef = useRef<ImageCopy | null>(null);
-  const copyBusyRef = useRef(false);
+  const copyQueueRef = useRef<CopyQueue | null>(null);
+  if (copyQueueRef.current === null) copyQueueRef.current = createCopyQueue();
   const copyNoticeTimerRef = useRef(0);
   const [popoverVisible, setPopoverVisible] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -251,10 +254,9 @@ export default function App() {
     // The tray host calls this for the native menu items that open a popover
     // screen (Customize / Settings / About / Check for Updates).
     window.__AIUB_MENU_ACTION__ = (action) => menuActionRef.current(String(action));
-    // The tray host's answer to a copy-image command: settle the pending copy. The handler
-    // is called through a ref (via the pending handle itself), so a stale closure can't
-    // report a finished copy.
-    window.__AIUB_IMAGE_COPIED__ = (ok) => pendingCopyRef.current?.settle(Boolean(ok));
+    // The tray host's answer to the OLDEST pending copy-image command: the queue consumes
+    // it (an expired send's ack is discarded and a response with no pending send ignored).
+    window.__AIUB_IMAGE_COPIED__ = (ok) => copyQueueRef.current?.ack(Boolean(ok));
     sendCommand("ready");
     return () => {
       delete window.__AIUB_APPLY__;
@@ -381,26 +383,28 @@ export default function App() {
 
   // Copy one provider's card as an image: rasterize it in the page (self-contained, so the
   // canvas stays untainted), hand the base64 to the host over IPC, and let the host write the
-  // clipboard natively. If the raster fails (a SecurityError among others) the failure notice
-  // shows and the host never hears the command.
+  // clipboard natively. Any failure before the host is asked — the card gone, a raster
+  // error (a SecurityError among others) — lands in the failure notice, and the host never
+  // hears a command that was not sent.
   function copyCardAsImage(cardId: string) {
-    const section = shellRef.current?.querySelector<HTMLElement>(`[data-card-id="${cardId}"]`);
-    if (!section || copyBusyRef.current) return;
-    copyBusyRef.current = true;
-    const copy = beginImageCopy();
-    pendingCopyRef.current = copy;
+    const queue = copyQueueRef.current;
+    if (!queue || queue.isPending()) return; // the double-click lock holds only while a
+    // send is waiting and not expired: a copy after a timeout is allowed, and the queue
+    // discards the expired send's late ack.
+    const send = queue.send((ok) => showCopyNotice(ok));
     void (async () => {
-      let ok: boolean;
       try {
+        // The id is never interpolated into a selector (it may carry a double quote);
+        // a missing card is a pre-send failure, not an unhandled throw.
+        const section = findCardElement(shellRef.current, cardId);
+        if (!section) throw new Error("the card is not on screen");
         const png = await cardImagePng(section);
         sendCommand("copy-image", { png });
-        ok = await copy.done;
       } catch {
-        ok = false;
+        // Anything before a dispatched IPC: no ack will ever come, so the entry leaves
+        // the queue (it must not become a tombstone) and the failure is reported now.
+        send.cancel(false);
       }
-      pendingCopyRef.current = null;
-      copyBusyRef.current = false;
-      showCopyNotice(ok);
     })();
   }
 

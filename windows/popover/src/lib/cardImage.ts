@@ -69,32 +69,140 @@ export function stripPngDataUrlPrefix(dataUrl: string): string {
   return dataUrl.slice(PNG_DATA_URL_PREFIX.length);
 }
 
-export interface ImageCopy {
-  /** Feed the host's window.__AIUB_IMAGE_COPIED__(ok) answer. Settles at most once. */
-  settle: (ok: boolean) => void;
-  /** Resolves true on the host's confirmation, false on its refusal or the timeout. */
-  done: Promise<boolean>;
+/**
+ * The pending copy-image sends, in FIFO order.
+ *
+ * What this protects is the association between a send and its own ack: the host
+ * answers through one boolean hook (`window.__AIUB_IMAGE_COPIED__(ok)`), so the hook
+ * always settles the OLDEST unanswered send — and the correction depends on the host
+ * handling the IPCs in order and answering in the same order. Each host's event loop
+ * is single-threaded, and the copy-image arm answers synchronously, so an ack always
+ * belongs to the oldest send the host actually received.
+ *
+ * A send that times out is settled with a failure but stays in the queue as a
+ * tombstone until its late ack arrives (where it is discarded silently): without the
+ * tombstone, the late ack would settle the copy that started after it with a result
+ * that is not its own.
+ */
+export interface CopyQueueSend {
+  /**
+   * Settle the send before the IPC is dispatched (the pre-send failure path): the host
+   * never received a command, so no ack will ever come and the entry must LEAVE the
+   * queue — a tombstone would swallow the next send's ack.
+   */
+  cancel: (ok: boolean) => void;
+  /** Fire the send's timeout (the queue's own timer calls it; idempotent). */
+  expire: () => void;
+}
+
+export interface CopyQueue {
+  /**
+   * Start a send. `onResult(ok)` settles it exactly once: with its own ack (before the
+   * timeout) or with the timeout's false.
+   */
+  send: (onResult: (ok: boolean) => void, timeoutMs?: number) => CopyQueueSend;
+  /** Consume the host's ack for the head of the queue; a response on an empty queue is ignored. */
+  ack: (ok: boolean) => void;
+  /** A send is waiting and not expired: the double-click lock. */
+  isPending: () => boolean;
+}
+
+interface CopyQueueTimers {
+  clear: (id: unknown) => void;
+  set: (task: () => void, ms: number) => unknown;
 }
 
 /**
- * Arm the host's `window.__AIUB_IMAGE_COPIED__(ok)` answer with a timeout: the host
- * may be silent (a command it never handled), and a silent failure must read as a
- * failure, not as a copy in flight forever. `globalThis` timers so the wrapper is
- * exercisable outside the browser.
+ * Build the pending-copy queue. `globalThis` timers by default so the same logic runs
+ * in the browser; tests inject fake timers to drive the expirations directly.
  */
-export function beginImageCopy(timeoutMs: number = IMAGE_COPIED_TIMEOUT_MS): ImageCopy {
-  let resolveDone: (ok: boolean) => void = () => {};
-  const done = new Promise<boolean>((resolve) => {
-    resolveDone = resolve;
-  });
-  const timer = globalThis.setTimeout(() => resolveDone(false), timeoutMs);
-  return {
-    done,
-    settle: (ok: boolean) => {
-      globalThis.clearTimeout(timer);
-      resolveDone(ok ? true : false);
-    },
+export function createCopyQueue(
+  timers: CopyQueueTimers = {
+    clear: (id) => globalThis.clearTimeout(id as number),
+    set: (task, ms) => globalThis.setTimeout(task, ms),
+  },
+): CopyQueue {
+  interface Entry {
+    expired: boolean;
+    onResult: (ok: boolean) => void;
+    settled: boolean;
+    timer: unknown;
+  }
+  const queue: Entry[] = [];
+
+  const send = (onResult: (ok: boolean) => void, timeoutMs: number = IMAGE_COPIED_TIMEOUT_MS): CopyQueueSend => {
+    const entry: Entry = { expired: false, onResult, settled: false, timer: undefined };
+    queue.push(entry);
+    entry.timer = timers.set(() => expire(), timeoutMs);
+    const expire = (): void => {
+      if (entry.settled) return;
+      entry.expired = true;
+      entry.settled = true;
+      timers.clear(entry.timer);
+      onResult(false);
+      // The entry stays: its late ack must still be consumed — and discarded — here.
+    };
+    return {
+      cancel: (ok: boolean): void => {
+        if (entry.settled) return;
+        entry.settled = true;
+        timers.clear(entry.timer);
+        const i = queue.indexOf(entry);
+        if (i !== -1) queue.splice(i, 1);
+        onResult(ok);
+      },
+      expire,
+    };
   };
+
+  const ack = (ok: boolean): void => {
+    const head = queue[0];
+    if (!head) return; // a response with no pending send is ignored
+    queue.shift();
+    if (head.expired) return; // its send already reported the timeout's failure
+    timers.clear(head.timer);
+    head.settled = true;
+    head.onResult(ok);
+  };
+
+  const isPending = (): boolean => queue.some((entry) => !entry.expired);
+
+  return { ack, isPending, send };
+}
+
+/**
+ * The section to export, WITHOUT interpolating its id into a selector: a macOS account
+ * label may carry a double quote, and an id like `anthropic@work"demo` would make
+ * `[data-card-id="..."]` an invalid selector that throws before the copy starts.
+ * Compare the attribute's value directly instead.
+ */
+export function findCardElement(root: ParentNode | null, cardId: string): HTMLElement | null {
+  if (!root) return null;
+  for (const candidate of root.querySelectorAll<HTMLElement>("[data-card-id]")) {
+    if (candidate.getAttribute("data-card-id") === cardId) return candidate;
+  }
+  return null;
+}
+
+/**
+ * How the clone is serialized into the SVG.
+ *
+ * The clone must be serialized as XML, not with `outerHTML`: the HTML serializer writes
+ * U+00A0 as `&nbsp;` (among other HTML-only entities), and `&nbsp;` does not exist in an
+ * XML document — the SVG data URL then fails to load and the copy reports a failure for
+ * a card whose only fault is a non-breaking space in its name. The platform's
+ * XMLSerializer writes XML escaping (`&amp;`, `&lt;`) and numeric references or literal
+ * characters for the rest. Injectable so the pipeline is exercisable where no
+ * XMLSerializer exists (bare node).
+ */
+export interface CardImageOptions {
+  serialize?: (clone: Node) => string;
+}
+
+const defaultSerialize = (clone: Node): string => new XMLSerializer().serializeToString(clone);
+
+export function serializeCardHtml(clone: Node, options?: CardImageOptions): string {
+  return (options?.serialize ?? defaultSerialize)(clone);
 }
 
 /**
@@ -102,7 +210,7 @@ export function beginImageCopy(timeoutMs: number = IMAGE_COPIED_TIMEOUT_MS): Ima
  * base64 body, without the `data:image/png;base64,` prefix. Never mutates the
  * card on screen: the work happens on a detached clone marked `data-exporting`.
  */
-export async function cardImagePng(element: HTMLElement): Promise<string> {
+export async function cardImagePng(element: HTMLElement, options?: CardImageOptions): Promise<string> {
   const bounds = element.getBoundingClientRect();
   const width = Math.ceil(bounds.width);
   const height = Math.ceil(bounds.height);
@@ -115,7 +223,7 @@ export async function cardImagePng(element: HTMLElement): Promise<string> {
   inlineComputedStyles(element, clone);
   stripExportChrome(element, clone);
   const svg = buildCardSvg({
-    html: namespacedCardHtml(clone.outerHTML),
+    html: namespacedCardHtml(serializeCardHtml(clone, options)),
     height,
     radius: cssPixelLength("--card-radius"),
     surface: resolvedCssVar("--export-surface"),

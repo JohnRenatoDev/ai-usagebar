@@ -90,12 +90,14 @@ import {
 } from './src/model.js';
 import { measurePanelHeight } from './src/panel-size.js';
 import {
-  beginImageCopy,
   buildCardSvg,
   CARD_IMAGE_SCALE,
+  createCopyQueue,
+  findCardElement,
   IMAGE_COPIED_TIMEOUT_MS,
   namespacedCardHtml,
   PNG_DATA_URL_PREFIX,
+  serializeCardHtml,
   stripPngDataUrlPrefix,
 } from './src/lib/cardImage.ts';
 
@@ -2330,17 +2332,117 @@ console.log('ok');
 }
 
 {
-  // The host's answer arrives with a timeout: a silent host reads as a failure, the
-  // host's own refusal reads as a failure, the confirmation resolves true — and a late
-  // answer after the timeout cannot change what the timeout already decided.
-  assert.equal(IMAGE_COPIED_TIMEOUT_MS, 5000);
-  const silent = beginImageCopy(40);
-  assert.equal(await silent.done, false);
-  silent.settle(true);
-  const refused = beginImageCopy(5000);
-  refused.settle(false);
-  assert.equal(await refused.done, false);
-  const confirmed = beginImageCopy(5000);
-  confirmed.settle(true);
-  assert.equal(await confirmed.done, true);
+  // F1: the clone is XML-serialized into the SVG, never outerHTML'd. The HTML serializer
+  // writes U+00A0 as &nbsp; — an entity that does not exist in an XML document — and the
+  // SVG data URL then fails to load (a card whose name carries a non-breaking space could
+  // not be copied). The serializer is the injectable seam, so the pure pipeline
+  // (serializeCardHtml -> namespacedCardHtml -> buildCardSvg) runs here with
+  // XMLSerializer's documented output for a text with an nbsp, & and <.
+  const content = 'Alice\u00a0Example & Co <tag>';
+  const xmlSerialized = `<section xmlns="http://www.w3.org/1999/xhtml"><div class="card-surface">${content.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replace(/\u00a0/g, '&#160;')}</div></section>`;
+  const html = serializeCardHtml({ fake: 'clone' }, { serialize: () => xmlSerialized });
+  const svg = buildCardSvg({ html: namespacedCardHtml(html), height: 120, radius: 10, surface: '#ffffff', width: 320 });
+  assert.equal(svg.includes('&nbsp;'), false, 'no HTML-only &nbsp; entity may reach the SVG');
+  assert.ok(svg.includes('&#160;') || svg.includes('\u00a0'), 'the nbsp survives as a numeric reference or the literal character');
+  assert.ok(svg.includes('&amp;') && svg.includes('&lt;'), 'the & and < stay XML-escaped');
+}
+
+{
+  // F2: the card id is never interpolated into a selector. A macOS account label may
+  // carry a double quote, and anthropic@work"demo would make [data-card-id="..."] an
+  // invalid selector that throws before the copy starts; the attribute value is compared
+  // directly instead.
+  const id = 'anthropic@work"demo';
+  const make = (value) => ({ getAttribute: (name) => (name === 'data-card-id' ? value : null) });
+  const first = make('anthropic');
+  const quoted = make(id);
+  const root = { querySelectorAll: () => [first, quoted, make('openai')] };
+  assert.equal(findCardElement(root, id), quoted, 'the quoted id is found by attribute comparison');
+  assert.equal(findCardElement(root, 'anthropic'), first);
+  assert.equal(findCardElement(root, 'not-there'), null);
+  assert.equal(findCardElement(null, 'anthropic'), null, 'no shell yet: nothing to find, no throw');
+}
+
+{
+  // F3: the pending copies form a FIFO queue and each ack settles its own send. The
+  // correction depends on the host handling the IPCs in order and answering in the same
+  // order (each host's event loop is single-threaded; the copy-image arm answers
+  // synchronously).
+  const realSet = globalThis.setTimeout;
+  const realClear = globalThis.clearTimeout;
+  const fakeTimers = new Map();
+  let timerSeq = 0;
+  globalThis.setTimeout = (task, ms) => {
+    const id = ++timerSeq;
+    fakeTimers.set(id, { task, ms });
+    return id;
+  };
+  globalThis.clearTimeout = (id) => fakeTimers.delete(id);
+  const fireTimers = (ms) => {
+    for (const [id, t] of [...fakeTimers])
+      if (t.ms === ms) {
+        fakeTimers.delete(id);
+        t.task();
+      }
+  };
+  try {
+    assert.equal(IMAGE_COPIED_TIMEOUT_MS, 5000, 'the timeout the queue defaults to is 5 s');
+
+    // Double click: while one send is waiting and not expired, the lock lets only one
+    // send start.
+    const q1 = createCopyQueue();
+    assert.equal(q1.isPending(), false);
+    const started = [];
+    const click = () => {
+      if (q1.isPending()) return;
+      started.push(1);
+      q1.send(() => {});
+    };
+    click();
+    click();
+    assert.equal(started.length, 1, 'a second click while a send is waiting starts nothing');
+    assert.equal(q1.isPending(), true, 'the waiting send holds the lock');
+    q1.ack(true);
+    assert.equal(q1.isPending(), false);
+
+    // The review scenario: A expires, B starts, A's late ack is discarded, B's own ack
+    // settles B with its own result.
+    const queue = createCopyQueue();
+    const notices = [];
+    queue.send((ok) => notices.push(['a', ok]));
+    fireTimers(5000);
+    assert.deepEqual(notices, [['a', false]], 'the timeout settles A with a failure');
+    assert.equal(queue.isPending(), false, 'an expired send does not hold the lock: a new copy is allowed');
+    queue.send((ok) => notices.push(['b', ok]));
+    assert.equal(queue.isPending(), true);
+    queue.ack(true); // A's late answer: consumed by A's tombstone, never B's
+    assert.equal(notices.length, 1, "A's late ack settled nothing");
+    queue.ack(false); // B's own answer settles B
+    assert.deepEqual(notices, [['a', false], ['b', false]]);
+    assert.equal(queue.isPending(), false);
+    queue.ack(true); // a response on an empty queue is ignored, without throwing
+    assert.equal(notices.length, 2);
+
+    // A send cancelled before the IPC was dispatched leaves the queue (no tombstone), so
+    // the next ack still belongs to the next send.
+    const cancelled = queue.send((ok) => notices.push(['c', ok]));
+    cancelled.cancel(false);
+    assert.deepEqual(notices.slice(-1), [['c', false]], 'the cancel reports the failure once, now');
+    queue.send((ok) => notices.push(['d', ok]));
+    queue.ack(true);
+    assert.deepEqual(notices.slice(-1), [['d', true]], 'the cancelled send did not swallow D\'s ack');
+    assert.equal(queue.isPending(), false);
+
+    // A send that expires with nothing else pending settles once (by its timeout), and
+    // its late acks are discarded without re-settling.
+    const notices2 = [];
+    queue.send((ok) => notices2.push(ok));
+    fireTimers(5000);
+    queue.ack(true);
+    queue.ack(true);
+    assert.deepEqual(notices2, [false], 'E settled once, by its timeout');
+  } finally {
+    globalThis.setTimeout = realSet;
+    globalThis.clearTimeout = realClear;
+  }
 }
