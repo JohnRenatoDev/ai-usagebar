@@ -389,8 +389,7 @@ fn spawn_worker(
                     match rx.recv_timeout(wait) {
                         Ok(WorkerCmd::Refresh) | Err(mpsc::RecvTimeoutError::Timeout) => break,
                         Ok(WorkerCmd::Providers) => {
-                            if let Some(providers) = super::providers::take_due() {
-                                with_facts(&facts, |f| f.providers = providers);
+                            if super::providers::refresh_due(&facts) {
                                 let _ = proxy.send_event(UserEvent::Facts);
                             }
                         }
@@ -557,12 +556,9 @@ fn switch_with(tray: &std::path::Path, vendor: &str, label: &str) -> String {
 
 async fn push_report(proxy: &EventLoopProxy<UserEvent>, facts: &SharedFacts) {
     refresh_account_facts(facts);
+    super::providers::refresh_due(facts);
     let mut snapshot = facts_snapshot(facts);
     snapshot.startup_enabled = startup::is_enabled();
-    if let Some(providers) = super::providers::take_due() {
-        with_facts(facts, |f| f.providers.clone_from(&providers));
-        snapshot.providers = providers;
-    }
     let now = now_ms();
     let payload = match crate::report::collect_json().await {
         Ok(json) => wrap_report(&json, &snapshot, now, None),

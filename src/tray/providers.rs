@@ -79,12 +79,39 @@ pub(crate) fn request() {
     DUE.store(true, Ordering::Relaxed);
 }
 
-/// The fresh catalog when one was requested (and at startup), else `None`.
-/// An unreadable config lists every provider against the defaults.
+/// A catalog read, and the switch generation it started under.
+struct CatalogRead {
+    rows: Vec<VendorStatus>,
+    generation: u64,
+}
+
+/// Re-read the catalog into `facts` when one was requested (and at startup);
+/// `true` when the rows changed hands. An unreadable config lists every
+/// provider against the defaults. The read runs outside the lock, so a
+/// switch can land while it does; see [`publish`].
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
-pub(crate) fn take_due() -> Option<Vec<VendorStatus>> {
-    DUE.swap(false, Ordering::Relaxed)
-        .then(|| crate::catalog::statuses(&crate::config::Config::load().unwrap_or_default()))
+pub(crate) fn refresh_due(facts: &SharedFacts) -> bool {
+    if !DUE.swap(false, Ordering::Relaxed) {
+        return false;
+    }
+    let generation = facts.lock().map(|f| f.providers_generation).unwrap_or(0);
+    let rows = crate::catalog::statuses(&crate::config::Config::load().unwrap_or_default());
+    publish(facts, CatalogRead { rows, generation })
+}
+
+/// Hand a read to the popover unless a switch moved since it started: that
+/// read may hold the config from before the write, and publishing it would
+/// put the switch back. The switch requested another read, which wins.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+fn publish(facts: &SharedFacts, read: CatalogRead) -> bool {
+    let mut published = false;
+    with_facts(facts, |f| {
+        if f.providers_generation == read.generation {
+            f.providers = read.rows;
+            published = true;
+        }
+    });
+    published
 }
 
 /// `{"cmd":"set-provider-enabled","id":"cursor","value":true}`: flip the
@@ -95,11 +122,12 @@ pub(crate) fn take_due() -> Option<Vec<VendorStatus>> {
 /// provider has been fetched, which takes seconds when one starts `agy` or
 /// waits on the network. Flipping the row here moves the switch on the next
 /// push; the re-read still follows, for `configured` and the sign-in action.
+/// It is requested after the flip, so it starts under the new generation.
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 pub(crate) fn set_enabled(value: &Value, facts: &SharedFacts) {
     let written = write_enabled(value);
-    request();
     with_facts(facts, |f| record_enabled(f, written));
+    request();
 }
 
 /// The slug is validated by [`crate::config::set_vendor_enabled`], so no
@@ -126,6 +154,7 @@ fn record_enabled(facts: &mut HostFacts, written: Result<(&str, bool), String>) 
             if let Some(row) = facts.providers.iter_mut().find(|row| row.id == id) {
                 row.enabled = enabled;
             }
+            facts.providers_generation = facts.providers_generation.wrapping_add(1);
             String::new()
         }
         Err(error) => error,
@@ -291,27 +320,68 @@ mod tests {
         assert!(write_enabled(&json!({"value": true})).is_err());
     }
 
+    /// A catalog row built by hand, so these tests resolve no config default.
+    fn row(id: &'static str, enabled: bool) -> VendorStatus {
+        VendorStatus {
+            id,
+            name: id,
+            short_name: id,
+            kind: AuthKind::Oauth,
+            enabled,
+            configured: true,
+            needs_credential: true,
+            env: String::new(),
+            login: "",
+        }
+    }
+
+    fn enabled(facts: &HostFacts, id: &str) -> bool {
+        facts
+            .providers
+            .iter()
+            .find(|row| row.id == id)
+            .unwrap()
+            .enabled
+    }
+
     #[test]
     fn a_written_switch_moves_its_row_before_any_report() {
         let mut facts = HostFacts::new("0.0.0", false);
-        facts.providers = default_rows();
+        facts.providers = vec![row("cursor", false)];
         facts.providers_error = "stale".into();
-        let enabled = |facts: &HostFacts, id: &str| {
-            facts
-                .providers
-                .iter()
-                .find(|row| row.id == id)
-                .unwrap()
-                .enabled
-        };
-        assert!(!enabled(&facts, "cursor"));
 
         record_enabled(&mut facts, Ok(("cursor", true)));
         assert!(enabled(&facts, "cursor"));
         assert_eq!(facts.providers_error, "");
+        assert_eq!(facts.providers_generation, 1);
 
         record_enabled(&mut facts, Err("Config is read-only.".into()));
         assert!(enabled(&facts, "cursor"), "a failed write leaves the row");
         assert_eq!(facts.providers_error, "Config is read-only.");
+        assert_eq!(facts.providers_generation, 1, "nothing moved");
+    }
+
+    #[test]
+    fn a_catalog_read_from_before_a_switch_cannot_put_it_back() {
+        let facts: SharedFacts =
+            std::sync::Arc::new(std::sync::Mutex::new(HostFacts::new("0.0.0", false)));
+        with_facts(&facts, |f| f.providers = vec![row("cursor", false)]);
+        // The worker starts reading while Cursor is still off…
+        let stale = CatalogRead {
+            rows: vec![row("cursor", false)],
+            generation: facts.lock().unwrap().providers_generation,
+        };
+        // …the switch lands before the read is published…
+        with_facts(&facts, |f| record_enabled(f, Ok(("cursor", true))));
+        // …and the old rows are dropped instead of turning it back off.
+        assert!(!publish(&facts, stale));
+        assert!(enabled(&facts.lock().unwrap(), "cursor"));
+
+        let fresh = CatalogRead {
+            rows: vec![row("cursor", true)],
+            generation: facts.lock().unwrap().providers_generation,
+        };
+        assert!(publish(&facts, fresh));
+        assert!(enabled(&facts.lock().unwrap(), "cursor"));
     }
 }

@@ -475,8 +475,7 @@ fn spawn_worker(
                     match rx.recv_timeout(wait) {
                         Ok(WorkerCmd::Refresh) | Err(mpsc::RecvTimeoutError::Timeout) => break,
                         Ok(WorkerCmd::Providers) => {
-                            if let Some(providers) = super::providers::take_due() {
-                                with_facts(&facts, |f| f.providers = providers);
+                            if super::providers::refresh_due(&facts) {
                                 let _ = proxy.send_event(UserEvent::Facts);
                             }
                         }
@@ -523,13 +522,10 @@ fn host_facts(config: &Config) -> HostFacts {
 }
 
 async fn push_report(proxy: &EventLoopProxy<UserEvent>, facts: &SharedFacts) {
+    super::providers::refresh_due(facts);
     let mut snapshot = facts_snapshot(facts);
     snapshot.accent = super::accent::read_accent();
     snapshot.startup_enabled = startup::is_enabled();
-    if let Some(providers) = super::providers::take_due() {
-        with_facts(facts, |f| f.providers.clone_from(&providers));
-        snapshot.providers = providers;
-    }
     let now = now_ms();
     let payload = match crate::report::collect_json().await {
         Ok(json) => wrap_report(&json, &snapshot, now, None),
