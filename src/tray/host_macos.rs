@@ -159,7 +159,6 @@ struct TrayState {
     payload: Value,
     js_ready: bool,
     popover_open: bool,
-    blur_guard_until: Option<Instant>,
     /// The global mouse-down monitor, installed while the popover is open.
     outside_clicks: Option<Retained<AnyObject>>,
     /// Cocoa (points, y-up) location of the last click / shortcut, used to
@@ -289,7 +288,6 @@ fn run_loop() -> Result<(), String> {
         payload: empty,
         js_ready: false,
         popover_open: false,
-        blur_guard_until: None,
         outside_clicks: None,
         last_anchor: None,
         popover_height: WINDOW_HEIGHT,
@@ -331,7 +329,6 @@ fn run_loop() -> Result<(), String> {
             }
             Event::UserEvent(UserEvent::FocusPopover) => {
                 if state.popover_open {
-                    guard_blur(&mut state);
                     state.window.set_focus();
                 }
             }
@@ -345,8 +342,7 @@ fn run_loop() -> Result<(), String> {
                 ..
             } => {
                 if state.popover_open
-                    && super::blur::macos_verdict(mouse_button_down(), blur_guarded(&state))
-                        == super::blur::Verdict::Hide
+                    && super::blur::macos_verdict(mouse_button_down()) == super::blur::Verdict::Hide
                 {
                     hide_popover(&mut state);
                 }
@@ -1320,7 +1316,6 @@ fn show_popover(state: &mut TrayState) {
         state.last_anchor = Some(cocoa_mouse());
     }
     position_popover(state);
-    guard_blur(state);
     state.window.set_visible(true);
     state.popover_open = true;
     watch_outside_clicks(state);
@@ -1338,18 +1333,6 @@ fn show_popover(state: &mut TrayState) {
         std::thread::sleep(Duration::from_millis(CLICK_LOCK_MS));
         let _ = proxy.send_event(UserEvent::FocusPopover);
     });
-}
-
-fn blur_guarded(state: &TrayState) -> bool {
-    state
-        .blur_guard_until
-        .is_some_and(|until| Instant::now() < until)
-}
-
-const BLUR_GUARD: Duration = Duration::from_millis(400);
-
-fn guard_blur(state: &mut TrayState) {
-    state.blur_guard_until = Some(Instant::now() + BLUR_GUARD);
 }
 
 fn hide_popover(state: &mut TrayState) {
