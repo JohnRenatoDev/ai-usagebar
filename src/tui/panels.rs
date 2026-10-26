@@ -928,36 +928,30 @@ fn anthropic_sections(
     }
     if let Some(c) = &s.cloud_credits {
         v.push(Section::Spacer);
-        // The meter shows the used share, (limit − remaining) / limit. The
-        // parse gate guarantees a finite limit > 0, so there is no
-        // denominator to guard; `clamp_pct` rounds and holds the result to
-        // 0..=100.
-        let pct = clamp_pct((c.limit.0 - c.remaining.0) as f64 * 100.0 / c.limit.0 as f64);
-        let value_label = format!(
-            "{} left of {}",
-            usd(c.remaining.0 as f64 / 100.0),
-            usd(c.limit.0 as f64 / 100.0)
-        );
+        // Same shape as Cursor's included credits: the remaining dollars are
+        // the headline the tray, GNOME and KDE draw (a prepaid balance, not
+        // a quota), the bar meters the used share, and the caption carries
+        // the spend and the expiry. The parse gate guarantees a positive
+        // limit, so `cursor_credit_meter` has no zero denominator to guard.
+        let (pct, value, mut footnote) =
+            crate::format::cursor_credit_meter(c.remaining.0, c.limit.0, c.expires_at, now);
+        if c.locked {
+            // Appended to the caption the meter already built — it never
+            // comes back empty, so the separator never dangles.
+            footnote.push_str(" · locked");
+        }
         // The second argument of push_metric stays None: this is an expiry,
         // not a reset instant the account can bank.
-        let footnote = [
-            c.expires_at
-                .map(|when| format!("expires {}", crate::format::local_date_hm(when))),
-            c.locked.then(|| "locked".to_string()),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" · ");
-        v.push_metric(
+        v.push_metric_with_headline(
             Section::Metric {
                 label: "Cloud session credits".into(),
                 pct,
-                severity: severity_for(pct as i32),
-                value_label,
+                severity: severity_for(i32::from(pct)),
+                value_label: value,
                 footnote,
             },
             None,
+            MetricHeadline::Value,
         );
     }
     if let Some(u) = &s.usage_credits {
@@ -3245,8 +3239,10 @@ mod tests {
 
     #[test]
     fn anthropic_cloud_session_credits_render_as_a_metric() {
-        // The real 2026-10-26 payload shape: $250 of $250 left — 0% used,
-        // with the exact value label and footnote the report carries.
+        // The real 2026-10-26 payload shape: $250 of $250 left — 0% used.
+        // Built exactly like Cursor's included credits: the remaining dollars
+        // are the headline the tray, GNOME and KDE draw, the bar meters the
+        // used share, and the caption carries the spend and the expiry.
         let snap = claude_snapshot_with_credits(
             Some(CloudCredits {
                 limit: Cents(25000),
@@ -3256,7 +3252,8 @@ mod tests {
             }),
             None,
         );
-        let sections = sections_for(&ready(snap), now(), 5);
+        let tab = ready(snap);
+        let sections = sections_for(&tab, now(), 5);
         let metric = sections
             .iter()
             .find_map(|s| match s {
@@ -3275,11 +3272,31 @@ mod tests {
             .expect("a cloud session credits metric under the Claude account");
         assert_eq!(metric.0, 0);
         assert_eq!(metric.1, severity_for(0));
-        assert_eq!(metric.2, "$250.00 left of $250.00");
-        // The footnote carries the expiry and nothing else. The exact date
-        // is local-timezone output, so the shape is pinned, not the zone.
-        assert!(metric.3.starts_with("expires "), "{:?}", metric.3);
+        // The value is the money figure itself, not a percentage readout.
+        assert_eq!(metric.2, "$250.00");
+        // The caption reads like the included credits: spend first, then the
+        // expiry. The date is local-timezone output, so the shape is pinned,
+        // not the zone.
+        assert!(
+            metric
+                .3
+                .starts_with("$0.00 of $250.00 used (0%) · expires "),
+            "{:?}",
+            metric.3
+        );
         assert!(!metric.3.contains("locked"), "{:?}", metric.3);
+        // The report projection names the value as the headline — that is
+        // what the popover model keys its headlineLabel on — and there is
+        // no reset instant behind the expiry.
+        let with_meta = sections_with_metadata_for(&tab, now(), 5);
+        let projected = with_meta
+            .iter()
+            .find(|p| {
+                matches!(&p.section, Section::Metric { label, .. } if label == "Cloud session credits")
+            })
+            .expect("the metric in the projection");
+        assert_eq!(projected.headline, MetricHeadline::Value);
+        assert!(projected.reset_at.is_none());
     }
 
     #[test]
@@ -3312,7 +3329,20 @@ mod tests {
             .expect("a cloud session credits metric");
         assert_eq!(metric.0, 40);
         assert_eq!(metric.1, severity_for(40));
-        assert_eq!(metric.2, "$150.00 left of $250.00");
+        // Remaining dollars on the row; the used share and spend in the bar
+        // and caption, exactly as the included credits read.
+        assert_eq!(metric.2, "$150.00");
+        let footnote = sections
+            .iter()
+            .find_map(|s| match s {
+                Section::Metric {
+                    label, footnote, ..
+                } if label == "Cloud session credits" => Some(footnote.clone()),
+                _ => None,
+            })
+            .expect("the footnote");
+        // No expiry was reported, so the caption stops at the spend.
+        assert_eq!(footnote, "$100.00 of $250.00 used (40%)");
     }
 
     #[test]
@@ -3337,7 +3367,9 @@ mod tests {
                 _ => None,
             })
             .expect("a cloud session credits metric");
-        assert_eq!(footnote, "locked");
+        // No expiry clause, so the lock appends straight onto the spend
+        // caption with its own separator — never an empty or dangling one.
+        assert_eq!(footnote, "$0.00 of $250.00 used (0%) · locked");
     }
 
     #[test]

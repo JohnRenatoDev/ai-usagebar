@@ -13,7 +13,11 @@ use crate::usage::{
 };
 
 /// Top-level response from `GET /api/oauth/usage`.
-#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
+///
+/// No `PartialEq`: `iguana_necktie` and `spend` are raw JSON (`RawValue`
+/// has no equality), and the snapshot — the value frontends compare —
+/// carries the equality that matters.
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct UsageResponse {
     #[serde(default)]
     pub five_hour: Option<Window>,
@@ -35,16 +39,19 @@ pub struct UsageResponse {
     #[serde(default)]
     pub cedar_ember: Option<ResetGrantsBlock>,
     /// Cloud session credits (the money Claude Code's cloud sessions draw
-    /// from). Absent for plans without the grant. Like every block here,
-    /// drift degrades to `None` for the block, never to a failed response.
-    #[serde(default, deserialize_with = "de_optional_object")]
-    pub iguana_necktie: Option<CloudCreditsBlock>,
-    /// The prepaid usage-credit state. Only `balance` and `auto_reload` are
-    /// read — as raw JSON, because the filled-in shape of `balance` has
-    /// never been observed and is interpreted after the fact — and the rest
-    /// of the block is not read at all in this slice.
-    #[serde(default, deserialize_with = "de_optional_object")]
-    pub spend: Option<SpendBlock>,
+    /// from). Absent for plans without the grant. Captured as raw JSON and
+    /// interpreted after the fact, so a value the parser itself cannot
+    /// materialize (a `1e400` overflows every number type) degrades to
+    /// `None` for the block alone — like every block here, drift never
+    /// fails the response.
+    #[serde(default)]
+    pub iguana_necktie: Option<Box<serde_json::value::RawValue>>,
+    /// The prepaid usage-credit state. Captured raw for the same reason
+    /// `iguana_necktie` is: the filled-in shape of `balance` has never been
+    /// observed and is interpreted after the fact, and a number the parser
+    /// cannot materialize must cost the block, not the response.
+    #[serde(default)]
+    pub spend: Option<Box<serde_json::value::RawValue>>,
 }
 
 /// The `cedar_ember` block. Every field is optional because the endpoint
@@ -159,10 +166,14 @@ pub struct ExtraUsageBlock {
 /// `used_dollars` are not lifted into the snapshot and are not read here.
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 pub struct CloudCreditsBlock {
-    #[serde(default, deserialize_with = "de_opt_finite_f64")]
-    pub limit_dollars: Option<f64>,
-    #[serde(default, deserialize_with = "de_opt_finite_f64")]
-    pub remaining_dollars: Option<f64>,
+    /// Parsed as the raw JSON number, not as an `f64`: the conversion to
+    /// cents is exact integer arithmetic (`dollars_to_cents`), and a number
+    /// the parser cannot materialize at all fails this re-parse, degrading
+    /// the block rather than the response.
+    #[serde(default, deserialize_with = "de_opt_number")]
+    pub limit_dollars: Option<serde_json::Number>,
+    #[serde(default, deserialize_with = "de_opt_number")]
+    pub remaining_dollars: Option<serde_json::Number>,
     /// RFC 3339 on the wire; the snapshot keeps `None` when it does not parse.
     #[serde(default, deserialize_with = "de_opt_plain_string")]
     pub resets_at: Option<String>,
@@ -184,43 +195,84 @@ pub struct SpendBlock {
     pub auto_reload: Option<serde_json::Value>,
 }
 
-/// A new, undocumented block: absent and null are the normal answer, and a
-/// block of the wrong type degrades to `None` rather than failing the whole
-/// response. Failing would be worse than looking quiet — the fetch caches
-/// the body before parsing, so a rejected response evicts the last good
-/// payload and leaves a persistent ⚠ on the bar over a block the account may
-/// not even have.
-fn de_optional_object<'de, D, T>(d: D) -> std::result::Result<Option<T>, D::Error>
+/// Re-parse a raw-captured block into its typed form, in two passes.
+///
+/// The first pass is to `Value` — this is where a number the parser cannot
+/// materialize (`1e400`) fails, costing only the block. The second accepts
+/// only an object, because an all-`#[serde(default)]` struct also
+/// deserializes from a *sequence*, filling its fields positionally: without
+/// the gate, `[1, 2]` would read as `limit_dollars: 1, remaining_dollars: 2`,
+/// the fabrication the drift discipline exists to prevent.
+fn raw_object_block<T>(raw: &serde_json::value::RawValue) -> Option<T>
 where
-    D: serde::Deserializer<'de>,
     T: serde::de::DeserializeOwned,
 {
-    let v = serde_json::Value::deserialize(d)?;
+    let v = serde_json::from_str::<serde_json::Value>(raw.get()).ok()?;
     match v {
-        serde_json::Value::Null => Ok(None),
-        serde_json::Value::Object(_) => serde_json::from_value::<T>(v)
-            .map(Some)
-            .map_err(serde::de::Error::custom),
-        _ => Ok(None),
+        serde_json::Value::Object(_) => serde_json::from_value::<T>(v).ok(),
+        _ => None,
     }
 }
 
-/// A dollars field that may be absent, null, or the wrong type: each
-/// degradation is `None` for that field alone. Non-finite numbers are
-/// excluded as well — `f64::NAN as i64` is silently `0` downstream, the
-/// fabricated number this gate exists to prevent.
-fn de_opt_finite_f64<'de, D>(d: D) -> std::result::Result<Option<f64>, D::Error>
+/// A raw JSON number that may be absent, null, or the wrong type: each
+/// degradation is `None` for that field alone. The number is handed on
+/// unconverted — the finite/range discipline lives in `dollars_to_cents`,
+/// in exact arithmetic, where a float round-trip could not prove it.
+fn de_opt_number<'de, D>(d: D) -> std::result::Result<Option<serde_json::Number>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     match serde_json::Value::deserialize(d)? {
         serde_json::Value::Null => Ok(None),
-        serde_json::Value::Number(n) => match n.as_f64() {
-            Some(f) if f.is_finite() => Ok(Some(f)),
-            _ => Ok(None),
-        },
+        serde_json::Value::Number(n) => Ok(Some(n)),
         _ => Ok(None),
     }
+}
+
+/// Dollars on the wire → whole cents in exact arithmetic. One function for
+/// `limit_dollars` and `remaining_dollars` so the two cannot drift.
+///
+/// The size gate runs on the *value*, not the notation: the parser's own
+/// text for `1e14` carries no `e` (it prints `1000000000000000`), so a
+/// notation-only check would let a $100-trillion "limit" through as a
+/// confident figure. Past 1e13 dollars the number is beyond any grant this
+/// endpoint states, and 1e13 keeps `* 100` far inside i64
+/// (1e15 << 9.2e18), so the scientific-notation branch cannot overflow.
+///
+/// The plain-decimal path splits integer and fractional parts and works in
+/// integer arithmetic: `(f64 * 100.0).round()` loses monetary ties, because
+/// the product is binary (1.005 dollars is 100.5 binary cents, which rounds
+/// to 100 instead of the 101 the money says). The first two fractional
+/// digits are exact; the third decides the tie, half rounding up.
+///
+/// Negative, non-finite, or past the gate: `None`. A missing figure is never
+/// a fabricated one.
+fn dollars_to_cents(n: &serde_json::Number) -> Option<i64> {
+    let v = n.as_f64()?;
+    if !v.is_finite() || v < 0.0 || v > 1e13 {
+        return None;
+    }
+    let text = n.to_string();
+    if text.contains(['e', 'E']) {
+        return Some((v * 100.0).round() as i64);
+    }
+    let (int_part, frac_part) = match text.split_once('.') {
+        Some((i, f)) => (i, f),
+        None => (text.as_str(), ""),
+    };
+    if int_part.is_empty() || int_part.bytes().any(|b| !b.is_ascii_digit()) {
+        return None;
+    }
+    let mut cents: i64 = 0;
+    for b in int_part.bytes() {
+        cents = cents.checked_mul(10)?.checked_add(i64::from(b - b'0'))?;
+    }
+    cents = cents.checked_mul(100)?;
+    let digits: Vec<u8> = frac_part.bytes().filter(|b| b.is_ascii_digit()).collect();
+    let first = i64::from(digits.first().copied().unwrap_or(b'0') - b'0');
+    let second = i64::from(digits.get(1).copied().unwrap_or(b'0') - b'0');
+    let half_up = i64::from(digits.get(2).is_some_and(|d| *d >= b'5'));
+    cents.checked_add(first * 10 + second + half_up)
 }
 
 /// A string field that may be absent, null, or the wrong type: each
@@ -445,9 +497,16 @@ impl UsageResponse {
             })
             .collect();
 
-        let cloud_credits = cloud_credits_from(self.iguana_necktie);
-        let usage_credits = usage_credits_from(self.spend);
-
+        let cloud_credits = self
+            .iguana_necktie
+            .as_ref()
+            .and_then(|raw| raw_object_block::<CloudCreditsBlock>(raw))
+            .and_then(cloud_credits_from);
+        let usage_credits = self
+            .spend
+            .as_ref()
+            .and_then(|raw| raw_object_block::<SpendBlock>(raw))
+            .and_then(usage_credits_from);
         AnthropicSnapshot {
             plan: plan_label,
             session,
@@ -470,18 +529,20 @@ impl UsageResponse {
 /// is deliberately not kept — the panel meters the remaining against the
 /// limit, and storing a third money field the renderers would never read is
 /// where copies drift.
-fn cloud_credits_from(block: Option<CloudCreditsBlock>) -> Option<CloudCredits> {
-    let block = block?;
-    let limit = block.limit_dollars?;
-    let remaining = block.remaining_dollars?;
-    if !(limit.is_finite() && limit > 0.0) || !(remaining.is_finite() && remaining >= 0.0) {
+fn cloud_credits_from(block: CloudCreditsBlock) -> Option<CloudCredits> {
+    // Dollars → whole cents at the boundary: the snapshot derives `Eq`, so
+    // the money lives as integer cents, not the float the wire sent.
+    let limit = dollars_to_cents(block.limit_dollars.as_ref()?)?;
+    let remaining = dollars_to_cents(block.remaining_dollars.as_ref()?)?;
+    // The gate runs on the *converted* cents: a positive dollar limit that
+    // the conversion rounds to zero (e.g. 0.004) would divide by zero
+    // downstream and report a confident 0% meter for a fully spent grant.
+    if limit <= 0 || remaining < 0 {
         return None;
     }
     Some(CloudCredits {
-        // Dollars → whole cents at the boundary: the snapshot derives `Eq`,
-        // so the money lives as integer cents, not the float the wire sent.
-        limit: Cents((limit * 100.0).round() as i64),
-        remaining: Cents((remaining * 100.0).round() as i64),
+        limit: Cents(limit),
+        remaining: Cents(remaining),
         expires_at: block
             .resets_at
             .as_deref()
@@ -498,18 +559,23 @@ fn cloud_credits_from(block: Option<CloudCreditsBlock>) -> Option<CloudCredits> 
 /// is a real #30 wire value), and rejecting `1500.0` would fail over a
 /// value that is unambiguous.
 fn json_int(v: &serde_json::Value) -> Option<i64> {
-    match v {
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Some(i)
-            } else {
-                n.as_f64()
-                    .filter(|f| f.is_finite() && f.fract() == 0.0)
-                    .map(|f| f as i64)
-            }
-        }
-        _ => None,
+    let n = v.as_number()?;
+    // The integer is the value it claims to be. A `u64` count only passes
+    // when it also fits `i64` — `u64::MAX` converted to cents would
+    // silently wrap to a negative balance.
+    if let Some(i) = n.as_i64() {
+        return Some(i);
     }
+    if let Some(u) = n.as_u64() {
+        return i64::try_from(u).ok();
+    }
+    // This endpoint floats its numbers (`used_credits: 14157.0` is a real
+    // #30 wire value), so an integral float is the same count — but only
+    // while `f64` can still represent every integer it holds (|v| ≤ 2^53);
+    // beyond that the "integer" has already lost digits.
+    n.as_f64()
+        .filter(|f| f.is_finite() && f.fract() == 0.0 && f.abs() <= 2_f64.powi(53))
+        .map(|f| f as i64)
 }
 
 /// Interpret the raw `spend` block into [`UsageCredits`].
@@ -519,8 +585,7 @@ fn json_int(v: &serde_json::Value) -> Option<i64> {
 /// fact, which of the two plausible shapes it is. Anything else is `None`:
 /// a balance the response does not report in a shape we can express is not
 /// shown — never as `$0.00`.
-fn usage_credits_from(spend: Option<SpendBlock>) -> Option<UsageCredits> {
-    let spend = spend?;
+fn usage_credits_from(spend: SpendBlock) -> Option<UsageCredits> {
     let balance_value = spend.balance?;
     let balance = balance_value.as_object()?;
     let currency = balance
@@ -551,16 +616,22 @@ fn usage_credits_from(spend: Option<SpendBlock>) -> Option<UsageCredits> {
     });
     let (amount, decimal_places, currency) = shaped?;
 
-    // `auto_reload`: the top-level `spend.auto_reload.enabled` when it is a
-    // boolean; otherwise the balance's own `auto_reload_settings.enabled`
-    // (the richer shape carries it) when it is a boolean; otherwise not
-    // reported — `None`, never a guessed "off".
+    // `auto_reload`: each candidate is a boolean or it is not a signal at
+    // all. The top-level `spend.auto_reload.enabled` wins when it is one;
+    // a non-boolean there (the richer shape reports a word) falls through
+    // to the balance's own `auto_reload_settings.enabled` when that is a
+    // boolean; otherwise not reported — `None`, never a guessed "off".
     let auto_reload = spend
         .auto_reload
         .as_ref()
         .and_then(|v| v.get("enabled"))
-        .or_else(|| balance.get("auto_reload_settings")?.get("enabled"))
-        .and_then(|v| v.as_bool());
+        .and_then(|v| v.as_bool())
+        .or_else(|| {
+            balance
+                .get("auto_reload_settings")
+                .and_then(|v| v.get("enabled"))
+                .and_then(|v| v.as_bool())
+        });
 
     Some(UsageCredits {
         balance: Cents(amount),
@@ -1369,5 +1440,116 @@ mod tests {
             serde_json::from_str(r#"{"five_hour": {"utilization": 5}, "spend": "hostile"}"#)
                 .unwrap();
         assert_eq!(resp.into_snapshot("Pro".into()).session.utilization_pct, 5);
+    }
+
+    // ----------------------------------------------------------------
+    // Numbers the parser cannot materialize degrade the block, not the
+    // response.
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn a_number_the_parser_cannot_materialize_loses_only_its_block() {
+        // 1e400 overflows every materialized number type serde_json has.
+        // Captured raw, it costs its own block and nothing else: the five
+        // hour window and the rest of the answer still parse.
+        let raw = r#"{"five_hour":{"utilization":5},"iguana_necktie":{"limit_dollars":1e400,"remaining_dollars":1},"spend":{"balance":{"amount_minor":1e400,"currency":"USD","exponent":2}}}"#;
+        let resp: UsageResponse =
+            serde_json::from_str(raw).unwrap_or_else(|e| panic!("{raw}: {e}"));
+        let snap = resp.into_snapshot("Pro".into());
+        assert_eq!(snap.session.utilization_pct, 5);
+        assert!(snap.cloud_credits.is_none(), "1e400 dollars is not a limit");
+        assert!(
+            snap.usage_credits.is_none(),
+            "1e400 minor units is not a balance"
+        );
+    }
+
+    #[test]
+    fn a_huge_finite_float_inside_a_credit_block_degrades_the_block_only() {
+        // 1e300 is finite but far past the i64 cents range: the block's
+        // re-parse rejects it and the rest of the answer stands.
+        let raw = r#"{"five_hour":{"utilization":5},"iguana_necktie":{"limit_dollars":1e300,"remaining_dollars":1}}"#;
+        let resp: UsageResponse = serde_json::from_str(raw).unwrap();
+        let snap = resp.into_snapshot("Pro".into());
+        assert_eq!(snap.session.utilization_pct, 5);
+        assert!(snap.cloud_credits.is_none());
+    }
+
+    // ----------------------------------------------------------------
+    // Dollars → cents in exact arithmetic, one function.
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn dollars_to_cents_rounds_monetary_ties_up_in_exact_arithmetic() {
+        // (f64 * 100.0).round() cannot prove these: 1.005 dollars is 100.5
+        // binary cents, which rounds to 100, not the 101 the money says.
+        fn cents(text: &str) -> i64 {
+            let n: serde_json::Number = serde_json::from_str(text).unwrap();
+            dollars_to_cents(&n).unwrap()
+        }
+        assert_eq!(cents("1.005"), 101);
+        assert_eq!(cents("0.004"), 0);
+        assert_eq!(cents("149.995"), 15000);
+        assert_eq!(cents("250"), 25000);
+        assert_eq!(cents("0.005"), 1);
+        assert_eq!(cents("19.99"), 1999);
+    }
+
+    #[test]
+    fn dollars_to_cents_rejects_what_cents_cannot_hold() {
+        fn opt(text: &str) -> Option<i64> {
+            serde_json::from_str::<serde_json::Number>(text)
+                .ok()
+                .and_then(|n| dollars_to_cents(&n))
+        }
+        // A negative limit is drift, not a balance the meter can pace.
+        assert_eq!(opt("-5"), None);
+        // u64::MAX dollars overflows the integer build of the cents.
+        assert_eq!(opt("18446744073709551615"), None);
+        // Past the size gate: 1e13 dollars is 1e15 cents, still inside i64;
+        // 1e14 dollars is rejected by the gate, not by an overflow.
+        assert_eq!(opt("1e13"), Some(1_000_000_000_000_000));
+        assert_eq!(opt("1e14"), None);
+    }
+
+    #[test]
+    fn a_positive_dollar_limit_that_rounds_to_zero_cents_does_not_stand() {
+        // 0.004 dollars is 0.4 cents: converted, it rounds to zero, and a
+        // zero-cent limit must not stand — the meter would divide by zero
+        // and read a confident 0% for a fully spent grant.
+        let raw = r#"{"iguana_necktie":{"limit_dollars":0.004,"remaining_dollars":0.001,"resets_at":"2026-11-05T07:59:00Z"}}"#;
+        let resp: UsageResponse = serde_json::from_str(raw).unwrap();
+        assert!(
+            resp.into_snapshot("Pro".into()).cloud_credits.is_none(),
+            "a limit the conversion rounds to zero is absent, not a 0% meter"
+        );
+    }
+
+    #[test]
+    fn json_int_rejects_integers_past_its_own_range() {
+        // u64::MAX is a legal JSON number and a legal minor-unit count in
+        // principle — converting it to i64 cents would silently wrap to a
+        // negative balance.
+        assert_eq!(json_int(&serde_json::json!(18446744073709551615u64)), None);
+        // The integral float the endpoint really sends still passes.
+        assert_eq!(json_int(&serde_json::json!(1500.0)), Some(1500));
+    }
+
+    // ----------------------------------------------------------------
+    // auto_reload falls through a non-boolean primary.
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn a_non_boolean_primary_auto_reload_falls_to_the_balance_setting() {
+        // The top level reported a word, not a boolean: that is not a
+        // signal, and the balance's own setting still stands.
+        let raw = r#"{"spend":{"balance":{"amount":750,"currency":"USD","auto_reload_settings":{"enabled":true}},"auto_reload":{"enabled":"unknown"}}}"#;
+        let resp: UsageResponse = serde_json::from_str(raw).unwrap();
+        let snap = resp.into_snapshot("Pro".into());
+        let credits = snap
+            .usage_credits
+            .expect("the balance is still shape (b) with a USD amount");
+        assert_eq!(credits.balance, Cents(750));
+        assert_eq!(credits.auto_reload, Some(true));
     }
 }

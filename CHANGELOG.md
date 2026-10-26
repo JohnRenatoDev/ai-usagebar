@@ -7,8 +7,8 @@
   from and, when usage credits hold a prepaid balance, that balance and
   whether auto-reload is on. The tray, the TUI, `usage --json` and the
   Waybar tooltip now list them under the account, e.g. `Cloud session
-  credits — $250.00 left of $250.00, expires Nov 5`. A balance the
-  response does not report is not shown, never as `$0`.
+  credits — $250.00, $0.00 of $250.00 used, expires Nov 5`. A balance
+  the response does not report is not shown, never as `$0`.
 
 ### Fixed
 
