@@ -112,6 +112,31 @@ pub fn build_placeholders(
     ])
 }
 
+/// The Credits block's balance line, shared by the Waybar tooltip and the
+/// TUI: `unlimited` stands alone, a numeric balance is a count of Codex
+/// credits so it reads `62500 credits`, and a non-numeric string is shown
+/// as the vendor sent it, without a unit it does not have. The deserializer
+/// (`types.rs`) normalizes every numeric input to a bare count, so this one
+/// place decides "is it a count?" and the two renderers cannot disagree.
+pub(crate) fn credit_balance_label(c: &crate::usage::OpenAiCredits) -> String {
+    if c.unlimited {
+        return "unlimited".into();
+    }
+    if credit_balance_is_count(&c.balance) {
+        return format!("{} credits", c.balance);
+    }
+    c.balance.clone()
+}
+
+/// Whether a stored balance is a count of credits. The deserializer turns
+/// every numeric wire value into a bare number ("62500", "12.5"), so this is
+/// true exactly for those; a string that still does not parse as a finite
+/// f64 ("$2.50", "n/a") is vendor text, and a non-finite parse ("NaN", "inf")
+/// is not a count a user can read either.
+fn credit_balance_is_count(balance: &str) -> bool {
+    balance.trim().parse::<f64>().is_ok_and(f64::is_finite)
+}
+
 pub fn severity(snap: &OpenAiSnapshot) -> PaceSeverity {
     let windows = [
         snap.session.as_ref(),
@@ -291,11 +316,7 @@ fn render_tooltip(
     if let Some(c) = snap.credits.as_ref() {
         lines.push(TooltipLine::Body("".into()));
         lines.push(TooltipLine::Sep);
-        let label = if c.unlimited {
-            "unlimited".to_string()
-        } else {
-            c.balance.clone()
-        };
+        let label = credit_balance_label(c);
         lines.push(TooltipLine::Body(format!(
             " <span foreground='{fg}'>  󰄑  Credits</span>"
         )));
@@ -303,16 +324,6 @@ fn render_tooltip(
             " <span foreground='{dim}'>     balance: {b}</span>",
             b = escape(&label)
         )));
-        if let Some((lo, hi)) = c.approx_local_messages {
-            lines.push(TooltipLine::Body(format!(
-                " <span foreground='{dim}'>     ~ {lo}-{hi} local messages</span>"
-            )));
-        }
-        if let Some((lo, hi)) = c.approx_cloud_messages {
-            lines.push(TooltipLine::Body(format!(
-                " <span foreground='{dim}'>     ~ {lo}-{hi} cloud messages</span>"
-            )));
-        }
     }
 
     if let Some(resets) = &snap.reset_credits {
@@ -506,7 +517,7 @@ mod tests {
     fn tooltip_includes_credits_block_when_present() {
         let mut s = sample();
         s.credits = Some(crate::usage::OpenAiCredits {
-            balance: "$5.00".into(),
+            balance: "62500".into(),
             has_credits: true,
             unlimited: false,
             approx_local_messages: Some((100, 200)),
@@ -514,9 +525,84 @@ mod tests {
         });
         let out = render(&oc(s.clone()), &s, &Theme::default(), &opts(), Utc::now());
         assert!(out.tooltip.contains("Credits"));
-        assert!(out.tooltip.contains("$5.00"));
-        assert!(out.tooltip.contains("100-200 local messages"));
-        assert!(out.tooltip.contains("30-50 cloud messages"));
+        // The balance is a count of Codex credits, not dollars: it reads as
+        // a bare number followed by `credits`.
+        assert!(
+            out.tooltip.contains("balance: 62500 credits"),
+            "{}",
+            out.tooltip
+        );
+        assert!(!out.tooltip.contains("$"), "{}", out.tooltip);
+        // The estimated message counts are no longer listed under the block,
+        // even though the response reports both ranges.
+        assert!(!out.tooltip.contains("local messages"), "{}", out.tooltip);
+        assert!(!out.tooltip.contains("cloud messages"), "{}", out.tooltip);
+
+        // The placeholder carries the bare count: no `credits`, no `$`.
+        let values = build_placeholders(&s, &opts(), Utc::now());
+        assert_eq!(values["oai_credit_balance"], "62500");
+        // The message-count placeholders are a public format contract and
+        // still carry the ranges.
+        assert_eq!(values["oai_local_msgs"], "100-200");
+        assert_eq!(values["oai_cloud_msgs"], "30-50");
+    }
+
+    /// The decision behind the omission: with both ranges reported, no line
+    /// of the tooltip may carry a message estimate.
+    #[test]
+    fn tooltip_omits_local_and_cloud_message_lines_when_both_ranges_are_reported() {
+        let mut s = sample();
+        s.credits = Some(crate::usage::OpenAiCredits {
+            balance: "62500".into(),
+            has_credits: true,
+            unlimited: false,
+            approx_local_messages: Some((100, 200)),
+            approx_cloud_messages: Some((30, 50)),
+        });
+        let out = render(&oc(s.clone()), &s, &Theme::default(), &opts(), Utc::now());
+        assert!(
+            out.tooltip.contains("balance: 62500 credits"),
+            "{}",
+            out.tooltip
+        );
+        assert!(!out.tooltip.contains("local messages"), "{}", out.tooltip);
+        assert!(!out.tooltip.contains("cloud messages"), "{}", out.tooltip);
+    }
+
+    /// A balance the deserializer could not read as a number is vendor text, so
+    /// it is shown as sent, without a unit it does not have.
+    #[test]
+    fn tooltip_keeps_non_numeric_balance_text_without_credits() {
+        let mut s = sample();
+        s.credits = Some(crate::usage::OpenAiCredits {
+            balance: "$5.00".into(),
+            has_credits: true,
+            unlimited: false,
+            approx_local_messages: None,
+            approx_cloud_messages: None,
+        });
+        let out = render(&oc(s.clone()), &s, &Theme::default(), &opts(), Utc::now());
+        assert!(out.tooltip.contains("balance: $5.00"), "{}", out.tooltip);
+        assert!(!out.tooltip.contains("$5.00 credits"), "{}", out.tooltip);
+    }
+
+    #[test]
+    fn tooltip_shows_unlimited_balance_without_a_count() {
+        let mut s = sample();
+        s.credits = Some(crate::usage::OpenAiCredits {
+            balance: "".into(),
+            has_credits: false,
+            unlimited: true,
+            approx_local_messages: None,
+            approx_cloud_messages: None,
+        });
+        let out = render(&oc(s.clone()), &s, &Theme::default(), &opts(), Utc::now());
+        assert!(
+            out.tooltip.contains("balance: unlimited"),
+            "{}",
+            out.tooltip
+        );
+        assert!(!out.tooltip.contains("credits"), "{}", out.tooltip);
     }
 
     #[test]
