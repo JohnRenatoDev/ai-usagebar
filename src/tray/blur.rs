@@ -48,6 +48,21 @@ pub(crate) fn verdict(blur: Blur) -> Verdict {
     }
 }
 
+/// Whether a focus loss closes the macOS popover. AppKit reports the loss but not its cause, so
+/// the host only tells whether a mouse button is down. A click elsewhere closes it. An app that
+/// brought itself forward with no click (a Teams call, a system alert) or a keyboard switch
+/// leaves it open: the host's global mouse-down monitor closes it on the next click outside,
+/// which macOS sends no second focus loss for. The guard still swallows the bounce of our own
+/// show and focus.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn macos_verdict(button_down: bool, guarded: bool) -> Verdict {
+    match (button_down, guarded) {
+        (false, _) => Verdict::Keep("no click: another app activated itself"),
+        (true, true) => Verdict::Keep("guarded: our own show/focus"),
+        (true, false) => Verdict::Hide,
+    }
+}
+
 /// How long after a click-outside hide the tray icon's mouse-up still belongs to it.
 pub(crate) const TOGGLE_WINDOW_MS: u128 = 600;
 
@@ -89,6 +104,23 @@ mod tests {
             foreground,
             guarded,
         }
+    }
+
+    #[test]
+    fn macos_closes_on_a_click_but_not_when_an_app_activates_itself() {
+        assert_eq!(macos_verdict(true, false), Verdict::Hide);
+        assert_eq!(
+            macos_verdict(false, false),
+            Verdict::Keep("no click: another app activated itself")
+        );
+        assert_eq!(
+            macos_verdict(false, true),
+            Verdict::Keep("no click: another app activated itself")
+        );
+        assert_eq!(
+            macos_verdict(true, true),
+            Verdict::Keep("guarded: our own show/focus")
+        );
     }
 
     #[test]

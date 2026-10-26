@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -15,11 +16,11 @@ use objc2::{AnyThread, Message};
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
     NSApplication, NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSColor,
-    NSCompositingOperation, NSEvent, NSFont, NSFontAttributeName, NSFontWeightSemibold,
-    NSForegroundColorAttributeName, NSGlassEffectView, NSGlassEffectViewStyle, NSImage,
-    NSImageScaling, NSScreen, NSStringDrawing, NSView, NSVisualEffectBlendingMode,
-    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
-    NSWindowOrderingMode,
+    NSCompositingOperation, NSEvent, NSEventMask, NSFont, NSFontAttributeName,
+    NSFontWeightSemibold, NSForegroundColorAttributeName, NSGlassEffectView,
+    NSGlassEffectViewStyle, NSImage, NSImageScaling, NSScreen, NSStringDrawing, NSView,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSWindow, NSWindowOrderingMode,
 };
 use objc2_foundation::{
     MainThreadMarker, NSAttributedStringKey, NSData, NSDictionary, NSPoint, NSRect, NSSize,
@@ -77,6 +78,8 @@ enum UserEvent {
     Ipc(String),
     Report(Value),
     FocusPopover,
+    /// A mouse press in another app while the popover is open.
+    ClickOutside,
     Hotkey,
     Facts,
     /// An update is ready: start the verified exe and quit, or, with `None`, just quit because
@@ -157,6 +160,8 @@ struct TrayState {
     js_ready: bool,
     popover_open: bool,
     blur_guard_until: Option<Instant>,
+    /// The global mouse-down monitor, installed while the popover is open.
+    outside_clicks: Option<Retained<AnyObject>>,
     /// Cocoa (points, y-up) location of the last click / shortcut, used to
     /// keep the popover on that screen instead of tao's primary-display space.
     last_anchor: Option<(f64, f64)>,
@@ -285,6 +290,7 @@ fn run_loop() -> Result<(), String> {
         js_ready: false,
         popover_open: false,
         blur_guard_until: None,
+        outside_clicks: None,
         last_anchor: None,
         popover_height: WINDOW_HEIGHT,
         theme,
@@ -329,11 +335,19 @@ fn run_loop() -> Result<(), String> {
                     state.window.set_focus();
                 }
             }
+            Event::UserEvent(UserEvent::ClickOutside) => {
+                if state.popover_open {
+                    hide_popover(&mut state);
+                }
+            }
             Event::WindowEvent {
                 event: WindowEvent::Focused(false),
                 ..
             } => {
-                if !blur_guarded(&state) && state.popover_open {
+                if state.popover_open
+                    && super::blur::macos_verdict(mouse_button_down(), blur_guarded(&state))
+                        == super::blur::Verdict::Hide
+                {
                     hide_popover(&mut state);
                 }
             }
@@ -1309,6 +1323,7 @@ fn show_popover(state: &mut TrayState) {
     guard_blur(state);
     state.window.set_visible(true);
     state.popover_open = true;
+    watch_outside_clicks(state);
     if let Some(webview) = state.webview.as_ref() {
         let _ = webview.evaluate_script(&format!(
             "window.__AIUB_LOCKCLICKS__ && window.__AIUB_LOCKCLICKS__({CLICK_LOCK_MS})"
@@ -1340,6 +1355,7 @@ fn guard_blur(state: &mut TrayState) {
 fn hide_popover(state: &mut TrayState) {
     state.window.set_visible(false);
     state.popover_open = false;
+    stop_watching_outside_clicks(state);
     // Closing lands the next open on the dashboard, so a screen choice still
     // waiting for `ready` is dropped too.
     state.pending_menu_action = None;
@@ -1347,6 +1363,36 @@ fn hide_popover(state: &mut TrayState) {
         let _ =
             webview.evaluate_script("window.__AIUB_VISIBLE__ && window.__AIUB_VISIBLE__(false)");
     }
+}
+
+/// Close on a click in another app. A focus loss alone does not say whether the user clicked
+/// elsewhere or an app brought itself forward, and once the popover has lost focus macOS sends
+/// no second loss for the click that should close it. A global monitor only receives events
+/// meant for other processes, so a click on the popover, the status item or one of our menus
+/// never arrives here.
+fn watch_outside_clicks(state: &mut TrayState) {
+    if state.outside_clicks.is_some() {
+        return;
+    }
+    let proxy = state.proxy.clone();
+    let block = RcBlock::new(move |_event: NonNull<NSEvent>| {
+        let _ = proxy.send_event(UserEvent::ClickOutside);
+    });
+    let mask =
+        NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown | NSEventMask::OtherMouseDown;
+    state.outside_clicks = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(mask, &block);
+}
+
+fn stop_watching_outside_clicks(state: &mut TrayState) {
+    if let Some(monitor) = state.outside_clicks.take() {
+        // SAFETY: `monitor` is the object `addGlobalMonitorForEventsMatchingMask:handler:`
+        // returned, which is exactly what `removeMonitor:` takes.
+        unsafe { NSEvent::removeMonitor(&monitor) };
+    }
+}
+
+fn mouse_button_down() -> bool {
+    NSEvent::pressedMouseButtons() != 0
 }
 
 fn toggle_popover_from_keyboard(state: &mut TrayState) {

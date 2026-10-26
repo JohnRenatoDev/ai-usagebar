@@ -44,8 +44,8 @@ mod updates;
 // run on every CI job; only the Windows host calls it.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod placement;
-// When the Windows popover closes on a blur or a press outside it. Pure decisions, compiled
-// everywhere like `placement`; only the Windows host calls them.
+// When the popover closes on a blur or a press outside it. Pure decisions, compiled everywhere
+// like `placement`; the Windows host calls most of them, the macOS host only `macos_verdict`.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod blur;
 // Where the Windows popover's WebView2 profile lives, and the one-time adoption of the old one.
