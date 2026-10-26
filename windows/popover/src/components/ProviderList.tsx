@@ -120,7 +120,10 @@ function ProviderRow({ row, handle, off = false, onOpen, onToggle }: ProviderRow
       : row.state === "ready" ? m.provider_ready()
         : row.state === "needs" ? row.signIn
           : "";
-  const metrics = !off && row.cards.length >= 1;
+  // A provider that is on but still lacks its credential keeps the hint (and
+  // its action) even once the report brings its error card: "0 metrics" in
+  // its place told nothing and made the hint flash and vanish.
+  const metrics = !off && row.cards.length >= 1 && row.state !== "needs";
   const subtitle = metrics && row.cards.length === 1
     ? metricsCountText(row.cards[0].metrics, language)
     : metrics
