@@ -933,8 +933,12 @@ fn anthropic_sections(
         // a quota), the bar meters the used share, and the caption carries
         // the spend and the expiry. The parse gate guarantees a positive
         // limit, so `cursor_credit_meter` has no zero denominator to guard.
-        let (pct, value, mut footnote) =
+        // The meter clamps the remaining to the limit for its bar and its
+        // spend; the headline is the balance the response reported, so a
+        // remaining above the limit is shown as it is, not cut down to it.
+        let (pct, _, mut footnote) =
             crate::format::cursor_credit_meter(c.remaining.0, c.limit.0, c.expires_at, now);
+        let value = crate::usage::fmt_minor(c.remaining.0, 2, Some("USD"));
         if c.locked {
             // Appended to the caption the meter already built — it never
             // comes back empty, so the separator never dangles.
@@ -3297,6 +3301,35 @@ mod tests {
             .expect("the metric in the projection");
         assert_eq!(projected.headline, MetricHeadline::Value);
         assert!(projected.reset_at.is_none());
+    }
+
+    #[test]
+    fn anthropic_cloud_credits_headline_the_reported_balance_above_the_limit() {
+        // The bar clamps to nothing used; the money stays what was reported.
+        let snap = claude_snapshot_with_credits(
+            Some(CloudCredits {
+                limit: Cents(100),
+                remaining: Cents(200),
+                expires_at: None,
+                locked: false,
+            }),
+            None,
+        );
+        let sections = sections_for(&ready(snap), now(), 5);
+        let (pct, value) = sections
+            .iter()
+            .find_map(|s| match s {
+                Section::Metric {
+                    label,
+                    pct,
+                    value_label,
+                    ..
+                } if label == "Cloud session credits" => Some((*pct, value_label.clone())),
+                _ => None,
+            })
+            .expect("a cloud session credits metric");
+        assert_eq!(pct, 0);
+        assert_eq!(value, "$2.00");
     }
 
     #[test]

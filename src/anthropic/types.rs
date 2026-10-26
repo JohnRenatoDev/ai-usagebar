@@ -252,6 +252,11 @@ fn dollars_to_cents(n: &serde_json::Number) -> Option<i64> {
     if !v.is_finite() || v < 0.0 || v > 1e13 {
         return None;
     }
+    // -0 passes the sign check but prints as "-0.0", which the digit walk
+    // below would reject: an exhausted grant reported as -0 is still $0.00.
+    if v == 0.0 {
+        return Some(0);
+    }
     let text = n.to_string();
     if text.contains(['e', 'E']) {
         return Some((v * 100.0).round() as i64);
@@ -1493,6 +1498,16 @@ mod tests {
         assert_eq!(cents("250"), 25000);
         assert_eq!(cents("0.005"), 1);
         assert_eq!(cents("19.99"), 1999);
+    }
+
+    #[test]
+    fn dollars_to_cents_reads_negative_zero_as_an_exhausted_zero() {
+        for text in ["-0", "-0.0"] {
+            let n: serde_json::Number = serde_json::from_str(text).unwrap();
+            assert_eq!(dollars_to_cents(&n), Some(0), "{text}");
+        }
+        let n: serde_json::Number = serde_json::from_str("-0.01").unwrap();
+        assert_eq!(dollars_to_cents(&n), None);
     }
 
     #[test]
