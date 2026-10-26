@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{Value, json};
 
+use super::payload::{HostFacts, SharedFacts, with_facts};
 use crate::catalog::VendorStatus;
 use crate::vendor::{AuthKind, VendorId};
 
@@ -87,10 +88,24 @@ pub(crate) fn take_due() -> Option<Vec<VendorStatus>> {
 }
 
 /// `{"cmd":"set-provider-enabled","id":"cursor","value":true}`: flip the
-/// provider's `enabled` in config.toml. The slug is validated by
-/// [`crate::config::set_vendor_enabled`], so no other section is reachable.
+/// provider's `enabled` in config.toml, then in the catalog `facts` holds.
+///
+/// The popover's switch shows the host's row, not the click, and a re-read
+/// catalog only reaches it with the next report — after every enabled
+/// provider has been fetched, which takes seconds when one starts `agy` or
+/// waits on the network. Flipping the row here moves the switch on the next
+/// push; the re-read still follows, for `configured` and the sign-in action.
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
-pub(crate) fn set_enabled(value: &Value) -> Result<(), String> {
+pub(crate) fn set_enabled(value: &Value, facts: &SharedFacts) {
+    let written = write_enabled(value);
+    request();
+    with_facts(facts, |f| record_enabled(f, written));
+}
+
+/// The slug is validated by [`crate::config::set_vendor_enabled`], so no
+/// other section is reachable.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+fn write_enabled(value: &Value) -> Result<(&str, bool), String> {
     let (Some(id), Some(enabled)) = (
         value.get("id").and_then(Value::as_str),
         value.get("value").and_then(Value::as_bool),
@@ -99,7 +114,22 @@ pub(crate) fn set_enabled(value: &Value) -> Result<(), String> {
     };
     let path = crate::config::resolved_path()
         .ok_or_else(|| "Could not resolve the config.toml path.".to_string())?;
-    crate::config::set_vendor_enabled(&path, id, enabled).map_err(|error| error.user_message())
+    crate::config::set_vendor_enabled(&path, id, enabled)
+        .map(|()| (id, enabled))
+        .map_err(|error| error.user_message())
+}
+
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+fn record_enabled(facts: &mut HostFacts, written: Result<(&str, bool), String>) {
+    facts.providers_error = match written {
+        Ok((id, enabled)) => {
+            if let Some(row) = facts.providers.iter_mut().find(|row| row.id == id) {
+                row.enabled = enabled;
+            }
+            String::new()
+        }
+        Err(error) => error,
+    };
 }
 
 /// `{"cmd":"sign-in-provider","id":"cursor"}`.
@@ -213,9 +243,8 @@ mod tests {
         assert_eq!(sign_in_for(VendorId::Zai, false), SignIn::Settings);
     }
 
-    #[test]
-    fn rows_carry_every_vendor_with_hint_and_action() {
-        let rows = crate::catalog::statuses_with(
+    fn default_rows() -> Vec<VendorStatus> {
+        crate::catalog::statuses_with(
             &crate::config::Config::default(),
             &crate::catalog::Probes {
                 env_set: &|_| false,
@@ -226,7 +255,12 @@ mod tests {
                 opencode_go_signed_in: &|_| false,
                 cline_signed_in: &|_| false,
             },
-        );
+        )
+    }
+
+    #[test]
+    fn rows_carry_every_vendor_with_hint_and_action() {
+        let rows = default_rows();
         let json = rows_json(&rows, true);
         let list = json.as_array().unwrap();
         assert_eq!(list.len(), VendorId::all().len());
@@ -253,7 +287,31 @@ mod tests {
 
     #[test]
     fn malformed_enable_requests_are_refused_before_touching_config() {
-        assert!(set_enabled(&json!({"id": "cursor"})).is_err());
-        assert!(set_enabled(&json!({"value": true})).is_err());
+        assert!(write_enabled(&json!({"id": "cursor"})).is_err());
+        assert!(write_enabled(&json!({"value": true})).is_err());
+    }
+
+    #[test]
+    fn a_written_switch_moves_its_row_before_any_report() {
+        let mut facts = HostFacts::new("0.0.0", false);
+        facts.providers = default_rows();
+        facts.providers_error = "stale".into();
+        let enabled = |facts: &HostFacts, id: &str| {
+            facts
+                .providers
+                .iter()
+                .find(|row| row.id == id)
+                .unwrap()
+                .enabled
+        };
+        assert!(!enabled(&facts, "cursor"));
+
+        record_enabled(&mut facts, Ok(("cursor", true)));
+        assert!(enabled(&facts, "cursor"));
+        assert_eq!(facts.providers_error, "");
+
+        record_enabled(&mut facts, Err("Config is read-only.".into()));
+        assert!(enabled(&facts, "cursor"), "a failed write leaves the row");
+        assert_eq!(facts.providers_error, "Config is read-only.");
     }
 }

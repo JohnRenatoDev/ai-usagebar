@@ -816,11 +816,7 @@ fn handle_ipc(state: &mut TrayState, body: &str, control_flow: &mut ControlFlow)
             let _ = state.worker.send(WorkerCmd::Refresh);
         }
         "set-provider-enabled" => {
-            let error = super::providers::set_enabled(&value)
-                .err()
-                .unwrap_or_default();
-            super::providers::request();
-            with_facts(&state.facts, |f| f.providers_error = error);
+            super::providers::set_enabled(&value, &state.facts);
             apply_facts(state);
             let _ = state.worker.send(WorkerCmd::Refresh);
         }
