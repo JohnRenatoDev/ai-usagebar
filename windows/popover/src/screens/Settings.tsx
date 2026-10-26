@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import MdiInformationOutline from "~icons/mdi/information-outline";
 import MdiTune from "~icons/mdi/tune-variant";
 import { ScreenCrossLinkRow } from "@/components/Chrome";
-import { ProviderCatalog } from "@/components/ProviderCatalog";
+import { ProviderList } from "@/components/ProviderList";
 import { ShortcutRecorder } from "@/components/ShortcutRecorder";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -13,7 +13,6 @@ import { wheelScrollRef } from "@/lib/wheelScroll";
 import { Hint } from "@/components/Hint";
 import { TruncatedText } from "@/components/TruncatedText";
 import { sendCommand, updateModeLabel, updateStatusLabel } from "../model.js";
-import { Customize } from "./Customize";
 
 export type SettingsTab = "general" | "providers" | "menu" | "preferences" | "alerts";
 
@@ -129,24 +128,23 @@ export function Settings({
         </div>
       ) : null}
       {native && tab === "providers" ? (
-        <div id="settings-panel-providers" role="tabpanel" aria-labelledby="settings-tab-providers" className="flex flex-col gap-[var(--header-card-gap)]">
-          <div className="flex items-center justify-between gap-2">
-            <div className="section-title">{m.providers()}</div>
-            {cards.length > 0 ? (
-              <button type="button" className="text-[length:var(--sz-badge)] text-label-2 hover:text-foreground" onClick={onResetCustomization}>
-                {resetArmed ? m.click_again_to_confirm() : m.reset_all_customization()}
-              </button>
-            ) : null}
-          </div>
-          {cards.length > 0 ? (
-            <Customize embedded cards={cards} layout={layout} onOpen={onOpenProvider} onOpenSettings={onOpenCustomize} onReorder={onReorderProviders} onToggle={onToggleProvider} />
-          ) : (
-            <div className="card-surface flex items-center justify-between gap-2 p-3">
-              <span className="text-label-2">{m.no_providers_detected()}</span>
-              <button type="button" className="text-[var(--accent)]" onClick={() => sendCommand("detect")}>{m.detect_providers()}</button>
-            </div>
-          )}
-          <ProviderCatalog error={payload.providersError} providers={payload.providers} />
+        <div id="settings-panel-providers" role="tabpanel" aria-labelledby="settings-tab-providers">
+          <ProviderList
+            cards={cards}
+            error={payload.providersError}
+            headerExtra={
+              cards.length > 0 ? (
+                <button type="button" className="text-[length:var(--sz-badge)] text-label-2 hover:text-foreground" onClick={onResetCustomization}>
+                  {resetArmed ? m.click_again_to_confirm() : m.reset_all_customization()}
+                </button>
+              ) : null
+            }
+            layout={layout}
+            onOpen={onOpenProvider}
+            onReorder={onReorderProviders}
+            onToggle={onToggleProvider}
+            providers={payload.providers}
+          />
         </div>
       ) : null}
       {!native || tab === "general" ? (

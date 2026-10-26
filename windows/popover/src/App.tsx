@@ -489,12 +489,7 @@ export default function App() {
               onOpen={(id) => openProvider(id, "customize")}
               onOpenSettings={() => go("settings")}
               onReorder={(ids) => commit({ ...layout, cardOrder: mergeVisibleOrder(layout.cardOrder, ids) })}
-              onToggle={(id, on) => {
-                const hidden = { ...layout.hidden };
-                if (on) delete hidden[id];
-                else hidden[id] = true;
-                commit({ ...layout, hidden });
-              }}
+              onToggle={(id, on) => sendCommand("set-provider-enabled", { id, value: on })}
             />
           ) : null}
           {screen === "provider" ? (
@@ -538,12 +533,7 @@ export default function App() {
               onOpenCustomize={() => go("customize")}
               onOpenProvider={(id) => openProvider(id, "settings")}
               onReorderProviders={(ids) => commit({ ...layout, cardOrder: mergeVisibleOrder(layout.cardOrder, ids) })}
-              onToggleProvider={(id, on) => {
-                const hidden = { ...layout.hidden };
-                if (on) delete hidden[id];
-                else hidden[id] = true;
-                commit({ ...layout, hidden });
-              }}
+              onToggleProvider={(id, on) => sendCommand("set-provider-enabled", { id, value: on })}
               onResetCustomization={resetAll}
               resetArmed={resetArmed}
               onResetTimes={(resetTimes) => commit({ ...layout, resetTimes })}

@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+### Changed
+
+- **The tray lists providers once.** Customize and Settings → Providers
+  showed the dashboard's cards (a switch that only hid a card) above an
+  All providers list (a switch that turned the provider off in
+  `config.toml`). They are one list now: each provider has one switch,
+  which turns it on or off in `config.toml`; providers that are on come
+  first, in the dashboard's order, and drag to reorder. A provider with
+  several accounts lists them under its row. Cards hidden with the old
+  switch show again; turn the provider off instead.
+
 ### Fixed
 
 - **Cursor still reads the IDE session after 3.27.12's opaque token.** That

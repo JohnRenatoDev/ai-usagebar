@@ -1001,7 +1001,6 @@ export function emptyLayout() {
     alwaysShowPace: false,
     usageGoal: false,
     cardOrder: [],
-    hidden: {},
     collapsed: {},
     hideExtras: false,
     hintDismissed: false,
@@ -1176,7 +1175,6 @@ export function normalizeLayout(raw) {
   layout.alwaysShowPace = raw.alwaysShowPace === true;
   layout.usageGoal = raw.usageGoal === true;
   layout.cardOrder = cleanIdList(raw.cardOrder);
-  copyFlagMap(raw.hidden, layout.hidden);
   copyFlagMap(raw.collapsed, layout.collapsed);
   layout.timeFormat = normalizeTimeFormat(raw.timeFormat);
   layout.hideExtras = raw.hideExtras === true;
@@ -1247,8 +1245,8 @@ export function saveLayout(storage, layout) {
   storage.setItem(LAYOUT_KEY, JSON.stringify(normalizeLayout(layout)));
 }
 
-/** The provider an entry id belongs to: `antigravity@3f2a` is an account of `antigravity`. */
-function providerOf(id) {
+/** The provider a card id belongs to: `antigravity@3f2a` is an account of `antigravity`. */
+export function providerOf(id) {
   const at = id.indexOf("@");
   return at < 0 ? id : id.slice(0, at);
 }
@@ -1272,13 +1270,9 @@ export function syncLayout(layout, cardIds) {
   const ids = Array.isArray(cardIds) ? cardIds.filter(Boolean) : [];
   const present = new Set(ids);
   const order = (layout.cardOrder || []).filter(Boolean);
-  const hidden = {};
   const collapsed = {};
   const rows = Object.assign({}, layout.rows || {});
   const stars = {};
-  for (const id of Object.keys(layout.hidden || {})) {
-    if (layout.hidden[id]) hidden[id] = true;
-  }
   for (const id of Object.keys(layout.collapsed || {})) {
     if (layout.collapsed[id]) collapsed[id] = true;
   }
@@ -1295,7 +1289,7 @@ export function syncLayout(layout, cardIds) {
     }
     const [sibling] = siblings;
     order[order.indexOf(sibling)] = id;
-    for (const settings of [hidden, collapsed, rows, stars]) {
+    for (const settings of [collapsed, rows, stars]) {
       if (Object.prototype.hasOwnProperty.call(settings, sibling)) {
         settings[id] = settings[sibling];
         delete settings[sibling];
@@ -1306,7 +1300,6 @@ export function syncLayout(layout, cardIds) {
     alwaysShowPace: layout.alwaysShowPace === true,
     usageGoal: layout.usageGoal === true,
     cardOrder: order,
-    hidden,
     collapsed,
     hideExtras: layout.hideExtras === true,
     hintDismissed: layout.hintDismissed === true,
@@ -1368,7 +1361,7 @@ export function orderedCards(cards, layout) {
 
 /** @returns {Card[]} */
 export function applyCardLayout(cards, layout) {
-  return orderedCards(cards, layout).filter((card) => !layout.hidden || !layout.hidden[card.id]);
+  return orderedCards(cards, layout);
 }
 
 export function moveCardBefore(order, draggedId, beforeId) {
@@ -1410,28 +1403,89 @@ export function mergeVisibleOrder(fullOrder, visibleOrder) {
   return next;
 }
 
-// First launch, as OpenUsage does it: providers with no credential on this
-// machine start hidden, and the dashboard's welcome card points at Customize.
-// Only "No API key" counts — an expired sign-in means a credential exists.
-export function lacksCredentials(entry) {
-  if (!entry || typeof entry !== "object") return false;
-  return explainError(entry.error, entry).title === "No API key";
-}
-
 // Runs once, on the first payload that carries entries. A host error (no
-// entries) is not a first launch. When every provider lacks a credential the
-// starter set stays visible, so a fresh install never opens on an empty
-// dashboard.
+// entries) is not a first launch. It only marks the layout seeded, so the
+// dashboard's welcome hint can show; which providers are visible is the
+// provider's `enabled` in config.toml, and the list's switch is the only one.
 /** @returns {Layout} */
 export function seedLayout(layout, entries) {
   const list = Array.isArray(entries) ? entries.filter((e) => e && typeof e === "object" && e.id) : [];
   if (!layout || layout.seeded === true || list.length === 0) return layout;
-  const missing = list.filter(lacksCredentials);
-  const hidden = Object.assign({}, layout.hidden || {});
-  if (missing.length < list.length) {
-    for (const entry of missing) hidden[String(entry.id)] = true;
+  return Object.assign({}, layout, { seeded: true });
+}
+
+/**
+ * One row of the single provider list (Customize and Settings → Providers
+ * share it): a catalog provider with its cards in the dashboard's order, or
+ * a card whose provider is not in the catalog — a custom provider — which
+ * stands alone, keeps the card's place and has no switch (it toggles in
+ * config.toml).
+ * @param {import("./lib/types").ProviderInfo[]} providers
+ * @param {import("./lib/types").Card[]} cards
+ * @param {import("./lib/types").Layout} layout
+ * @returns {{ enabled: import("./lib/types").ProviderListRow[], disabled: import("./lib/types").ProviderListRow[] }}
+ */
+export function providerListRows(providers, cards, layout) {
+  const catalog = new Map();
+  for (const provider of Array.isArray(providers) ? providers : []) catalog.set(String(provider.id), provider);
+  // First-card order: grouped in the order `orderedCards` sees the cards.
+  const grouped = new Map();
+  for (const card of orderedCards(cards, layout)) {
+    const id = providerOf(card.id);
+    const list = grouped.get(id) || [];
+    list.push(card);
+    grouped.set(id, list);
   }
-  return Object.assign({}, layout, { hidden, seeded: true });
+  const toRow = (provider, id, list) => ({
+    id,
+    name: provider ? provider.name : list[0].title,
+    icon: provider ? providerIconId(provider.id) : list[0].icon,
+    enabled: provider ? provider.enabled === true : true,
+    switchable: provider ? true : false,
+    state: provider ? providerState(provider) : "",
+    signIn: provider ? provider.signIn : "",
+    action: provider ? provider.action : "",
+    addAccounts: provider ? provider.addAccounts : [],
+    cards: list.map((card) => ({ id: card.id, title: card.title, metrics: metricCount(card) })),
+  });
+  const enabled = [];
+  for (const [id, list] of grouped) {
+    const provider = catalog.get(id);
+    if (provider && !provider.enabled) continue; // its row lives in the disabled block
+    enabled.push(toRow(provider, id, list));
+  }
+  // Enabled without a card on screen (just turned on, or a missing report
+  // entry) trails the block, in the catalog's order.
+  for (const provider of Array.isArray(providers) ? providers : []) {
+    if (provider.enabled && !grouped.has(provider.id)) enabled.push(toRow(provider, provider.id, []));
+  }
+  const disabled = [];
+  for (const provider of Array.isArray(providers) ? providers : []) {
+    if (!provider.enabled) disabled.push(toRow(provider, provider.id, grouped.get(provider.id) || []));
+  }
+  return { enabled, disabled };
+}
+
+/**
+ * The card order to save after dragging one row of the enabled block: every
+ * card of the dragged row moves together, in its own relative order, to the
+ * row it landed on, and every card outside the block (a switched-off
+ * provider's) keeps its relative place after them, as `mergeVisibleOrder`.
+ * @param {string[]} cardOrder the stored order
+ * @param {import("./lib/types").ProviderListRow[]} rows the enabled rows, before the move
+ * @param {string[]} rowIds the enabled row ids, after the move
+ * @returns {string[]}
+ */
+export function reorderProviderRows(cardOrder, rows, rowIds) {
+  const byId = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    byId.set(String(row && row.id), (row && Array.isArray(row.cards) ? row.cards : []).map((card) => String(card && card.id)).filter(Boolean));
+  }
+  const visible = [];
+  for (const id of Array.isArray(rowIds) ? rowIds : []) {
+    for (const cardId of byId.get(String(id)) || []) if (visible.indexOf(cardId) < 0) visible.push(cardId);
+  }
+  return mergeVisibleOrder(Array.isArray(cardOrder) ? cardOrder : [], visible);
 }
 
 /**
@@ -1456,7 +1510,7 @@ export function seedStars(layout, cards) {
 // What a fresh host payload does to the stored layout. A payload without
 // entries (the host's placeholder before the first report, or a host error)
 // must leave the layout alone: syncing against an empty id list would wipe
-// every remembered order, hidden flag and row preference.
+// every remembered order and row preference.
 /** @returns {Layout} */
 export function absorbPayload(layout, entries) {
   const list = Array.isArray(entries) ? entries : [];
