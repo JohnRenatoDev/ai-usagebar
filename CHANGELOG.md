@@ -2,6 +2,12 @@
 
 ### Fixed
 
+- **Updating and enabling sections configured as TOML inline tables succeeds.**
+  Setting a non-empty API key, toggling an inline-table provider in TUI
+  settings, updating scalar preferences, or running first-run vendor detection
+  previously failed with `config.toml: [<section>] is not a table`. The writer
+  helpers now operate over `TableLike`, preserving the inline table format,
+  surrounding comments, and existing fields (#511).
 - **Cursor still reads the IDE session after 3.27.12's opaque token.** That
   release replaced the `cursorAuth/accessToken` JWT with an opaque `curs…`
   string, so the provider's claim decoding failed and reported "session token
