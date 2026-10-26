@@ -1,7 +1,9 @@
 //! The `copy-image` IPC's validation. The popover's page serializes the selected provider's
-//! card to a PNG and posts its base64 (no `data:` prefix); the host puts those bytes on the
-//! system clipboard. A pure function over the received JSON, compiled on every OS like
-//! `blur` so its tests run on every CI job; only the tray hosts call it.
+//! card to a PNG and posts its base64 (no `data:` prefix) under a request `id`; the host puts
+//! the bytes on the system clipboard and answers the page with that `id`, so a reply is
+//! matched to its request instead of its position. A pure module over the received JSON,
+//! compiled on every OS like `blur` so its tests run on every CI job; only the tray hosts
+//! call it.
 
 use std::io::Cursor;
 
@@ -45,6 +47,38 @@ pub(crate) fn png_from_ipc(value: &Value) -> Result<Vec<u8>, &'static str> {
         return Err("the PNG is wider or taller than 8192 px");
     }
     Ok(bytes)
+}
+
+/// The `copy-image` request's `id`, if it carries one the page can match its replies against.
+///
+/// The popover generates `copy-<n>` from a counter that only grows within the instance. The
+/// shape `^[A-Za-z0-9_-]{1,64}$` is checked here without a regex; only a match is ever echoed
+/// back into the reply script, so a foreign or malformed id can inject nothing.
+pub(crate) fn copy_request_id(value: &Value) -> Option<&str> {
+    let id = value.get("id").and_then(Value::as_str)?;
+    if !(1..=64).contains(&id.len()) {
+        return None;
+    }
+    id.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        .then_some(id)
+}
+
+/// The `copy-image` answer, as the script the host evaluates in the popover.
+///
+/// `id` goes out as a JSON string (via `serde_json::to_string`) and `None` becomes `null`,
+/// forcing `ok` to `false` — a reply the page cannot match to a pending request is never a
+/// success. The id already passed [`copy_request_id`], whose character set needs no JSON
+/// escaping, so the script cannot be bent into a different statement.
+pub(crate) fn copied_reply_script(id: Option<&str>, ok: bool) -> String {
+    let (id, ok) = match id {
+        Some(id) => (
+            serde_json::to_string(id).expect("a &str always serializes"),
+            ok,
+        ),
+        None => ("null".to_owned(), false),
+    };
+    format!("window.__AIUB_IMAGE_COPIED__ && window.__AIUB_IMAGE_COPIED__({id}, {ok})")
 }
 
 #[cfg(test)]
@@ -125,5 +159,87 @@ mod tests {
         assert!(png_from_ipc(&command(&too_wide)).is_err());
         let too_tall = STANDARD.encode(valid_png(1, 8193));
         assert!(png_from_ipc(&command(&too_tall)).is_err());
+    }
+
+    fn command_with_id(id: &str) -> Value {
+        serde_json::json!({ "cmd": "copy-image", "id": id })
+    }
+
+    #[test]
+    fn a_well_formed_request_id_is_kept() {
+        assert_eq!(copy_request_id(&command_with_id("copy-1")), Some("copy-1"));
+    }
+
+    #[test]
+    fn the_id_length_ceiling_is_inclusive() {
+        let id = "a".repeat(64);
+        assert_eq!(copy_request_id(&command_with_id(&id)), Some(id.as_str()));
+        let id = "a".repeat(65);
+        assert_eq!(copy_request_id(&command_with_id(&id)), None);
+    }
+
+    #[test]
+    fn an_empty_or_unshaped_id_is_dropped() {
+        assert_eq!(copy_request_id(&command_with_id("")), None);
+        assert_eq!(copy_request_id(&command_with_id("copy-\"1")), None);
+        assert_eq!(copy_request_id(&command_with_id("copy-<1>")), None);
+        assert_eq!(copy_request_id(&command_with_id("copy 1")), None);
+        // Missing, `null`, or not a string at all.
+        assert_eq!(
+            copy_request_id(&serde_json::json!({ "cmd": "copy-image" })),
+            None
+        );
+        assert_eq!(
+            copy_request_id(&serde_json::json!({ "cmd": "copy-image", "id": null })),
+            None
+        );
+        assert_eq!(
+            copy_request_id(&serde_json::json!({ "cmd": "copy-image", "id": 42 })),
+            None
+        );
+    }
+
+    #[test]
+    fn the_reply_script_carries_the_id_and_the_outcome() {
+        assert_eq!(
+            copied_reply_script(Some("copy-1"), true),
+            "window.__AIUB_IMAGE_COPIED__ && window.__AIUB_IMAGE_COPIED__(\"copy-1\", true)"
+        );
+        assert_eq!(
+            copied_reply_script(Some("copy-1"), false),
+            "window.__AIUB_IMAGE_COPIED__ && window.__AIUB_IMAGE_COPIED__(\"copy-1\", false)"
+        );
+    }
+
+    #[test]
+    fn a_missing_id_replies_null_and_never_true() {
+        // Even a caller asking for `true` gets `null, false`.
+        assert_eq!(
+            copied_reply_script(None, true),
+            "window.__AIUB_IMAGE_COPIED__ && window.__AIUB_IMAGE_COPIED__(null, false)"
+        );
+        assert_eq!(
+            copied_reply_script(None, false),
+            "window.__AIUB_IMAGE_COPIED__ && window.__AIUB_IMAGE_COPIED__(null, false)"
+        );
+    }
+
+    #[test]
+    fn a_validated_id_round_trips_without_injection() {
+        // An id the validator let through needs no JSON escaping, so the script embeds it
+        // verbatim inside its quotes — nothing between the quotes can end the string early.
+        let id = "copy-9_-AZaz09";
+        let value = command_with_id(id);
+        let Some(id) = copy_request_id(&value) else {
+            panic!("the fixture id must pass the validator");
+        };
+        let expected =
+            format!("window.__AIUB_IMAGE_COPIED__ && window.__AIUB_IMAGE_COPIED__(\"{id}\", true)");
+        assert_eq!(copied_reply_script(Some(id), true), expected);
+        // And a hostile id never reaches the script: the gate rejects it first.
+        assert_eq!(
+            copy_request_id(&command_with_id("copy-1\") ; alert(1) ; //")),
+            None
+        );
     }
 }

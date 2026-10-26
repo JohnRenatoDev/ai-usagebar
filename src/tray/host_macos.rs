@@ -799,12 +799,12 @@ fn push_to_webview(state: &TrayState) {
 }
 
 /// The `copy-image` answer: the page installs `__AIUB_IMAGE_COPIED__` on load, so with no
-/// webview there is nothing to evaluate it in.
-fn reply_image_copied(state: &TrayState, copied: bool) {
+/// webview there is nothing to evaluate it in. The script is built by
+/// `clipboard_image::copied_reply_script` with the request's id, so the page matches the
+/// reply to its own request instead of its position in a queue.
+fn reply_image_copied(state: &TrayState, id: Option<&str>, copied: bool) {
     if let Some(webview) = state.webview.as_ref() {
-        let _ = webview.evaluate_script(&format!(
-            "window.__AIUB_IMAGE_COPIED__ && window.__AIUB_IMAGE_COPIED__({copied})"
-        ));
+        let _ = webview.evaluate_script(&super::clipboard_image::copied_reply_script(id, copied));
     }
 }
 
@@ -1188,11 +1188,16 @@ fn handle_ipc(state: &mut TrayState, body: &str, control_flow: &mut ControlFlow)
             let _ = state.worker.send(WorkerCmd::SnoozeUpdate);
         }
         "copy-image" => {
-            let copied = match super::clipboard_image::png_from_ipc(&value) {
-                Ok(bytes) => copy_png_to_clipboard(&bytes),
-                Err(_reason) => false,
+            let id = super::clipboard_image::copy_request_id(&value);
+            // No valid id: no `png_from_ipc`, no clipboard — the reply is `null, false`.
+            let copied = match id {
+                Some(_) => match super::clipboard_image::png_from_ipc(&value) {
+                    Ok(bytes) => copy_png_to_clipboard(&bytes),
+                    Err(_reason) => false,
+                },
+                None => false,
             };
-            reply_image_copied(state, copied);
+            reply_image_copied(state, id, copied);
         }
         _ => {}
     }
