@@ -2207,4 +2207,26 @@ assert.equal(model.cursorPoolOf(null), '');
   assert.deepEqual(Array.from(model.barVisibleEntries(reports,prefs.hiddenBarEntries),entry=>entry.id),['openai@work']);
 }
 
+// Qt 6.12 added a QtQuick type named Color, and it wins over the qs.Commons
+// singleton of the same name wherever a bare `Color` is written. Every bare
+// read then resolves to that type instead: `Color.foreground` is undefined, and
+// a `color` property assigned undefined paints as #000000. The theme file
+// lookup is worse, because `Color.currentThemePath` is undefined too and the
+// path becomes "file://undefined/colors.toml", so the theme never loads.
+//
+// Qualifying the singleton is the form Omarchy's own plugin documentation
+// asks for, and it reads the same on every Qt version.
+{
+  for (const file of ['Panel.qml', 'BarWidget.qml', 'BrandMark.qml', 'SettingsView.qml']) {
+    const source = fs.readFileSync(new URL(`./${file}`, import.meta.url), 'utf8');
+    assert.match(source, /^import qs\.Commons as Commons$/m, `${file} imports the palette with an alias`);
+    assert.doesNotMatch(source, /(^|[^.\w])Color\.[a-zA-Z]/, `${file} has no bare Color. reference`);
+  }
+  // The theme watcher binds to the palette's own signals, so its target has to
+  // be the qualified singleton too.
+  const panelSource = fs.readFileSync(new URL('./Panel.qml', import.meta.url), 'utf8');
+  assert.match(panelSource, /target:\s*Commons\.Color/);
+  assert.doesNotMatch(panelSource, /target:\s*Color\s*$/m);
+}
+
 console.log('Omarchy model tests passed');
