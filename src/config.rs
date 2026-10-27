@@ -926,7 +926,9 @@ fn edit_config_document_within<T>(
             // write created is gone, which is what the key check's restore
             // wants. A file that still holds the user's comments is written.
             match std::fs::remove_file(path) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(error.into());
+                }
                 _ => {}
             }
         } else {
