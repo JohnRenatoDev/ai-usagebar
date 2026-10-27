@@ -824,6 +824,66 @@ mod tests {
         assert!(matches!(err, AppError::Http { status: 503, .. }));
     }
 
+    /// #515: the cached payload is past its billing-cycle reset, so
+    /// `reuse_cache` refuses it, but a 429 backoff armed moments ago still
+    /// applies. The refresh must surface the shared countdown without
+    /// contacting the server.
+    #[tokio::test]
+    async fn an_active_backoff_is_not_bypassed_after_the_billing_reset() {
+        let token = fake_token("user_123");
+        let db_dir = TempDir::new().unwrap();
+        let db_path = seed_state_db(&db_dir, &token);
+        let (_cache_dir, cache) = cache_fixture();
+        cache
+            .write_payload(
+                serde_json::json!({
+                    "account": account_key(&token),
+                    "plan": "Pro", "auto_pct": 7, "api_pct": 3, "total_pct": 5,
+                    "unlimited": false, "on_demand_enabled": false,
+                    "reset_at": "2026-08-04T00:00:00Z",
+                    "credits": [],
+                })
+                .to_string()
+                .as_bytes(),
+            )
+            .unwrap();
+        // Armed against the real clock, like a genuine 429 would be; the
+        // payload above is seconds fresh, so `fresh_payload` returns it and
+        // the reset check refuses it.
+        cache.note_rate_limit_at(std::time::SystemTime::now());
+
+        let mut server = mockito::Server::new_async().await;
+        let summary = server
+            .mock("GET", "/api/usage-summary")
+            .with_status(500)
+            .with_body("must not be contacted during backoff")
+            .expect(0)
+            .create_async()
+            .await;
+        let now = DateTime::parse_from_rfc3339("2026-08-05T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let err = fetch_snapshot_at(
+            &reqwest::Client::new(),
+            &db_path,
+            &no_agent_auth(),
+            &cache,
+            &endpoints_for(&server),
+            Duration::from_secs(600),
+            now,
+        )
+        .await
+        .unwrap_err();
+        summary.assert_async().await;
+        match &err {
+            AppError::Http { status, body } => {
+                assert_eq!(status, &429, "body: {body}");
+                assert!(body.contains("rate limited"), "body: {body}");
+            }
+            other => panic!("expected the shared backoff 429, got {other:?}"),
+        }
+    }
+
     #[test]
     fn cached_percentages_are_range_checked_before_narrowing() {
         let now = DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z")
