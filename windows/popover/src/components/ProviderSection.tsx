@@ -293,9 +293,7 @@ export function ProviderSectionHeader({
       {account ? <AccountControl account={account} title={card.title} onSwitch={onSwitchAccount} /> : null}
       {onCopyImage ? (
         <HeaderAction
-          // Revealed with the header, like the tray's own hover affordances: hidden at rest
-          // (the exported PNG hides it too, via data-exporting), visible on hover or focus.
-          className="opacity-0 transition-opacity group-hover/header:opacity-100 group-focus-within/header:opacity-100"
+          // Always shown, beside the customize action; the exported PNG drops it (data-exporting).
           icon={<MdiContentCopy />}
           label={m.copy_as_image()}
           onClick={onCopyImage}

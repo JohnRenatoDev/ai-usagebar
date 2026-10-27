@@ -3,7 +3,7 @@
 ### Added
 
 - **Copy a provider's card as an image.** The tray popover's card header
-  has a copy button on hover, and its right-click menu a Copy as Image
+  has a copy button, and its right-click menu a Copy as Image
   item: either puts a PNG of that card on the clipboard, drawn on an
   opaque background in the current theme, without the drag handle or
   header buttons, and the footer says when it is copied.
