@@ -32,7 +32,8 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{}} Antigravity_Not_RunningInputs */
 /** @typedef {{}} Antigravity_Start_HintInputs */
 /** @typedef {{ provider: NonNullable<unknown> }} Api_Key_CheckingInputs */
-/** @typedef {{ provider: NonNullable<unknown>, label: NonNullable<unknown> }} Api_Key_Dialog_TitleInputs */
+/** @typedef {{}} Api_Key_Checking_ShortInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Api_Key_Dialog_TitleInputs */
 /** @typedef {{ provider: NonNullable<unknown> }} Api_Key_No_AnswerInputs */
 /** @typedef {{ provider: NonNullable<unknown> }} Api_Key_RejectedInputs */
 /** @typedef {{}} Api_Key_SaveInputs */
@@ -787,7 +788,23 @@ export const api_key_checking = /** @type {((inputs: Api_Key_CheckingInputs, opt
 /**
 * | output |
 * | --- |
-* | "{provider} {label}" |
+* | "Checking…" |
+*
+* @param {Api_Key_Checking_ShortInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const api_key_checking_short = /** @type {((inputs?: Api_Key_Checking_ShortInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Api_Key_Checking_ShortInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.api_key_checking_short(inputs)
+	if (locale === "ko") return __ko.api_key_checking_short(inputs)
+	if (locale === "es") return __es.api_key_checking_short(inputs)
+	return __en.api_key_checking_short(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "{provider} key" |
 *
 * @param {Api_Key_Dialog_TitleInputs} inputs
 * @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options

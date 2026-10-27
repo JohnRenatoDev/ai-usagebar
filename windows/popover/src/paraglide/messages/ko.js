@@ -30,7 +30,8 @@
 /** @typedef {{}} Antigravity_Not_RunningInputs */
 /** @typedef {{}} Antigravity_Start_HintInputs */
 /** @typedef {{ provider: NonNullable<unknown> }} Api_Key_CheckingInputs */
-/** @typedef {{ provider: NonNullable<unknown>, label: NonNullable<unknown> }} Api_Key_Dialog_TitleInputs */
+/** @typedef {{}} Api_Key_Checking_ShortInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Api_Key_Dialog_TitleInputs */
 /** @typedef {{ provider: NonNullable<unknown> }} Api_Key_No_AnswerInputs */
 /** @typedef {{ provider: NonNullable<unknown> }} Api_Key_RejectedInputs */
 /** @typedef {{}} Api_Key_SaveInputs */
@@ -411,8 +412,12 @@ export const api_key_checking = /** @type {(inputs: Api_Key_CheckingInputs) => L
 	return /** @type {LocalizedString} */ (`${i?.provider} 키 확인 중…`)
 };
 
+export const api_key_checking_short = /** @type {(inputs: Api_Key_Checking_ShortInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`확인 중…`)
+};
+
 export const api_key_dialog_title = /** @type {(inputs: Api_Key_Dialog_TitleInputs) => LocalizedString} */ (i) => {
-	return /** @type {LocalizedString} */ (`${i?.provider} ${i?.label}`)
+	return /** @type {LocalizedString} */ (`${i?.provider} 키`)
 };
 
 export const api_key_no_answer = /** @type {(inputs: Api_Key_No_AnswerInputs) => LocalizedString} */ (i) => {

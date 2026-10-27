@@ -3,15 +3,17 @@ import MdiEye from "~icons/mdi/eye";
 import MdiEyeOff from "~icons/mdi/eye-off";
 import MdiLoading from "~icons/mdi/loading";
 import MdiLockOutline from "~icons/mdi/lock-outline";
+import { ProviderIcon } from "@/components/ProviderIcon";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import type { KeyCheck, Language } from "@/lib/types";
-import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { keyCheckError, keyDialogPhase, sendCommand } from "../model.js";
 import { m } from "@/paraglide/messages.js";
 
 /** The catalog row that opens the dialog, with its credential's label and note. */
 export interface KeyDialogProvider {
+  /** The provider's mark slug, as the list row draws it. */
+  icon: string;
   id: string;
   keyLabel: string;
   keyNote: string;
@@ -119,10 +121,17 @@ interface ApiKeyDialogViewProps {
   onSave: () => void;
 }
 
+// The field's stand-in for the key while the host checks it: the draft
+// itself is gone from state by then.
+const MASKED = "\u2022".repeat(16);
+
 /**
  * The dialog's content, without the portal, so the contract's SSR tests can
  * render the real markup — Radix keeps portaled content out of static
- * markup, the same way it does the menus.
+ * markup, the same way it does the menus. Laid out as the approved design:
+ * the provider's mark beside the title and the credential's note, the field
+ * with its reveal toggle inside, the outcome right under the field, the
+ * storage line, then Cancel and Save.
  */
 export function ApiKeyDialogView({
   checking,
@@ -139,6 +148,8 @@ export function ApiKeyDialogView({
 }: ApiKeyDialogViewProps) {
   const locale = { locale: language };
   const saveDisabled = checking || keyDraft === "";
+  // The host's note says which key this is ("admin key — monthly spend").
+  const note = provider.keyNote ? provider.keyNote.charAt(0).toUpperCase() + provider.keyNote.slice(1) : "";
   return (
     <form
       className="flex flex-col gap-[var(--gap-stack)]"
@@ -149,33 +160,17 @@ export function ApiKeyDialogView({
       }}
     >
       <div className="flex items-center gap-[var(--gap-item)]">
-        <span
-          className={cn(
-            "grid shrink-0 place-items-center [&_svg]:size-[var(--icon-row)]",
-            checking || noAnswer ? "text-[var(--accent)]" : "text-label-2",
-          )}
-        >
-          {checking ? <MdiLoading className="animate-spin" /> : <MdiLockOutline />}
+        <span className="key-dialog-mark">
+          <ProviderIcon className="text-label-2" size="var(--icon-row)" slug={provider.icon} title={provider.name} />
         </span>
-        <DialogTitle>{m.api_key_dialog_title({ provider: provider.name, label: provider.keyLabel }, locale)}</DialogTitle>
+        <div className="flex min-w-0 flex-col">
+          <DialogTitle>{m.api_key_dialog_title({ provider: provider.name }, locale)}</DialogTitle>
+          {note ? (
+            <DialogDescription className="m-0 text-[length:var(--sz-badge)] text-label-2">{note}</DialogDescription>
+          ) : null}
+        </div>
       </div>
-      {provider.keyNote ? <DialogDescription>{provider.keyNote}</DialogDescription> : null}
-      {checking ? (
-        <p className="m-0 text-[length:var(--sz-support)] leading-[var(--leading-note)] text-[var(--accent)]">
-          {m.api_key_checking({ provider: provider.name }, locale)}
-        </p>
-      ) : null}
-      {noAnswer ? (
-        <p className="m-0 break-words text-[length:var(--sz-support)] leading-[var(--leading-note)] text-meter-red">
-          {m.api_key_no_answer({ provider: provider.name }, locale)}
-        </p>
-      ) : null}
-      {error ? (
-        <p className="m-0 break-words text-[length:var(--sz-support)] leading-[var(--leading-note)] text-meter-red">
-          {keyCheckError(error, provider.name, language)}
-        </p>
-      ) : null}
-      <div className="flex items-center gap-[var(--gap-controls)]">
+      <div className="key-field" data-invalid={error ? "" : undefined}>
         <input
           type={revealed ? "text" : "password"}
           value={keyDraft}
@@ -183,14 +178,14 @@ export function ApiKeyDialogView({
           autoComplete="off"
           spellCheck={false}
           autoCapitalize="off"
-          placeholder={provider.keyLabel}
+          placeholder={checking ? MASKED : provider.keyLabel}
           aria-label={provider.keyLabel}
-          className="min-w-0 flex-1 rounded-[var(--control-radius)] bg-[var(--field-fill)] px-2 py-1 text-[length:var(--sz-support)] outline-hidden [box-shadow:0_0_0_1px_var(--field-ring)] disabled:opacity-60"
+          aria-invalid={error ? true : undefined}
           onChange={(event) => onKeyChange(event.target.value)}
         />
         <button
           type="button"
-          className="action-btn"
+          className="plain-btn hover-icon grid size-[var(--row-icon-box)] shrink-0 place-items-center text-label-2 [&_svg]:size-[var(--icon-row)]"
           disabled={checking}
           aria-label={revealed ? m.hide_key(locale) : m.show_key(locale)}
           onClick={onRevealToggle}
@@ -198,6 +193,21 @@ export function ApiKeyDialogView({
           {revealed ? <MdiEyeOff /> : <MdiEye />}
         </button>
       </div>
+      {checking ? (
+        <p className="m-0 text-[length:var(--sz-badge)] leading-[var(--leading-note)] text-label-2">
+          {m.api_key_checking({ provider: provider.name }, locale)}
+        </p>
+      ) : null}
+      {error ? (
+        <p className="m-0 break-words text-[length:var(--sz-badge)] leading-[var(--leading-note)] text-meter-red">
+          {keyCheckError(error, provider.name, language)}
+        </p>
+      ) : null}
+      {noAnswer ? (
+        <p className="m-0 break-words text-[length:var(--sz-badge)] leading-[var(--leading-note)] text-notice">
+          {m.api_key_no_answer({ provider: provider.name }, locale)}
+        </p>
+      ) : null}
       <div className="flex items-center gap-[var(--gap-item)] text-label-2">
         <MdiLockOutline className="size-[var(--icon-note)] shrink-0" />
         <span className="text-[length:var(--sz-badge)]">{m.api_key_stored_note(locale)}</span>
@@ -206,8 +216,9 @@ export function ApiKeyDialogView({
         <button type="button" className="action-btn" onClick={onCancel}>
           {m.cancel(locale)}
         </button>
-        <button type="submit" className="action-btn" data-variant="primary" disabled={saveDisabled}>
-          {m.api_key_save(locale)}
+        <button type="submit" className="action-btn gap-1.5 [&_svg]:size-[var(--icon-note)]" data-variant="primary" disabled={saveDisabled}>
+          {checking ? <MdiLoading className="animate-spin" /> : null}
+          {checking ? m.api_key_checking_short(locale) : m.api_key_save(locale)}
         </button>
       </DialogFooter>
     </form>

@@ -448,7 +448,7 @@ try {
   // `DialogTitle` and `DialogDescription` read; the wrapper is checked closed.
   const { ApiKeyDialog, ApiKeyDialogView } = await server.ssrLoadModule('/src/components/ApiKeyDialog.tsx');
   const { Dialog } = await server.ssrLoadModule('/src/components/ui/dialog.tsx');
-  const keyProvider = { id: 'zai', name: 'Z.AI', keyLabel: 'API key', keyNote: 'From the Z.AI console.' };
+  const keyProvider = { icon: 'zai', id: 'zai', name: 'Z.AI', keyLabel: 'API key', keyNote: 'coding-plan usage' };
   const keyView = (props) => renderToStaticMarkup(React.createElement(LanguageProvider, { language: 'en' },
     React.createElement(Dialog, { open: true, onOpenChange() {} },
       React.createElement(ApiKeyDialogView, {
@@ -458,10 +458,14 @@ try {
         ...props,
       }))));
   const enabledButtons = (markup) => (markup.match(/<button[^>]*>/g) ?? []).filter((b) => !/\sdisabled=""/.test(b));
-  // The title and note come from the host's catalog row; the field is masked.
+  // The approved layout: the provider's mark beside "<provider> key" and the
+  // host's note (first letter raised); the field is masked, with the reveal
+  // toggle inside its ring.
   const keyIdle = keyView({});
-  assert.match(keyIdle, /Z\.AI API key/);
-  assert.match(keyIdle, /From the Z\.AI console\./);
+  assert.match(keyIdle, /class="key-dialog-mark"/);
+  assert.match(keyIdle, />Z\.AI key</);
+  assert.match(keyIdle, />Coding-plan usage</);
+  assert.match(keyIdle, /<div class="key-field"><input[^>]*>.*?aria-label="Show key"/s);
   assert.match(keyIdle, /Saved in config\.toml, readable only by you\./);
   assert.match(keyIdle, /<input[^>]*type="password"/);
   assert.doesNotMatch(keyIdle, /<input[^>]*\sdisabled=""/);
@@ -477,10 +481,16 @@ try {
   assert.match(keyChecking, /<input[^>]*\sdisabled=""/);
   assert.equal(enabledButtons(keyChecking).length, 1);
   assert.match(keyChecking, /<button type="button"[^>]*>Cancel<\/button>/);
+  // The field stands in for the key with dots, and Save says it is checking.
+  assert.match(keyChecking, /<input[^>]*placeholder="\u2022+"/);
+  assert.match(keyChecking, /<button type="submit"[^>]*disabled=""[^>]*>.*animate-spin.*Checking…<\/button>/s);
   // Failed: a rejection names the key, the field is empty and live again.
   const keyFailed = keyView({ error: 'HTTP 401: invalid key' });
   assert.match(keyFailed, /text-meter-red[^>]*>Z\.AI rejected this key\.</);
   assert.doesNotMatch(keyFailed, /Sign-in expired/);
+  // The refusal rings the field red and reads right under it.
+  assert.match(keyFailed, /<div class="key-field" data-invalid="">/);
+  assert.ok(keyFailed.indexOf('key-field') < keyFailed.indexOf('rejected this key'));
   assert.doesNotMatch(keyFailed, /<input[^>]*\sdisabled=""/);
   // No answer: the fixed line, the field live.
   const keyNoAnswer = keyView({ noAnswer: true });

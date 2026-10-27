@@ -75,7 +75,7 @@ export function ProviderList({ cards, error, headerExtra, keyCheck, layout, nowM
   }, []);
   const onAddKey = (row: ProviderListRow, trigger: HTMLElement) => {
     keyTrigger.current = trigger;
-    setKeyProvider({ id: row.id, keyLabel: row.keyLabel, keyNote: row.keyNote, name: row.name });
+    setKeyProvider({ icon: row.icon, id: row.id, keyLabel: row.keyLabel, keyNote: row.keyNote, name: row.name });
   };
   const { enabled, disabled } = providerListRows(providers, cards, layout);
   return (
