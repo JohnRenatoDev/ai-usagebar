@@ -293,6 +293,18 @@ impl Cache {
             }
             Some(PayloadRedaction::Skip) => return Ok(()),
         };
+        // The parse above sees one value per object key and stops at a depth
+        // limit, so a duplicate key or a deep document can hide an echo from
+        // it. Before anything is written, every JSON string literal in the
+        // bytes is decoded and checked (a payload that is not JSON was
+        // already checked for the literal secret above).
+        if self
+            .redacting
+            .as_deref()
+            .is_some_and(|secret| !secret.is_empty() && json_strings_contain(bytes, secret))
+        {
+            return Ok(());
+        }
         self.ensure_dir()?;
         let mut tmp = tempfile::Builder::new()
             .prefix(".usage.")
@@ -594,6 +606,75 @@ fn redact_payload(bytes: &[u8], secret: &str) -> PayloadRedaction {
         Ok(redacted) => PayloadRedaction::Replace(redacted),
         Err(_) => PayloadRedaction::Skip,
     }
+}
+
+/// Whether any JSON string literal in `bytes`, decoded (escapes, `\u`
+/// surrogate pairs), contains `secret`. A scan over the raw text rather than
+/// a parse: it sees every literal, duplicates and any depth included, and
+/// never fails on a document a parser would refuse.
+fn json_strings_contain(bytes: &[u8], secret: &str) -> bool {
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'"' {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let mut text = String::new();
+        let mut run_start = i;
+        let mut pending_high: Option<u16> = None;
+        while i < bytes.len() && bytes[i] != b'"' {
+            if bytes[i] != b'\\' {
+                i += 1;
+                continue;
+            }
+            text.push_str(&String::from_utf8_lossy(&bytes[run_start..i]));
+            let Some(&escape) = bytes.get(i + 1) else {
+                i = bytes.len();
+                run_start = i;
+                break;
+            };
+            i += 2;
+            let decoded = match escape {
+                b'n' => Some('\n'),
+                b't' => Some('\t'),
+                b'r' => Some('\r'),
+                b'b' => Some('\u{8}'),
+                b'f' => Some('\u{c}'),
+                b'u' => {
+                    let unit = bytes
+                        .get(i..i + 4)
+                        .and_then(|hex| std::str::from_utf8(hex).ok())
+                        .and_then(|hex| u16::from_str_radix(hex, 16).ok());
+                    i = (i + 4).min(bytes.len());
+                    match (unit, pending_high.take()) {
+                        (Some(low @ 0xDC00..=0xDFFF), Some(high)) => char::from_u32(
+                            0x10000
+                                + ((u32::from(high) - 0xD800) << 10)
+                                + (u32::from(low) - 0xDC00),
+                        ),
+                        (Some(high @ 0xD800..=0xDBFF), _) => {
+                            pending_high = Some(high);
+                            None
+                        }
+                        (Some(unit), _) => char::from_u32(u32::from(unit)),
+                        (None, _) => None,
+                    }
+                }
+                other => Some(char::from(other)),
+            };
+            if let Some(ch) = decoded {
+                text.push(ch);
+            }
+            run_start = i;
+        }
+        text.push_str(&String::from_utf8_lossy(&bytes[run_start..i]));
+        if text.contains(secret) {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Replace the secret in every string of `value`; `false` when an object
@@ -1382,6 +1463,43 @@ mod tests {
         );
         assert!(cache.is_stale());
         assert!(cache.read_last_error().is_some());
+    }
+
+    /// What the parse cannot see is caught on the bytes before writing: a
+    /// duplicate key whose first value quotes the secret (the parsed tree
+    /// keeps only the last value) and an escaped echo inside a document too
+    /// deep for the parser are both left out of the cache.
+    #[test]
+    fn write_payload_skips_an_echo_the_parse_cannot_see() {
+        let (_td, cache) = fixture();
+        let cache = cache.redacting("test-key-value");
+        cache
+            .write_payload(br#"{"note":"test-key-value","note":"fine","data":1}"#)
+            .unwrap();
+        assert!(
+            !cache.payload_path().exists(),
+            "a duplicate key hid the echo"
+        );
+
+        let deep = format!(
+            r#"{{"data":1,"extra":{}"ok \u0074est-key-value"{}}}"#,
+            "[".repeat(160),
+            "]".repeat(160)
+        );
+        assert!(serde_json::from_str::<serde_json::Value>(&deep).is_err());
+        let (_td, cache) = fixture();
+        let cache = cache.redacting("test-key-value");
+        cache.write_payload(deep.as_bytes()).unwrap();
+        assert!(
+            !cache.payload_path().exists(),
+            "a deep document hid the echo"
+        );
+
+        // The scan decodes escapes and surrogate pairs, and skips numbers.
+        assert!(json_strings_contain(br#""a\u0062c""#, "abc"));
+        assert!(json_strings_contain(br#""x \ud83d\ude00 y""#, "\u{1f600}"));
+        assert!(json_strings_contain(br#""say \"hi\"""#, "\"hi\""));
+        assert!(!json_strings_contain(br#"{"n":12}"#, "12"));
     }
 
     /// The regression this guards: vendors write the raw HTTP body, which is
