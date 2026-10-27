@@ -34,6 +34,7 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{ provider: NonNullable<unknown> }} Api_Key_CheckingInputs */
 /** @typedef {{ provider: NonNullable<unknown>, label: NonNullable<unknown> }} Api_Key_Dialog_TitleInputs */
 /** @typedef {{ provider: NonNullable<unknown> }} Api_Key_No_AnswerInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Api_Key_RejectedInputs */
 /** @typedef {{}} Api_Key_SaveInputs */
 /** @typedef {{}} Api_Key_Stored_NoteInputs */
 /** @typedef {{}} Api_KeysInputs */
@@ -814,6 +815,22 @@ export const api_key_no_answer = /** @type {((inputs: Api_Key_No_AnswerInputs, o
 	if (locale === "ko") return __ko.api_key_no_answer(inputs)
 	if (locale === "es") return __es.api_key_no_answer(inputs)
 	return __en.api_key_no_answer(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "{provider} rejected this key." |
+*
+* @param {Api_Key_RejectedInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const api_key_rejected = /** @type {((inputs: Api_Key_RejectedInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Api_Key_RejectedInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.api_key_rejected(inputs)
+	if (locale === "ko") return __ko.api_key_rejected(inputs)
+	if (locale === "es") return __es.api_key_rejected(inputs)
+	return __en.api_key_rejected(inputs)
 });
 /**
 * | output |

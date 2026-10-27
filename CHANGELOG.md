@@ -2,7 +2,13 @@
 
 ### Added
 
-- **The tray popover sets API keys in its own window.** For the key-only providers the popover's dialog takes the key and hands it to the host, which saves it to `config.toml` with the same code the Settings overlay's apply uses, fetches that provider alone, and keeps the key only if the provider accepts the reading — a refusal restores the previous value and shows the provider's error.
+- **Add an API key from the tray popover.** A provider that needs only an
+  API key sent you to the TUI in a terminal; its key icon in the provider
+  list now opens a dialog for the key. The tray saves it to `config.toml`
+  with the same writer the Settings overlay uses (mode 600), fetches that
+  provider alone while the dialog shows a spinner, and keeps the key only
+  when the provider accepts it. A refused key puts the previous value back
+  and the dialog says why, so you can paste another.
 
 ### Changed
 

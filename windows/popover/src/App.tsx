@@ -500,6 +500,7 @@ export default function App() {
             <Customize
               cards={cards}
               layout={layout}
+              nowMs={nowMs}
               payload={payload}
               onOpen={(id) => openProvider(id, "customize")}
               onOpenSettings={() => go("settings")}

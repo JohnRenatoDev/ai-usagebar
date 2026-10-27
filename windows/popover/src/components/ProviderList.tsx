@@ -1,10 +1,11 @@
-import { useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import MdiAlert from "~icons/mdi/alert";
 import MdiChevronRight from "~icons/mdi/chevron-right";
 import MdiConsole from "~icons/mdi/console";
 import MdiKeyPlus from "~icons/mdi/key-plus";
 import MdiOpenInApp from "~icons/mdi/open-in-app";
 import MdiPlus from "~icons/mdi/plus";
+import { ApiKeyDialog, type KeyDialogProvider } from "@/components/ApiKeyDialog";
 import { DragHandle } from "@/components/DragHandle";
 import { Hint } from "@/components/Hint";
 import { ProviderIcon } from "@/components/ProviderIcon";
@@ -17,7 +18,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { Card, Layout, ProviderInfo, ProviderListRow } from "@/lib/types";
+import type { Card, KeyCheck, Layout, ProviderInfo, ProviderListRow } from "@/lib/types";
 import { m } from "@/paraglide/messages.js";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -34,6 +35,10 @@ interface ProviderListProps {
   providers: ProviderInfo[];
   /** The header's right side next to Detect (Settings' reset button). */
   headerExtra?: ReactNode;
+  /** The host's verdict on the last key sent from the key dialog. */
+  keyCheck: KeyCheck | null;
+  /** The popover's clock, for the key dialog's no-answer limit. */
+  nowMs: number;
 }
 
 const ADD_ACCOUNT_LABELS: Record<string, () => string> = { code: m.add_claude_code_account, desktop: m.add_claude_desktop_account, codex: m.add_codex_account };
@@ -48,11 +53,14 @@ const ADD_ACCOUNT_LABELS: Record<string, () => string> = { code: m.add_claude_co
  * live in its subtitle; the accounts themselves are chosen there, in the
  * detail, not in this list.
  */
-export function ProviderList({ cards, error, headerExtra, layout, onOpen, onReorder, onToggle, providers }: ProviderListProps) {
+export function ProviderList({ cards, error, headerExtra, keyCheck, layout, nowMs, onOpen, onReorder, onToggle, providers }: ProviderListProps) {
   // The host re-reads credentials only when asked, so ask whenever the list opens.
   useEffect(() => {
     sendCommand("providers");
   }, []);
+  const [keyProvider, setKeyProvider] = useState<KeyDialogProvider | null>(null);
+  const closeKeyDialog = useCallback(() => setKeyProvider(null), []);
+  const onAddKey = (row: ProviderListRow) => setKeyProvider({ id: row.id, keyLabel: row.keyLabel, keyNote: row.keyNote, name: row.name });
   const { enabled, disabled } = providerListRows(providers, cards, layout);
   return (
     <div className="flex flex-col gap-[var(--header-card-gap)]">
@@ -75,7 +83,7 @@ export function ProviderList({ cards, error, headerExtra, layout, onOpen, onReor
               if (!row) return null;
               return (
                 <div className="lifted-surface">
-                  <ProviderRow onOpen={onOpen} onToggle={onToggle} row={row} />
+                  <ProviderRow onAddKey={onAddKey} onOpen={onOpen} onToggle={onToggle} row={row} />
                 </div>
               );
             }}
@@ -83,12 +91,12 @@ export function ProviderList({ cards, error, headerExtra, layout, onOpen, onReor
             {enabled.map((row) => (
               <SortableItem key={row.id} id={row.id}>
                 {({ attributes, listeners }) => (
-                  <ProviderRow handle={{ attributes, listeners }} onOpen={onOpen} onToggle={onToggle} row={row} />
+                  <ProviderRow handle={{ attributes, listeners }} onAddKey={onAddKey} onOpen={onOpen} onToggle={onToggle} row={row} />
                 )}
               </SortableItem>
             ))}
             {disabled.map((row) => (
-              <ProviderRow key={row.id} off onOpen={onOpen} onToggle={onToggle} row={row} />
+              <ProviderRow key={row.id} off onAddKey={onAddKey} onOpen={onOpen} onToggle={onToggle} row={row} />
             ))}
           </VerticalDnd>
         </div>
@@ -96,6 +104,7 @@ export function ProviderList({ cards, error, headerExtra, layout, onOpen, onReor
       <div className={cn("px-[var(--card-pad)] text-[length:var(--sz-badge)]", error ? "text-meter-red" : "text-label-2")}>
         {error || m.all_providers_hint()}
       </div>
+      <ApiKeyDialog keyCheck={keyCheck} nowMs={nowMs} provider={keyProvider} onClose={closeKeyDialog} />
     </div>
   );
 }
@@ -104,6 +113,8 @@ interface ProviderRowProps {
   handle?: Parameters<typeof DragHandle>[0];
   /** Drawn in the disabled block: faded, no drag handle, an inert chevron. */
   off?: boolean;
+  /** Opens the key dialog for a key-only provider's "Add key". */
+  onAddKey: (row: ProviderListRow) => void;
   onOpen: (id: string) => void;
   onToggle: (id: string, on: boolean) => void;
   row: ProviderListRow;
@@ -120,7 +131,7 @@ interface ProviderRowProps {
  * hint rides an alert icon next to the name, and the action takes the "+"
  * column as an icon, so the name never cuts.
  */
-function ProviderRow({ row, handle, off = false, onOpen, onToggle }: ProviderRowProps) {
+function ProviderRow({ row, handle, off = false, onAddKey, onOpen, onToggle }: ProviderRowProps) {
   const { language } = useI18n();
   const first = !off && row.cards.length > 0 ? row.cards[0] : null;
   const needs = row.state === "needs";
@@ -139,7 +150,8 @@ function ProviderRow({ row, handle, off = false, onOpen, onToggle }: ProviderRow
       ? multiAccountSubtitle(row.cards, row.metrics, row.name, language)
       : statusText;
   // The credential's action wears the "+" column as an icon, and while it is
-  // there the add-account "+" stands down for the row.
+  // there the add-account "+" stands down for the row. A key-only provider's
+  // "Add key" opens the key dialog; the others still go through the host.
   const action = needs && row.action
     ? row.action === "settings" ? { icon: MdiKeyPlus, label: m.provider_add_key() }
       : row.action === "terminal" ? { icon: MdiConsole, label: m.provider_sign_in() }
@@ -185,7 +197,7 @@ function ProviderRow({ row, handle, off = false, onOpen, onToggle }: ProviderRow
         )}
         {action ? (
           <Hint content={action.label}>
-            <button type="button" aria-label={action.label} className="plain-btn hover-icon grid size-[var(--row-icon-box)] place-items-center" onClick={() => sendCommand("sign-in-provider", { id: row.id })}>
+            <button type="button" aria-label={action.label} className="plain-btn hover-icon grid size-[var(--row-icon-box)] place-items-center" onClick={() => (row.action === "settings" && row.keyLabel ? onAddKey(row) : sendCommand("sign-in-provider", { id: row.id }))}>
               <action.icon className="size-[var(--icon-row)] text-label-2" />
             </button>
           </Hint>

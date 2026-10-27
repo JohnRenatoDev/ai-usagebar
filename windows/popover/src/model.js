@@ -1641,6 +1641,8 @@ export function providerListRows(providers, cards, layout) {
     state: provider ? providerState(provider) : "",
     signIn: provider ? provider.signIn : "",
     action: provider ? provider.action : "",
+    keyLabel: provider ? provider.keyLabel || "" : "",
+    keyNote: provider ? provider.keyNote || "" : "",
     addAccounts: provider ? provider.addAccounts : [],
     cards: list.map((card) => ({ id: card.id, title: card.title, metrics: metricCount(card) })),
     metrics: list.reduce((total, card) => total + metricCount(card), 0),
@@ -2059,6 +2061,18 @@ function isWarningSection(section) {
 
 export function friendlyError(text, entry, locale) {
   return joinError(explainError(text, entry, locale));
+}
+
+// The key dialog's line for a key the provider refused. A rejection names the
+// key: the error card's "sign-in expired" would send the user to a sign-in
+// that a key-only provider does not have. Anything else reads as the card does.
+export function keyCheckError(text, provider, locale) {
+  const raw = clean(text, 300);
+  if (raw === "") return "";
+  if (/HTTP 401|HTTP 403|authentication rejected|unauthori[sz]ed|invalid[^.]*key/i.test(raw)) {
+    return m.api_key_rejected({ provider }, { locale: lang(locale) });
+  }
+  return friendlyError(raw, null, locale);
 }
 
 export function nextUpdateLabel(payload, nowMs, locale) {

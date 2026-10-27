@@ -21,6 +21,7 @@
   "api_key_checking": "{provider} 키 확인 중…",
   "api_key_dialog_title": "{provider} {label}",
   "api_key_no_answer": "{provider}가 아직 응답하지 않았습니다. 잠시 후 다시 시도하세요.",
+  "api_key_rejected": "{provider}에서 이 키를 거부했습니다.",
   "api_key_save": "저장",
   "api_key_stored_note": "config.toml에 저장되며, 본인이만 읽을 수 있습니다.",
   "api_keys": "API 키",

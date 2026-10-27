@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } f
 import type { KeyCheck, Language } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
-import { friendlyError, keyDialogPhase, sendCommand } from "../model.js";
+import { keyCheckError, keyDialogPhase, sendCommand } from "../model.js";
 import { m } from "@/paraglide/messages.js";
 
 /** The catalog row that opens the dialog, with its credential's label and note. */
@@ -39,7 +39,13 @@ interface ApiKeyDialogProps {
  * verdict under the send's `seq`. The draft never stays in state after a send:
  * the host owns the value, and this dialog only ever names it on the way out.
  */
-export function ApiKeyDialog({ provider, keyCheck, nowMs, onClose }: ApiKeyDialogProps) {
+export function ApiKeyDialog({ provider, ...rest }: ApiKeyDialogProps) {
+  // Mounted per opening, so a verdict from an earlier opening (the last send's
+  // `ok`) can never close the next one.
+  return provider ? <OpenApiKeyDialog provider={provider} {...rest} /> : null;
+}
+
+function OpenApiKeyDialog({ provider, keyCheck, nowMs, onClose }: ApiKeyDialogProps & { provider: KeyDialogProvider }) {
   const { language } = useI18n();
   const [key, setKey] = useState("");
   const [pending, setPending] = useState<{ seq: number | null; sentAtMs: number }>({ seq: null, sentAtMs: 0 });
@@ -51,10 +57,8 @@ export function ApiKeyDialog({ provider, keyCheck, nowMs, onClose }: ApiKeyDialo
     if (phase === "ok") onClose();
   }, [phase, onClose]);
 
-  if (!provider) return null;
-
   function save() {
-    if (!provider || key === "") return;
+    if (key === "" || phase === "checking") return;
     const seq = nextKeySeq++;
     setPending({ seq, sentAtMs: Date.now() });
     setKey("");
@@ -68,19 +72,7 @@ export function ApiKeyDialog({ provider, keyCheck, nowMs, onClose }: ApiKeyDialo
         if (!open) onClose();
       }}
     >
-      <DialogContent
-        onOpenAutoFocus={(event) => {
-          // Focus the card, not the field: no ring on open, and nothing focused behind the scrim.
-          event.preventDefault();
-          (event.currentTarget as HTMLElement).focus();
-        }}
-        onKeyDown={(event) => {
-          // A focused button already answers Enter itself.
-          if (event.key !== "Enter" || event.target !== event.currentTarget) return;
-          event.preventDefault();
-          save();
-        }}
-      >
+      <DialogContent>
         <ApiKeyDialogView
           checking={phase === "checking"}
           error={phase === "failed" && keyCheck ? keyCheck.error : ""}
@@ -137,7 +129,14 @@ export function ApiKeyDialogView({
   const locale = { locale: language };
   const saveDisabled = checking || keyDraft === "";
   return (
-    <div className="flex flex-col gap-[var(--gap-stack)]">
+    <form
+      className="flex flex-col gap-[var(--gap-stack)]"
+      onSubmit={(event) => {
+        // Enter in the field saves, like the Save button.
+        event.preventDefault();
+        onSave();
+      }}
+    >
       <div className="flex items-center gap-[var(--gap-item)]">
         <span
           className={cn(
@@ -162,7 +161,7 @@ export function ApiKeyDialogView({
       ) : null}
       {error ? (
         <p className="m-0 break-words text-[length:var(--sz-support)] leading-[var(--leading-note)] text-meter-red">
-          {friendlyError(error, null, language)}
+          {keyCheckError(error, provider.name, language)}
         </p>
       ) : null}
       <div className="flex items-center gap-[var(--gap-controls)]">
@@ -196,16 +195,10 @@ export function ApiKeyDialogView({
         <button type="button" className="action-btn" onClick={onCancel}>
           {m.cancel(locale)}
         </button>
-        <button
-          type="button"
-          className="action-btn"
-          data-variant="primary"
-          disabled={saveDisabled}
-          onClick={onSave}
-        >
+        <button type="submit" className="action-btn" data-variant="primary" disabled={saveDisabled}>
           {m.api_key_save(locale)}
         </button>
       </DialogFooter>
-    </div>
+    </form>
   );
 }

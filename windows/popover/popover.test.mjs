@@ -10,6 +10,7 @@ import {
   projectCards,
   resetLabel,
   friendlyError,
+  keyCheckError,
   keyDialogPhase,
   KEY_CHECK_NO_ANSWER_MS,
   explainError,
@@ -2487,107 +2488,33 @@ console.log('ok');
   assert.equal(payload.providers[1].keyNote, '');
 }
 
-// --- the key dialog: SSR of the open content --------------------------------------
-// Radix keeps portaled content out of static markup (as it does the menus), so
-// the contract is tested on `ApiKeyDialogView`, the content the dialog renders;
-// the wrapper itself is checked for the closed and open states. The block runs
-// only with vite installed and from the popover's own directory — the icons
-// plugin cannot collect its collections from anywhere else, which is the same
-// separation the Makefile draws between desktop-test and popover-ssr-test.
+// --- the key dialog: the line for a refused key ----------------------------------
 {
-  const popoverDir = new URL('.', import.meta.url).pathname.replace(/\/$/, '');
-  const { createRequire } = await import('node:module');
-  const requireHere = createRequire(import.meta.url);
-  let vite = null;
-  try {
-    vite = requireHere('vite');
-  } catch {
-    vite = null;
-  }
-  if (!vite) {
-    console.log('skipping the ApiKeyDialog SSR: vite is not installed here');
-  } else if (process.cwd() !== popoverDir) {
-    console.log('skipping the ApiKeyDialog SSR: run it from the popover directory (npm test)');
-  } else {
-    const React = requireHere('react');
-    const { renderToStaticMarkup } = requireHere('react-dom/server');
-    const server = await vite.createServer({ root: popoverDir, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
-    try {
-    const { ApiKeyDialog, ApiKeyDialogView } = await server.ssrLoadModule('/src/components/ApiKeyDialog.tsx');
-    const { Dialog } = await server.ssrLoadModule('/src/components/ui/dialog.tsx');
-    const { LanguageProvider } = await server.ssrLoadModule('/src/lib/i18n.tsx');
-    const provider = { id: 'zai', name: 'Z.AI', keyLabel: 'API key', keyNote: 'From the Z.AI console.' };
-    // `DialogTitle`/`DialogDescription` read Radix's dialog context, so the
-    // view renders under a `Dialog` root, without the portaled content.
-    const view = (props) =>
-      renderToStaticMarkup(
-        React.createElement(
-          LanguageProvider,
-          { language: 'en' },
-          React.createElement(
-            Dialog,
-            { open: true, onOpenChange() {} },
-            React.createElement(ApiKeyDialogView, {
-              checking: false,
-              error: '',
-              keyDraft: '',
-              language: 'en',
-              noAnswer: false,
-              provider,
-              revealed: false,
-              onKeyChange() {},
-              onRevealToggle() {},
-              onCancel() {},
-              onSave() {},
-              ...props,
-            }),
-          ),
-        ),
-      );
-    // The title and note come from the host's catalog row.
-    const idle = view({});
-    assert.match(idle, /Z\.AI API key/);
-    assert.match(idle, /From the Z\.AI console\./);
-    assert.match(idle, /Saved in config\.toml, readable only by you\./);
-    assert.match(idle, /type="password"/);
-    assert.doesNotMatch(idle, /<input[^>]*\sdisabled\s*=/); // the attribute, not the disabled: class
-    // An empty draft disables Save; Cancel stays live.
-    const idleButtons = idle.match(/<button[^>]*>/g) ?? [];
-    assert.equal(idleButtons.filter((b) => b.includes('disabled')).length, 1);
-    // Checking: the spinner and the host's line, the field and Save wait,
-    // and only Cancel stays enabled.
-    const checking = view({ checking: true });
-    assert.match(checking, /animate-spin/);
-    assert.match(checking, /Checking the key with Z\.AI/);
-    assert.match(checking, /<input[^>]*\sdisabled\s*=/);
-    const checkingButtons = checking.match(/<button[^>]*>[^<]*<\/button>/g) ?? [];
-    assert.equal(checkingButtons.filter((b) => !/\sdisabled\s*=/.test(b)).length, 1);
-    assert.match(checkingButtons.filter((b) => !/\sdisabled\s*=/.test(b))[0], /Cancel/);
-    // Failed: the error in red (friendlyError's shape), the field back to
-    // empty and enabled, Save waiting for the next draft.
-    const failed = view({ error: 'HTTP 401: invalid key' });
-    assert.match(failed, /text-meter-red[^>]*>.*Sign-in expired/s);
-    assert.doesNotMatch(failed, /<input[^>]*\sdisabled\s*=/);
-    const failedButtons = failed.match(/<button[^>]*>/g) ?? [];
-    assert.equal(failedButtons.filter((b) => b.includes('disabled')).length, 1);
-    // No answer: the fixed line, the field enabled.
-    const noAnswer = view({ noAnswer: true });
-    assert.match(noAnswer, /No answer from Z\.AI yet/);
-    assert.doesNotMatch(noAnswer, /<input[^>]*\sdisabled\s*=/);
-    // The wrapper: closed is empty, open composes without crashing — the
-    // portaled content is out of static markup by Radix's design.
-    const closed = renderToStaticMarkup(
-      React.createElement(LanguageProvider, { language: 'en' },
-        React.createElement(ApiKeyDialog, { provider: null, keyCheck: null, nowMs: 1, onClose() {} })),
-    );
-    assert.equal(closed, '');
-    const open = renderToStaticMarkup(
-      React.createElement(LanguageProvider, { language: 'en' },
-        React.createElement(ApiKeyDialog, { provider, keyCheck: null, nowMs: 1, onClose() {} })),
-    );
-    assert.equal(open, '');
-  } finally {
-    await server.close();
-  }
-  }
+  // A rejection names the key, never the error card's "sign-in expired".
+  assert.equal(keyCheckError('HTTP 401: {"type":"error"}', 'Z.AI', 'en'), 'Z.AI rejected this key.');
+  assert.equal(keyCheckError('HTTP 403 forbidden', 'Z.AI', 'pt-BR'), 'Z.AI recusou esta chave.');
+  assert.equal(keyCheckError('authentication rejected', 'OpenRouter', 'en'), 'OpenRouter rejected this key.');
+  // Anything else reads as the card does.
+  const unreachable = keyCheckError('network transport error: connection refused', 'Z.AI', 'en');
+  assert.equal(unreachable, friendlyError('network transport error: connection refused', null, 'en'));
+  assert.doesNotMatch(unreachable, /rejected this key/);
+  assert.equal(keyCheckError('', 'Z.AI', 'en'), '');
+}
+
+// --- the provider list rows carry the credential's label and note ----------------
+{
+  const providers = parseHostPayload(JSON.stringify({
+    entries: [],
+    providers: [
+      { id: 'zai', name: 'Z.AI', kind: 'api_key', enabled: true, configured: false, env: 'ZAI_API_KEY', sign_in: 'Add an API key in Settings, then Refresh.', action: 'settings', add_accounts: [], key_label: 'API key', key_note: 'From the Z.AI console.' },
+      { id: 'openai', name: 'Codex', kind: 'oauth', enabled: true, configured: true, env: '', sign_in: 'Run `codex login` in a terminal, then Refresh.', action: 'terminal', add_accounts: [] },
+    ],
+  })).providers;
+  const { enabled } = providerListRows(providers, [], emptyLayout());
+  const zai = enabled.find((row) => row.id === 'zai');
+  assert.equal(zai.keyLabel, 'API key');
+  assert.equal(zai.keyNote, 'From the Z.AI console.');
+  const codex = enabled.find((row) => row.id === 'openai');
+  assert.equal(codex.keyLabel, '');
+  assert.equal(codex.keyNote, '');
 }

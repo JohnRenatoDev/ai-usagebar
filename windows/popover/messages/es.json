@@ -21,6 +21,7 @@
   "api_key_checking": "Verificando la clave con {provider}…",
   "api_key_dialog_title": "{provider} {label}",
   "api_key_no_answer": "{provider} todavía no responde. Inténtalo de nuevo en un momento.",
+  "api_key_rejected": "{provider} rechazó esta clave.",
   "api_key_save": "Guardar",
   "api_key_stored_note": "Guardada en config.toml, legible solo por ti.",
   "api_keys": "Claves de API",

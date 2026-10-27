@@ -21,6 +21,7 @@
   "api_key_checking": "Checking the key with {provider}…",
   "api_key_dialog_title": "{provider} {label}",
   "api_key_no_answer": "No answer from {provider} yet. Try again in a moment.",
+  "api_key_rejected": "{provider} rejected this key.",
   "api_key_save": "Save",
   "api_key_stored_note": "Saved in config.toml, readable only by you.",
   "api_keys": "API Keys",

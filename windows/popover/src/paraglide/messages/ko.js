@@ -32,6 +32,7 @@
 /** @typedef {{ provider: NonNullable<unknown> }} Api_Key_CheckingInputs */
 /** @typedef {{ provider: NonNullable<unknown>, label: NonNullable<unknown> }} Api_Key_Dialog_TitleInputs */
 /** @typedef {{ provider: NonNullable<unknown> }} Api_Key_No_AnswerInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Api_Key_RejectedInputs */
 /** @typedef {{}} Api_Key_SaveInputs */
 /** @typedef {{}} Api_Key_Stored_NoteInputs */
 /** @typedef {{}} Api_KeysInputs */
@@ -416,6 +417,10 @@ export const api_key_dialog_title = /** @type {(inputs: Api_Key_Dialog_TitleInpu
 
 export const api_key_no_answer = /** @type {(inputs: Api_Key_No_AnswerInputs) => LocalizedString} */ (i) => {
 	return /** @type {LocalizedString} */ (`${i?.provider}가 아직 응답하지 않았습니다. 잠시 후 다시 시도하세요.`)
+};
+
+export const api_key_rejected = /** @type {(inputs: Api_Key_RejectedInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`${i?.provider}에서 이 키를 거부했습니다.`)
 };
 
 export const api_key_save = /** @type {(inputs: Api_Key_SaveInputs) => LocalizedString} */ () => {

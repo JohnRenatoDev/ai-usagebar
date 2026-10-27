@@ -7,6 +7,8 @@ import { m } from "@/paraglide/messages.js";
 interface CustomizeProps {
   cards: Card[];
   layout: Layout;
+  /** The popover's clock, for the key dialog. */
+  nowMs: number;
   onOpen: (id: string) => void;
   onOpenSettings: () => void;
   onReorder: (ids: string[]) => void;
@@ -16,13 +18,15 @@ interface CustomizeProps {
 }
 
 /** Customize (L1): the single provider list, then the Settings cross-link. */
-export function Customize({ cards, layout, onOpen, onOpenSettings, onReorder, onToggle, payload }: CustomizeProps) {
+export function Customize({ cards, layout, nowMs, onOpen, onOpenSettings, onReorder, onToggle, payload }: CustomizeProps) {
   return (
     <div className="flex flex-col gap-[var(--section-gap)]">
       <ProviderList
         cards={cards}
         error={payload.providersError}
+        keyCheck={payload.keyCheck}
         layout={layout}
+        nowMs={nowMs}
         onOpen={onOpen}
         onReorder={onReorder}
         onToggle={onToggle}

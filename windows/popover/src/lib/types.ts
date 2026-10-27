@@ -294,9 +294,12 @@ export interface ProviderListRow {
   switchable: boolean;
   /** `providerState` of the catalog row; "" for a custom row. */
   state: string;
-  /** The catalog's sign-in hint; the status line while `state` is "needs". */
+  /** The catalog's sign-in hint; the alert icon's tooltip while `state` is "needs". */
   signIn: string;
   action: "" | "app" | "settings" | "terminal";
+  /** The credential's label and note for a key-only provider ("API key"); "" otherwise. */
+  keyLabel: string;
+  keyNote: string;
   addAccounts: Array<"code" | "codex" | "desktop">;
   /** The provider's cards in the dashboard's order; a custom row carries its one. */
   cards: Array<{ id: string; metrics: number; title: string }>;
