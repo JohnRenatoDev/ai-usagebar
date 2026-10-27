@@ -36,9 +36,24 @@ pub const RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(5 * 60);
 /// Per-vendor cache directory and helper API.
 ///
 /// Construct with [`Cache::for_vendor`]; the directory is created lazily.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Cache {
     dir: PathBuf,
+    /// The key the fetch under this cache uses, attached with
+    /// [`Cache::redacting`]: a `.last_error` that quotes it is redacted at
+    /// the first point of writing, before the provider's answer is persisted.
+    redacting: Option<String>,
+}
+
+impl std::fmt::Debug for Cache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The redacting secret is the API key itself: report that it is
+        // attached, never what it is.
+        f.debug_struct("Cache")
+            .field("dir", &self.dir)
+            .field("redacting", &self.redacting.is_some())
+            .finish()
+    }
 }
 
 impl Cache {
@@ -46,7 +61,10 @@ impl Cache {
     /// `$XDG_CACHE_HOME` when set).
     pub fn for_vendor(vendor: &str) -> Result<Self> {
         let base = xdg_cache_dir()?.join("ai-usagebar").join(vendor);
-        Ok(Self { dir: base })
+        Ok(Self {
+            dir: base,
+            redacting: None,
+        })
     }
 
     /// Cache for a specific named account of a vendor, rooted at
@@ -58,12 +76,29 @@ impl Cache {
             .join("ai-usagebar")
             .join(vendor)
             .join(label);
-        Ok(Self { dir: base })
+        Ok(Self {
+            dir: base,
+            redacting: None,
+        })
     }
 
     /// Cache rooted at an arbitrary directory — for tests.
     pub fn at(path: PathBuf) -> Self {
-        Self { dir: path }
+        Self {
+            dir: path,
+            redacting: None,
+        }
+    }
+
+    /// Attach the key the fetch under this cache uses, so a `.last_error`
+    /// that the provider's answer quotes is redacted at the first point of
+    /// writing: [`Self::write_last_error`] strips it before the control-char
+    /// cleanup and before the atomic write, and returns the redacted pair so
+    /// the in-memory copy and the file agree. The secret is held without a
+    /// `Debug` that prints it.
+    pub(crate) fn redacting(mut self, secret: &str) -> Self {
+        self.redacting = Some(secret.to_string());
+        self
     }
 
     /// Ensure the directory exists. Safe to call repeatedly.
@@ -343,7 +378,17 @@ impl Cache {
         } else {
             msg
         };
-        let msg = crate::display::sanitize_untrusted_field(msg);
+        // A provider can quote the key the fetch was sent with in its answer
+        // (Z.AI puts the failure reason, and with it the key, in `msg` on an
+        // HTTP 200). The first point of writing is here, so a cache attached
+        // to that key redacts the message before the cleanup below and before
+        // the write, and the pair returned is the redacted one.
+        let msg = if let Some(secret) = &self.redacting {
+            crate::display::redact_secret(msg, secret)
+        } else {
+            msg.to_string()
+        };
+        let msg = crate::display::sanitize_untrusted_field(&msg);
         let body = format!("{code}\n{msg}");
         let _ = atomic_write(&path, body.as_bytes());
         if code == 429 {
@@ -1088,6 +1133,44 @@ mod tests {
             assert!(!msg.contains("PANCEA"), "{msg}");
             assert!(!msg.contains("<credential>"), "{msg}");
         }
+    }
+
+    /// A provider that quotes the key a fetch was sent with (Z.AI returns
+    /// the reason in `msg` on an HTTP 200) must not persist it: the cache
+    /// attached to that key redacts at the first point of writing — before
+    /// the control-char cleanup and before the atomic write — and the
+    /// returned pair is the redacted one, so file and memory agree.
+    #[test]
+    fn write_last_error_redacts_the_attached_secret() {
+        let (_td, cache) = fixture();
+        let cache = cache.redacting("test-key-value");
+
+        let (code, msg) = cache.write_last_error(0, "msg test-key-value");
+        assert_eq!(code, 0);
+        assert_eq!(msg, "msg [key]");
+        assert!(!msg.contains("test-key-value"), "{msg}");
+        let on_disk = fs::read_to_string(cache.last_error_path()).unwrap();
+        assert!(!on_disk.contains("test-key-value"), "{on_disk}");
+        // What a later run would read is exactly what the call returned.
+        assert_eq!((code, msg), cache.read_last_error().unwrap());
+
+        // A partial echo of a key of eight characters or more is the key
+        // with a missing tail: the whole message is the fixed note.
+        let key = "abcdefghijklmnop";
+        let (_td2, cache2) = fixture();
+        let cache2 = cache2.redacting(key);
+        let (_, msg) = cache2.write_last_error(0, "bad key abcdefgh…");
+        assert_eq!(
+            msg,
+            "The provider's answer quoted the key, so it is not shown."
+        );
+        let on_disk = fs::read_to_string(cache2.last_error_path()).unwrap();
+        assert!(!on_disk.contains(key), "{on_disk}");
+
+        // 401/403 keep the fixed authentication message.
+        let (code, msg) = cache.write_last_error(401, "msg test-key-value");
+        assert_eq!(code, 401);
+        assert_eq!(msg, AUTH_FAILURE_MESSAGE);
     }
 
     /// The regression this guards: vendors write the raw HTTP body, which is

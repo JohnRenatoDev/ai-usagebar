@@ -619,26 +619,15 @@ pub(crate) fn key_check_result(
 }
 
 /// The key's last use: strip it out of the verdict's error before the key
-/// is dropped. A verbatim echo becomes `[key]`; when any eight-character
-/// window of the key — counted in `char`, not bytes — still survives, the
-/// provider quoted the key in part, and a partial echo is the key with a
-/// missing tail, so the whole error is replaced with a fixed note.
+/// is dropped. Defence in depth on top of the cache-side redaction at the
+/// first point of writing — the one rule is
+/// [`crate::display::redact_secret`]: a verbatim echo becomes `[key]`; when
+/// any eight-character window of the key — counted in `char`, not bytes —
+/// still survives, the provider quoted the key in part, and a partial echo
+/// is the key with a missing tail, so the whole error is replaced with a
+/// fixed note.
 pub(crate) fn scrub_key(error: &str, key: &str) -> String {
-    const PARTIAL_ECHO: &str = "The provider's answer quoted the key, so it is not shown.";
-    if key.is_empty() {
-        return error.to_string();
-    }
-    let redacted = error.replace(key, "[key]");
-    let chars: Vec<char> = key.chars().collect();
-    let quoted_partial = chars.len() >= 8
-        && (0..=chars.len() - 8).any(|start| {
-            redacted.contains(chars[start..start + 8].iter().collect::<String>().as_str())
-        });
-    if quoted_partial {
-        PARTIAL_ECHO.to_string()
-    } else {
-        redacted
-    }
+    crate::display::redact_secret(error, key)
 }
 
 /// The production cache-bust for the check's fetch: drop the vendor's

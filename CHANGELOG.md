@@ -42,6 +42,18 @@
   A JWT is still preferred when present, and an opaque token with no cached
   profile keeps the original sign-in error.
 
+### Security
+
+- **A provider's answer that quotes the API key is no longer written to the
+  cache or shown in the report.** A provider that echoes the key a fetch was
+  sent with in its failure answer (Z.AI puts the reason in `msg` inside an
+  HTTP 200 with `success: false`) used to leave the key in the vendor
+  cache's `.last_error` and in the error the report shows. The key is now
+  removed before the first point of writing: the failure diagnostic is
+  redacted as the cache records it, and the error that reaches the report is
+  redacted with the same key. The key check's final scrub stays as a second
+  layer.
+
 ## [1.44.0] — 2026-10-25
 
 ### Added
