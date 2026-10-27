@@ -135,22 +135,27 @@ fn the_modelstudio_monthly_placeholders_the_macos_menu_bar_reads_keep_their_name
     assert_eq!(v.get("mst_monthly_reset").map(String::as_str), Some(""));
 }
 
-/// The macOS menu bar reads Synthetic's subscription quota through these
+/// The macOS menu bar reads Synthetic's weekly quota through these
 /// placeholders in its `--format` string (`macos/ai-usagebar-menubar.swift`,
 /// fields 65-66). Renaming one here would silently drop that row, so pin the
 /// names and pin placeholder values.
 #[test]
 fn the_synthetic_placeholders_the_macos_menu_bar_reads_keep_their_names() {
     let now = Utc.with_ymd_and_hms(2026, 8, 19, 12, 0, 0).unwrap();
-    let subscription = UsageWindow {
+    let weekly = UsageWindow {
         utilization_pct: 60,
         resets_at: Some(now + chrono::Duration::days(15)),
         window_duration: chrono::Duration::days(30),
     };
     let snapshot = ai_usagebar::usage::SyntheticSnapshot {
-        requests: 600.0,
-        limit: 1000.0,
-        subscription,
+        weekly,
+        credits: Some(ai_usagebar::usage::WeeklyCredits {
+            used: 600.0,
+            max: 1000.0,
+            next_regen: 20.0,
+        }),
+        next_regen_percent: Some(2.0),
+        utilization_precise: 60.0,
     };
     let opts = ai_usagebar::vendor::RenderOpts {
         format: None,
@@ -169,6 +174,14 @@ fn the_synthetic_placeholders_the_macos_menu_bar_reads_keep_their_names() {
         "the generic session alias must remain populated for backward compatibility"
     );
     assert_eq!(v.get("session_reset").map(String::as_str), Some("15d 0h"));
+    assert_eq!(
+        v.get("weekly_pct").map(String::as_str),
+        Some("60"),
+        "the weekly window is now Synthetic's sole quota, so the generic weekly placeholders carry it"
+    );
+    assert_eq!(v.get("weekly_reset").map(String::as_str), Some("15d 0h"));
+    assert_eq!(v.get("synthetic_requests").map(String::as_str), Some("600"));
+    assert_eq!(v.get("synthetic_limit").map(String::as_str), Some("1000"));
 }
 
 /// `push_window` is the shared tooltip row helper. Its sixth argument stayed an

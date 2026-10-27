@@ -218,6 +218,7 @@ var MESSAGES = {
     "reset.due": "Reset due",
     "reset.date": "{month} {day}",
     "reset.in": "Resets in {duration} · {clock}",
+    "reset.regen": "Regenerates {regen} in {duration} · {clock}",
     "updated.unavailable": "Updated time unavailable",
     "updated.just_now": "Updated just now",
     "updated.ago": "Updated {duration} ago",
@@ -354,6 +355,7 @@ var MESSAGES = {
     "reset.due": "Пора сбросить",
     "reset.date": "{month} {day}",
     "reset.in": "Сброс через {duration} · {clock}",
+    "reset.regen": "Восстановление {regen} через {duration} · {clock}",
     "updated.unavailable": "Время обновления недоступно",
     "updated.just_now": "Обновлено только что",
     "updated.ago": "Обновлено {duration} назад",
@@ -490,6 +492,7 @@ var MESSAGES = {
     "reset.due": "Redefinição devida",
     "reset.date": "{month} {day}",
     "reset.in": "Redefine em {duration} · {clock}",
+    "reset.regen": "Regenera {regen} em {duration} · {clock}",
     "updated.unavailable": "Horário de atualização indisponível",
     "updated.just_now": "Atualizado agora",
     "updated.ago": "Atualizado há {duration}",
@@ -626,6 +629,7 @@ var MESSAGES = {
     "reset.due": "초기화 예정",
     "reset.date": "{month} {day}일",
     "reset.in": "{duration} 후 초기화 · {clock}",
+    "reset.regen": "{duration} 후 {regen} 재생성 · {clock}",
     "updated.unavailable": "업데이트 시각 없음",
     "updated.just_now": "방금 업데이트됨",
     "updated.ago": "{duration} 전 업데이트됨",
@@ -762,6 +766,7 @@ var MESSAGES = {
     "reset.due": "Reinicio pendiente",
     "reset.date": "{day} {month}",
     "reset.in": "Se reinicia en {duration} · {clock}",
+    "reset.regen": "Regenera {regen} en {duration} · {clock}",
     "updated.unavailable": "Hora de actualización no disponible",
     "updated.just_now": "Actualizado ahora mismo",
     "updated.ago": "Actualizado hace {duration}",
@@ -898,7 +903,7 @@ function isSameLocalDay(a, b) {
 }
 
 // Locale-aware copies of Model.formatReset / formatUpdated for panel display.
-function formatReset(resetAt, nowMs, locale) {
+function formatReset(resetAt, nowMs, locale, regen) {
   if (!resetAt) return ""
   var resetMs = new Date(String(resetAt)).getTime()
   if (!isFinite(resetMs)) return ""
@@ -908,6 +913,13 @@ function formatReset(resetAt, nowMs, locale) {
   var clock = pad2(at.getHours()) + ":" + pad2(at.getMinutes())
   if (!isSameLocalDay(at, new Date(Number(nowMs))))
     clock = t(locale, "reset.date", { month: monthName(locale, at.getMonth()), day: at.getDate() }) + " " + clock
+  if (regen) {
+    return t(locale, "reset.regen", {
+      regen: regen,
+      duration: formatDuration(remaining, locale),
+      clock: clock
+    })
+  }
   return t(locale, "reset.in", {
     duration: formatDuration(remaining, locale),
     clock: clock

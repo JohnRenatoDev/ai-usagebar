@@ -679,16 +679,36 @@ pub struct NovitaSnapshot {
 
 impl Eq for NovitaSnapshot {}
 
-/// Synthetic subscription quota from the documented `/v2/quotas`
-/// `subscription` object.
+/// Synthetic's sole limit from `/v2/quotas`: the regenerating weekly credit
+/// budget (`planWeeklyLimit`, percentage-only) or its credit-denominated
+/// variant (`weeklyTokenLimit`). The legacy five-hour `subscription` counter
+/// stopped being tracked when the weekly window became the only metric.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SyntheticSnapshot {
-    pub subscription: UsageWindow,
-    pub requests: f64,
-    pub limit: f64,
+    pub weekly: UsageWindow,
+    /// Credit spend figures when the plan reports a credit budget.
+    pub credits: Option<WeeklyCredits>,
+    /// Percentage points restored at the next regeneration tick.
+    pub next_regen_percent: Option<f64>,
+    /// The used share with the API's decimal precision preserved (the
+    /// integer `weekly.utilization_pct` is what meters and severity colors
+    /// use); frontends that print a figure read this so "70.5" does not
+    /// collapse to "70".
+    pub utilization_precise: f64,
 }
 
 impl Eq for SyntheticSnapshot {}
+
+/// Credit figures for Synthetic's weekly token budget.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeeklyCredits {
+    pub used: f64,
+    pub max: f64,
+    /// Credits restored at the next regeneration tick.
+    pub next_regen: f64,
+}
+
+impl Eq for WeeklyCredits {}
 
 /// Lyceum's platform credit balance is denominated in USD, not a percentage quota.
 #[derive(Debug, Clone, PartialEq, Serialize)]

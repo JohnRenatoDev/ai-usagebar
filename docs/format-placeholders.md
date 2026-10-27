@@ -15,8 +15,12 @@ Percentages are used allowance; an omitted window expands to an empty string.
 Synthetic (`--vendor synthetic`, short name `syn`) supplies
 `{synthetic_pct}`, `{synthetic_reset}`, `{synthetic_requests}`, and
 `{synthetic_limit}`, plus the generic `{icon}`, `{plan}`, `{vendor_short}`,
-`{session_pct}`, and `{session_reset}`. The percentage is requests divided by
-the documented subscription limit; the reset is the API's `renewsAt` value.
+`{session_pct}`, `{session_reset}`, `{weekly_pct}`, and `{weekly_reset}`. The
+percentage is the regenerating weekly credit window (`planWeeklyLimit` on
+percentage-only plans, `weeklyTokenLimit` on credit-denominated plans); the
+reset counts down to the next regeneration tick. `{synthetic_requests}` and
+`{synthetic_limit}` carry the weekly credits used and budget when the plan
+reports them, and expand to an empty string on percentage-only plans.
 
 ## Cross-provider formats
 

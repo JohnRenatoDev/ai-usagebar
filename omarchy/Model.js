@@ -34,6 +34,14 @@ function finitePercent(value) {
   return Math.max(0, Math.min(100, Math.round(number)))
 }
 
+// A vendor-reported fraction (Synthetic's weekly budget, e.g. 29.52) kept at
+// full precision for printed figures; null when absent or not a number.
+function finitePercentPrecise(value) {
+  var number = Number(value)
+  if (!isFinite(number)) return null
+  return number
+}
+
 function normalizeSection(raw) {
   if (!raw || typeof raw !== "object") return null
   var type = String(raw.type || "")
@@ -59,7 +67,10 @@ function normalizeSection(raw) {
       severity: severity,
       reset_at: cleanText(raw.reset_at, 80),
       window_secs: windowSecs,
-      group: cleanText(raw.group, 80)
+      group: cleanText(raw.group, 80),
+      regen: cleanText(raw.regen, 40),
+      percent_precise: finitePercentPrecise(raw.percent_precise),
+      reading: cleanText(raw.reading, 16)
     }
   }
   if (type === "text") {
@@ -256,6 +267,19 @@ function normalizeShowAs(value) {
 }
 
 /**
+ * The reading a metric is drawn with. A metric can carry its own reading —
+ * refill-style budgets (Synthetic's weekly credits) report `"left"`, the
+ * fuel-gauge view, whatever the widget's global `showAs` — and every other
+ * metric follows the setting.
+ * @param {Object} row Metric row from the report.
+ * @param {*} showAs Raw reading setting.
+ * @returns {"left"|"used"} The effective reading.
+ */
+function metricShowAs(row, showAs) {
+  return row && cleanText(row.reading, 16) === "left" ? "left" : normalizeShowAs(showAs)
+}
+
+/**
  * Converts a used percentage to the number drawn for the chosen reading.
  * Which window the bar picks never depends on this; only the number drawn for it does.
  * @param {number|string} percent Used percentage from the report.
@@ -268,15 +292,32 @@ function shownPercent(percent, showAs) {
   return normalizeShowAs(showAs) === "left" ? Math.max(0, 100 - number) : number
 }
 
+function shownPercent(percent, showAs) {
+  var number = Number(percent)
+  if (!isFinite(number)) return null
+  return normalizeShowAs(showAs) === "left" ? Math.max(0, 100 - number) : number
+}
+
+// Prints a shown percentage with at most one decimal ("70.5%", "70%") so a
+// precise figure does not collapse to a whole number. Meters keep integers.
+function shownPctText(shown) {
+  if (shown === null) return ""
+  return String(Math.round(shown * 10) / 10)
+}
+
 /**
  * Formats a used percentage as drawn for the chosen reading.
  * @param {number|string} percent Used percentage from the report.
  * @param {*} showAs Raw reading setting.
+ * @param {number|null} [precise] Decimal-precise used percentage when the
+ *   vendor reports one; the printed figure keeps that decimal.
  * @returns {string} For example "18%", or an empty string when the input is not a number.
  */
-function percentText(percent, showAs) {
-  var shown = shownPercent(percent, showAs)
-  return shown === null ? "" : shown + "%"
+function percentText(percent, showAs, precise) {
+  var source = precise === null || precise === undefined ? percent : precise
+  var shown = shownPercent(source, showAs)
+  if (shown === null) return ""
+  return shownPctText(shown) + "%"
 }
 
 var UNSAFE_KEYS = ["__proto__", "constructor", "prototype"]
@@ -1241,14 +1282,21 @@ function toggleMetricChoice(hidden, entry, key) {
  */
 function metricValueView(row, showAs) {
   var value = row && row.value !== undefined && row.value !== null ? String(row.value).trim() : ""
-  var left = normalizeShowAs(showAs) === "left"
+  var reading = metricShowAs(row, showAs)
+  var left = reading === "left"
   var echoesPercent = /^\d+(\.\d+)?%$/.test(value)
   if (value !== "" && !(left && echoesPercent)) return { text: value, left: false, percent: null }
-  var shown = row ? shownPercent(row.percent, showAs) : null
+  // A vendor-reported fraction (percent_precise) keeps its decimal through
+  // the left reading; the rounded integer is the fallback of older reports.
+  var precise = row && row.percent_precise !== null && row.percent_precise !== undefined
+    ? row.percent_precise
+    : null
+  var shown = row ? shownPercent(precise !== null ? precise : row.percent, reading) : null
+  if (shown === null) return { text: "", left: false, percent: null }
   return {
-    text: shown === null ? "" : shown + "%",
-    left: left && shown !== null,
-    percent: shown
+    text: shownPctText(shown) + "%",
+    left: left,
+    percent: Math.round(shown * 10) / 10
   }
 }
 
@@ -1525,7 +1573,7 @@ function headline(entry, barWindow, showAs) {
     // put OpenRouter's dollar figure on the bar and hid its consumed percent.
     // An older report omits the field, and a metric is a percentage by default.
     var bestText = best.headline === "value" && best.value !== ""
-      ? best.value : percentText(best.percent, showAs)
+      ? best.value : percentText(best.percent, metricShowAs(best, showAs), best.percent_precise)
     return {
       text: bestText,
       percent: best.percent,
@@ -1572,7 +1620,7 @@ function isSameLocalDay(a, b) {
     && a.getDate() === b.getDate()
 }
 
-function formatReset(resetAt, nowMs) {
+function formatReset(resetAt, nowMs, regen) {
   if (!resetAt) return ""
   var resetMs = new Date(String(resetAt)).getTime()
   if (!isFinite(resetMs)) return ""
@@ -1588,7 +1636,10 @@ function formatReset(resetAt, nowMs) {
   var clock = pad2(at.getHours()) + ":" + pad2(at.getMinutes())
   if (!isSameLocalDay(at, new Date(Number(nowMs))))
     clock = MONTH_NAMES[at.getMonth()] + " " + at.getDate() + " " + clock
-  return "Resets in " + formatDuration(remaining) + " · " + clock
+  // A refilling window (Synthetic's weekly credits) regenerates by a stated
+  // amount instead of resetting wholesale, so the line names that amount.
+  var lead = regen ? "Regenerates " + regen + " in " : "Resets in "
+  return lead + formatDuration(remaining) + " · " + clock
 }
 
 function formatUpdated(fetchedAt, nowMs) {
@@ -1606,6 +1657,7 @@ function metricDetail(row) {
   // Older human-readable reset text remains useful to CLI consumers. Strip
   // just that fragment in the native panel, which renders a live countdown.
   detail = detail.replace(/^Resets in [^·]+\s*(?:·\s*)?/i, "")
+  detail = detail.replace(/^Regenerates [^·]+? in [^·]+\s*(?:·\s*)?/i, "")
   detail = detail.replace(/\s*·\s*reset\s+[^·]+$/i, "")
   return detail.trim()
 }
