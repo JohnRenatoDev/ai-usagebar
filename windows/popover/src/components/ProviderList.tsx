@@ -60,14 +60,26 @@ export function ProviderList({ cards, error, headerExtra, keyCheck, layout, nowM
   }, []);
   const [keyProvider, setKeyProvider] = useState<KeyDialogProvider | null>(null);
   const keyTrigger = useRef<HTMLElement | null>(null);
+  const list = useRef<HTMLDivElement | null>(null);
   const closeKeyDialog = useCallback(() => setKeyProvider(null), []);
+  // Focus goes back to the key icon that opened the dialog. An accepted key
+  // can remove that icon (the row no longer needs its credential): then it
+  // lands on the same row's switch, not on the top of the screen.
+  const keyFocus = useCallback(() => {
+    const trigger = keyTrigger.current;
+    if (trigger && trigger.isConnected) return trigger;
+    const row = trigger?.dataset.keyRow
+      ? list.current?.querySelector(`[data-provider-id="${CSS.escape(trigger.dataset.keyRow)}"]`)
+      : null;
+    return row ? row.querySelector<HTMLElement>('button[role="switch"]') : null;
+  }, []);
   const onAddKey = (row: ProviderListRow, trigger: HTMLElement) => {
     keyTrigger.current = trigger;
     setKeyProvider({ id: row.id, keyLabel: row.keyLabel, keyNote: row.keyNote, name: row.name });
   };
   const { enabled, disabled } = providerListRows(providers, cards, layout);
   return (
-    <div className="flex flex-col gap-[var(--header-card-gap)]">
+    <div ref={list} className="flex flex-col gap-[var(--header-card-gap)]">
       <div className="flex items-center justify-between gap-2">
         <div className="section-title">{m.providers()}</div>
         <div className="flex items-center gap-2">
@@ -108,7 +120,7 @@ export function ProviderList({ cards, error, headerExtra, keyCheck, layout, nowM
       <div className={cn("px-[var(--card-pad)] text-[length:var(--sz-badge)]", error ? "text-meter-red" : "text-label-2")}>
         {error || m.all_providers_hint()}
       </div>
-      <ApiKeyDialog keyCheck={keyCheck} nowMs={nowMs} provider={keyProvider} returnFocus={keyTrigger.current} onClose={closeKeyDialog} />
+      <ApiKeyDialog keyCheck={keyCheck} nowMs={nowMs} provider={keyProvider} returnFocus={keyFocus} onClose={closeKeyDialog} />
     </div>
   );
 }
@@ -201,7 +213,7 @@ function ProviderRow({ row, handle, off = false, onAddKey, onOpen, onToggle }: P
         )}
         {action ? (
           <Hint content={action.label}>
-            <button type="button" aria-label={action.label} className="plain-btn hover-icon grid size-[var(--row-icon-box)] place-items-center" onClick={(event) => (row.action === "settings" && row.keyLabel ? onAddKey(row, event.currentTarget) : sendCommand("sign-in-provider", { id: row.id }))}>
+            <button type="button" aria-label={action.label} data-key-row={row.id} className="plain-btn hover-icon grid size-[var(--row-icon-box)] place-items-center" onClick={(event) => (row.action === "settings" && row.keyLabel ? onAddKey(row, event.currentTarget) : sendCommand("sign-in-provider", { id: row.id }))}>
               <action.icon className="size-[var(--icon-row)] text-label-2" />
             </button>
           </Hint>
