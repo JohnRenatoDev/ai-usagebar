@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentType, type MouseEvent, type ReactNode } from "react";
 import MdiAlert from "~icons/mdi/alert";
 import MdiChevronRight from "~icons/mdi/chevron-right";
 import MdiConsole from "~icons/mdi/console";
@@ -212,11 +212,12 @@ function ProviderRow({ row, handle, off = false, onAddKey, onOpen, onToggle }: P
           <div className="flex min-w-0 flex-1 items-center gap-[var(--row-gap)]">{identity}</div>
         )}
         {action ? (
-          <Hint content={action.label}>
-            <button type="button" aria-label={action.label} data-key-row={row.id} className="plain-btn hover-icon grid size-[var(--row-icon-box)] place-items-center" onClick={(event) => (row.action === "settings" && row.keyLabel ? onAddKey(row, event.currentTarget) : sendCommand("sign-in-provider", { id: row.id }))}>
-              <action.icon className="size-[var(--icon-row)] text-label-2" />
-            </button>
-          </Hint>
+          <CredentialAction
+            icon={action.icon}
+            label={action.label}
+            rowId={row.id}
+            onClick={(event) => (row.action === "settings" && row.keyLabel ? onAddKey(row, event.currentTarget) : sendCommand("sign-in-provider", { id: row.id }))}
+          />
         ) : add ? (
           add.kind === "direct" ? (
             <button type="button" aria-label={m.add_account()} className="plain-btn hover-icon grid size-[var(--row-icon-box)] place-items-center" onClick={() => sendCommand("add-account", { kind: add.value })}>
@@ -268,5 +269,48 @@ function ProviderRow({ row, handle, off = false, onAddKey, onOpen, onToggle }: P
         )}
       </div>
     </div>
+  );
+}
+
+interface CredentialActionProps {
+  icon: ComponentType<{ className?: string }>;
+  label: string;
+  onClick: (event: MouseEvent<HTMLButtonElement>) => void;
+  rowId: string;
+}
+
+/**
+ * The credential's action in the "+" column. It disappears once the provider
+ * has its credential — often while it still holds focus, after the key
+ * dialog handed focus back to it and the next catalog arrived. Removed while
+ * focused, it passes focus to its row's switch instead of dropping it on the
+ * body, where Enter would act on the whole screen.
+ */
+function CredentialAction({ icon: Icon, label, onClick, rowId }: CredentialActionProps) {
+  const button = useRef<HTMLButtonElement | null>(null);
+  useLayoutEffect(() => {
+    const node = button.current;
+    // A layout cleanup on removal runs while the node is still in the document.
+    return () => {
+      if (!node || node !== document.activeElement) return;
+      window.requestAnimationFrame(() => {
+        const row = document.querySelector(`[data-provider-id="${CSS.escape(rowId)}"]`);
+        row?.querySelector<HTMLElement>('button[role="switch"]')?.focus();
+      });
+    };
+  }, [rowId]);
+  return (
+    <Hint content={label}>
+      <button
+        ref={button}
+        type="button"
+        aria-label={label}
+        data-key-row={rowId}
+        className="plain-btn hover-icon grid size-[var(--row-icon-box)] place-items-center"
+        onClick={onClick}
+      >
+        <Icon className="size-[var(--icon-row)] text-label-2" />
+      </button>
+    </Hint>
   );
 }
