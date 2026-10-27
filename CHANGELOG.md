@@ -11,6 +11,13 @@
   is built exactly as before from that id and the token, whatever its format.
   A JWT is still preferred when present, and an opaque token with no cached
   profile keeps the original sign-in error.
+- **An active HTTP 429 backoff survives a Cursor or Kiro cycle reset.**
+  Both providers correctly refuse a cached payload that is past its billing
+  or credit-cycle reset, but the refusal made every refresh fall through to a
+  live request even while the shared five-minute backoff was armed, so each
+  429 re-armed a backoff that the next refresh bypassed again. As for the
+  Anthropic API (#496), a refused payload during an active backoff now
+  surfaces the shared countdown without contacting the server (#515).
 
 ## [1.44.0] — 2026-10-25
 
