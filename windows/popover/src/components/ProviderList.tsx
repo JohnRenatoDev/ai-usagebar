@@ -1,7 +1,12 @@
 import { useEffect, type ReactNode } from "react";
+import MdiAlert from "~icons/mdi/alert";
 import MdiChevronRight from "~icons/mdi/chevron-right";
+import MdiConsole from "~icons/mdi/console";
+import MdiKeyPlus from "~icons/mdi/key-plus";
+import MdiOpenInApp from "~icons/mdi/open-in-app";
 import MdiPlus from "~icons/mdi/plus";
 import { DragHandle } from "@/components/DragHandle";
+import { Hint } from "@/components/Hint";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { TruncatedText } from "@/components/TruncatedText";
 import { SortableItem, VerticalDnd } from "@/components/dnd";
@@ -111,30 +116,35 @@ interface ProviderRowProps {
  * is kept so the columns line up), the switch, the chevron. The subtitle
  * reads "N metrics" for one card and "Default, work · 6 metrics" for
  * several; the catalog's status stands in while the provider has no card.
+ * The row that needs its credential breaks the uniform: no subtitle — the
+ * hint rides an alert icon next to the name, and the action takes the "+"
+ * column as an icon, so the name never cuts.
  */
 function ProviderRow({ row, handle, off = false, onOpen, onToggle }: ProviderRowProps) {
   const { language } = useI18n();
   const first = !off && row.cards.length > 0 ? row.cards[0] : null;
-  const statusText = row.state === "off" ? m.provider_off()
-    : row.state === "off-ready" ? m.provider_off_ready()
-      : row.state === "ready" ? m.provider_ready()
-        : row.state === "needs" ? row.signIn
+  const needs = row.state === "needs";
+  // A row that needs its credential has no subtitle at all: the hint rides
+  // the alert icon beside the name, so the error card's "0 metrics" can
+  // neither replace it nor make it flash and vanish.
+  const statusText = needs ? ""
+    : row.state === "off" ? m.provider_off()
+      : row.state === "off-ready" ? m.provider_off_ready()
+        : row.state === "ready" ? m.provider_ready()
           : "";
-  // A provider that is on but still lacks its credential keeps the hint (and
-  // its action) even once the report brings its error card: "0 metrics" in
-  // its place told nothing and made the hint flash and vanish.
-  const metrics = !off && row.cards.length >= 1 && row.state !== "needs";
+  const metrics = !off && row.cards.length >= 1 && !needs;
   const subtitle = metrics && row.cards.length === 1
     ? metricsCountText(row.cards[0].metrics, language)
     : metrics
       ? multiAccountSubtitle(row.cards, row.metrics, row.name, language)
       : statusText;
-  const subtitleTone = metrics || row.state !== "needs" ? "text-label-2" : "text-meter-yellow";
-  const action = row.state === "needs" && row.action
-    ? row.action === "terminal" ? m.provider_sign_in()
-      : row.action === "app" ? m.provider_open_app()
-        : m.provider_add_key()
-    : "";
+  // The credential's action wears the "+" column as an icon, and while it is
+  // there the add-account "+" stands down for the row.
+  const action = needs && row.action
+    ? row.action === "settings" ? { icon: MdiKeyPlus, label: m.provider_add_key() }
+      : row.action === "terminal" ? { icon: MdiConsole, label: m.provider_sign_in() }
+        : { icon: MdiOpenInApp, label: m.provider_open_app() }
+    : null;
   const add = addAccountDecision(row);
   const identity = (
     <>
@@ -142,9 +152,16 @@ function ProviderRow({ row, handle, off = false, onOpen, onToggle }: ProviderRow
       <span className="flex min-w-0 flex-col">
         <TruncatedText className="text-[length:var(--sz-header)] font-semibold">{row.name}</TruncatedText>
         {subtitle ? (
-          <span className={cn("text-[length:var(--sz-badge)] break-words", subtitleTone)}>{subtitle}</span>
+          <span className="text-[length:var(--sz-badge)] break-words text-label-2">{subtitle}</span>
         ) : null}
       </span>
+      {needs && row.signIn ? (
+        <Hint content={row.signIn}>
+          <span tabIndex={0} role="img" aria-label={row.signIn}>
+            <MdiAlert className="size-[var(--icon-mark)] shrink-0 text-notice" />
+          </span>
+        </Hint>
+      ) : null}
     </>
   );
   return (
@@ -157,7 +174,9 @@ function ProviderRow({ row, handle, off = false, onOpen, onToggle }: ProviderRow
           // footprint as the grip, so the name line stays aligned — no handle.
           <span className="grip" aria-hidden />
         )}
-        {first ? (
+        {first && !needs ? (
+          // A row that needs its credential carries the focusable alert icon,
+          // which cannot sit inside a button; its chevron still opens the card.
           <button type="button" className="plain-btn hover-fill flex min-w-0 flex-1 items-center gap-[var(--row-gap)]" onClick={() => onOpen(first.id)}>
             {identity}
           </button>
@@ -165,11 +184,12 @@ function ProviderRow({ row, handle, off = false, onOpen, onToggle }: ProviderRow
           <div className="flex min-w-0 flex-1 items-center gap-[var(--row-gap)]">{identity}</div>
         )}
         {action ? (
-          <button type="button" className="action-btn" onClick={() => sendCommand("sign-in-provider", { id: row.id })}>
-            {action}
-          </button>
-        ) : null}
-        {add ? (
+          <Hint content={action.label}>
+            <button type="button" aria-label={action.label} className="plain-btn hover-icon grid size-[var(--row-icon-box)] place-items-center" onClick={() => sendCommand("sign-in-provider", { id: row.id })}>
+              <action.icon className="size-[var(--icon-row)] text-label-2" />
+            </button>
+          </Hint>
+        ) : add ? (
           add.kind === "direct" ? (
             <button type="button" aria-label={m.add_account()} className="plain-btn hover-icon grid size-[var(--row-icon-box)] place-items-center" onClick={() => sendCommand("add-account", { kind: add.value })}>
               <MdiPlus className="size-[var(--icon-row)] text-label-2" />

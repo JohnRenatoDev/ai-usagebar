@@ -385,6 +385,63 @@ try {
     const chromeSource = await readFile(new URL('./src/components/Chrome.tsx', import.meta.url), 'utf8');
     assert.doesNotMatch(chromeSource, /m\.native_style\(\)|Native Style/);
   }
+  // The single provider list: an enabled row that still needs its credential
+  // keeps the hint off the row's text — it rides an alert icon beside the name
+  // — and its sign-in action takes the "+" column as an icon.
+  const { ProviderList } = await server.ssrLoadModule('/src/components/ProviderList.tsx');
+  const needsProviders = [
+    { id: 'anthropic', name: 'Anthropic API', enabled: true, configured: false, env: '', signIn: 'Add an API key in Settings, then Refresh.', action: 'settings', addAccounts: ['code'] },
+    { id: 'openai', name: 'Codex', enabled: true, configured: false, env: '', signIn: 'Run `codex login` in a terminal, then Refresh.', action: 'terminal', addAccounts: ['codex'] },
+    { id: 'cursor', name: 'Cursor', enabled: true, configured: false, env: '', signIn: 'Sign in to the Cursor app, then Refresh.', action: 'app', addAccounts: [] },
+    { id: 'zai', name: 'Z.AI', enabled: true, configured: false, env: 'ZAI_API_KEY', signIn: 'Set the ZAI_API_KEY, then Refresh.', action: '', addAccounts: [] },
+    { id: 'moonshot', name: 'Moonshot', enabled: true, configured: true, env: '', signIn: '', action: '', addAccounts: ['code'] },
+  ];
+  // Every row already has its card, as once the report brings the error card.
+  const needsCards = [
+    { id: 'anthropic', title: 'Anthropic API', icon: 'anthropic_api', rows: [{ kind: 'metric' }] },
+    { id: 'openai', title: 'Codex', icon: 'openai', rows: [{ kind: 'metric' }] },
+    { id: 'cursor', title: 'Cursor', icon: 'cursor', rows: [{ kind: 'metric' }] },
+    { id: 'zai', title: 'Z.AI', icon: 'zai', rows: [{ kind: 'metric' }] },
+    { id: 'moonshot', title: 'Moonshot', icon: 'moonshot', rows: [{ kind: 'metric' }, { kind: 'metric' }] },
+  ];
+  const listMarkup = renderToStaticMarkup(React.createElement(TooltipProvider, {},
+    React.createElement(LanguageProvider, { language: 'en' },
+      React.createElement(ProviderList, {
+        cards: needsCards, error: '', layout: emptyLayout(), providers: needsProviders,
+        onOpen() {}, onReorder() {}, onToggle() {},
+      }))));
+  const rowOf = (id, nextId) => listMarkup.slice(
+    listMarkup.indexOf(`data-provider-id="${id}"`),
+    nextId ? listMarkup.indexOf(`data-provider-id="${nextId}"`) : listMarkup.length,
+  );
+  const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const keyHint = 'Add an API key in Settings, then Refresh.';
+  // The hint is never visible text: once, as the alert icon's label (Radix
+  // keeps the tooltip itself out of static markup).
+  assert.equal(listMarkup.split(keyHint).length - 1, 1);
+  assert.doesNotMatch(listMarkup, new RegExp(`>${escaped(keyHint)}`));
+  const settingsRow = rowOf('anthropic', 'openai');
+  assert.match(settingsRow, new RegExp(`<span tabindex="0" role="img" aria-label="${escaped(keyHint)}"`));
+  assert.match(settingsRow, /<svg[^>]*class="[^"]*text-notice[^"]*"/);
+  assert.match(settingsRow, /<button[^>]*aria-label="Add key"/);
+  assert.doesNotMatch(settingsRow, /action-btn|aria-label="Add account"/);
+  // The focusable alert icon is not nested in the row's open button: the
+  // identity of a row that needs its credential is not a button.
+  assert.doesNotMatch(settingsRow, /<button[^>]*>(?:(?!<\/button>).)*role="img"/s);
+  const terminalRow = rowOf('openai', 'cursor');
+  assert.match(terminalRow, /<button[^>]*aria-label="Sign in"/);
+  assert.doesNotMatch(terminalRow, /action-btn|aria-label="Add account"/);
+  assert.match(rowOf('cursor', 'zai'), /<button[^>]*aria-label="Open app"/);
+  // Without an action the alert stays and the "+" column is an empty slot.
+  const noActionRow = rowOf('zai', 'moonshot');
+  assert.match(noActionRow, /<span tabindex="0" role="img" aria-label="Set the ZAI_API_KEY, then Refresh\."/);
+  assert.doesNotMatch(noActionRow, /aria-label="(Add key|Sign in|Open app)"/);
+  assert.match(noActionRow, /<span aria-hidden="true" class="size-\[var\(--row-icon-box\)\]">/);
+  // A ready row keeps its metrics subtitle and the add-account "+".
+  const readyRow = rowOf('moonshot');
+  assert.match(readyRow, />2 metrics</);
+  assert.match(readyRow, /<button[^>]*aria-label="Add account"/);
+  assert.doesNotMatch(readyRow, /text-notice/);
   console.log('native dashboard: ok');
 } finally {
   await server.close();

@@ -15,7 +15,10 @@
   chevron — and the dashboard groups a provider's accounts into one card,
   its tabs under the header (the native style's provider tabs are per
   provider too), with the choice remembered per provider; the provider
-  detail carries the same selector at the top.
+  detail carries the same selector at the top. An enabled provider that
+  still needs its credential shows its hint in the tooltip of an alert icon
+  beside the name instead of as text under it, and its sign-in action is an
+  icon in the "+" column, so the name is no longer cut.
 
 ### Fixed
 
