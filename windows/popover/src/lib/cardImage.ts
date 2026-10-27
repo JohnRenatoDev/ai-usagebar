@@ -14,6 +14,8 @@
 
 /** Fixed export scale: a 320 px card becomes a 960 px PNG. */
 export const CARD_IMAGE_SCALE = 3;
+/** The margin, in CSS pixels, between the card and the image's edge. */
+export const CARD_IMAGE_PADDING = 12;
 /** No host answer within this window reads as a failed copy. */
 export const IMAGE_COPIED_TIMEOUT_MS = 5000;
 export const PNG_DATA_URL_PREFIX = "data:image/png;base64,";
@@ -27,25 +29,32 @@ export const EXPORT_HIDDEN_SELECTOR = ".header-action, .grip";
 export interface CardSvgParts {
   /** The card's self-contained HTML (namespacedCardHtml of the clone). */
   html: string;
+  /** The card's own height; the image adds the padding on both sides. */
   height: number;
+  /** The margin around the card, so its edges never touch the image's. */
+  padding: number;
   /** The opaque background's corner radius: the card's own radius. */
   radius: number;
   /** The opaque background: the theme's surface color. */
   surface: string;
+  /** The card's own width; the image adds the padding on both sides. */
   width: number;
 }
 
 /**
  * The SVG document the card rasterizes in: an opaque rounded background (the
  * export's surface color, the card's radius) with the card's HTML inside a
- * foreignObject. The XHTML namespace is on the wrapper — without it the XML
- * re-parse drops the HTML semantics and the card renders blank.
+ * foreignObject, inset by the padding so the card never touches the edge. The
+ * XHTML namespace is on the wrapper — without it the XML re-parse drops the
+ * HTML semantics and the card renders blank.
  */
 export function buildCardSvg(parts: CardSvgParts): string {
+  const width = parts.width + parts.padding * 2;
+  const height = parts.height + parts.padding * 2;
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${parts.width}" height="${parts.height}">` +
-    `<rect x="0" y="0" width="${parts.width}" height="${parts.height}" rx="${parts.radius}" fill="${parts.surface}"/>` +
-    `<foreignObject width="100%" height="100%">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">` +
+    `<rect x="0" y="0" width="${width}" height="${height}" rx="${parts.radius}" fill="${parts.surface}"/>` +
+    `<foreignObject x="${parts.padding}" y="${parts.padding}" width="${parts.width}" height="${parts.height}">` +
     `<div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%">` +
     parts.html +
     `</div></foreignObject></svg>`
@@ -199,11 +208,12 @@ export async function cardImagePng(element: HTMLElement, options?: CardImageOpti
   const svg = buildCardSvg({
     html: namespacedCardHtml(serializeCardHtml(clone, options)),
     height,
+    padding: CARD_IMAGE_PADDING,
     radius: cssPixelLength("--card-radius"),
     surface: resolvedCssVar("--export-surface"),
     width,
   });
-  const dataUrl = await rasterizePng(svg, width, height);
+  const dataUrl = await rasterizePng(svg, width + CARD_IMAGE_PADDING * 2, height + CARD_IMAGE_PADDING * 2);
   return stripPngDataUrlPrefix(dataUrl);
 }
 

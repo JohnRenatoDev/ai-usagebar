@@ -2304,10 +2304,11 @@ console.log('ok');
   // opaque rounded background (the export's surface color, the card's radius), and the
   // card HTML inside a foreignObject wrapped in the XHTML namespace — without it the
   // data-URL SVG's XML re-parse drops the HTML semantics and the card renders blank.
-  const svg = buildCardSvg({ html: '<section data-card-id="anthropic"></section>', height: 180, radius: 10, surface: '#ffffff', width: 320 });
-  assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="320" height="180">/);
-  assert.match(svg, /<rect x="0" y="0" width="320" height="180" rx="10" fill="#ffffff"\/>/);
-  assert.ok(svg.includes('<foreignObject width="100%" height="100%">'));
+  // The card sits inset by the padding, so its edges never touch the image's.
+  const svg = buildCardSvg({ html: '<section data-card-id="anthropic"></section>', height: 180, padding: 12, radius: 10, surface: '#ffffff', width: 320 });
+  assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="344" height="204">/);
+  assert.match(svg, /<rect x="0" y="0" width="344" height="204" rx="10" fill="#ffffff"\/>/);
+  assert.ok(svg.includes('<foreignObject x="12" y="12" width="320" height="180">'));
   assert.ok(svg.includes('xmlns="http://www.w3.org/1999/xhtml"'));
   assert.ok(svg.includes('<section data-card-id="anthropic"></section>'));
 }
@@ -2341,7 +2342,7 @@ console.log('ok');
   const content = 'Alice\u00a0Example & Co <tag>';
   const xmlSerialized = `<section xmlns="http://www.w3.org/1999/xhtml"><div class="card-surface">${content.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replace(/\u00a0/g, '&#160;')}</div></section>`;
   const html = serializeCardHtml({ fake: 'clone' }, { serialize: () => xmlSerialized });
-  const svg = buildCardSvg({ html: namespacedCardHtml(html), height: 120, radius: 10, surface: '#ffffff', width: 320 });
+  const svg = buildCardSvg({ html: namespacedCardHtml(html), height: 120, padding: 12, radius: 10, surface: '#ffffff', width: 320 });
   assert.equal(svg.includes('&nbsp;'), false, 'no HTML-only &nbsp; entity may reach the SVG');
   assert.ok(svg.includes('&#160;') || svg.includes('\u00a0'), 'the nbsp survives as a numeric reference or the literal character');
   assert.ok(svg.includes('&amp;') && svg.includes('&lt;'), 'the & and < stay XML-escaped');
