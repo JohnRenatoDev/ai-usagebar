@@ -473,6 +473,7 @@ mod tests {
     fn placeholders_include_generic_aliases() {
         let snap = sample_snap();
         let ph = build_placeholders(&snap, now());
+        assert_eq!(ph.get("icon").map(String::as_str), Some("󰇷"));
         assert_eq!(ph.get("vendor_short").map(String::as_str), Some("sgk"));
         assert_eq!(ph.get("weekly_pct").map(String::as_str), Some("34"));
         assert_eq!(ph.get("session_pct").map(String::as_str), Some("34"));
