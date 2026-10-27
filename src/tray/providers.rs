@@ -299,9 +299,9 @@ pub(crate) fn request_key_check_with(
     // settings, not checked here (an empty field counts as absent, by the
     // catalog's rule). Refusing it also keeps a queued check from replacing
     // a key the TUI saves while the thread waits — re-checked under the
-    // lock, and again inside the write's own read-modify-write. A config
-    // that cannot be parsed skips the check — the write below fails with
-    // the real error.
+    // config lock inside the write's own read-modify-write. A config that
+    // cannot be parsed skips the check — the write below fails with the
+    // real error.
     let already_saved = crate::tui::settings::snapshot_inline_key(&path, vendor)
         .ok()
         .is_some_and(|snapshot| crate::tui::settings::saved_inline_key(&snapshot).is_some());
@@ -434,53 +434,28 @@ fn run_key_check(
     if !still_current {
         return;
     }
-    let snapshot = match crate::tui::settings::snapshot_inline_key(path, vendor) {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            finish_key_check(
-                facts,
-                slug,
-                seq,
-                KeyCheckState::Failed,
-                error.user_message(),
-                on_catalog,
-                notify,
-            );
-            return;
-        }
-    };
-    // Re-validate the dialog's precondition where it counts — under the
-    // lock, over the config as it stands now. A key the TUI saved while
-    // this thread queued belongs to the user; replacing it would be the
-    // very swap the TUI owns, so refuse it and leave the file alone.
-    if crate::tui::settings::saved_inline_key(&snapshot).is_some() {
-        finish_key_check(
-            facts,
-            slug,
-            seq,
-            KeyCheckState::Failed,
-            crate::tui::settings::KEY_ALREADY_SAVED_MESSAGE.into(),
-            on_catalog,
-            notify,
-        );
-        return;
-    }
-    if let Err(error) = crate::tui::settings::write_inline_key_if_absent(path, vendor, &key) {
-        // The write failed — a key that appeared inside its own
-        // read-modify-write, or an I/O error — and the candidate never
-        // touched the file, so there is nothing to restore. The refusal
-        // message is the verdict.
-        finish_key_check(
-            facts,
-            slug,
-            seq,
-            KeyCheckState::Failed,
-            error.user_message(),
-            on_catalog,
-            notify,
-        );
-        return;
-    }
+    // The snapshot, the "no key yet" condition, and the conditional write
+    // are one locked read-modify-write under the config lock the TUI takes,
+    // so a key the TUI saved while this thread queued is seen and refused
+    // with the saved-key message — never overwritten by the candidate, and
+    // never fetched on. On a refusal the candidate never touched the file,
+    // so there is nothing to restore; the refusal message is the verdict.
+    let snapshot =
+        match crate::tui::settings::snapshot_and_write_inline_key_if_absent(path, vendor, &key) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                finish_key_check(
+                    facts,
+                    slug,
+                    seq,
+                    KeyCheckState::Failed,
+                    error.user_message(),
+                    on_catalog,
+                    notify,
+                );
+                return;
+            }
+        };
     // The verdict must rest on a reading made under the key just written:
     // drop whatever the vendor's cache still holds from before the write.
     // A bust the thread cannot prove is a bust that did not happen: the
