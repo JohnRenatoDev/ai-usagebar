@@ -139,9 +139,7 @@ export function Settings({
                 </button>
               ) : null
             }
-            keyCheck={payload.keyCheck}
             layout={layout}
-            nowMs={nowMs}
             onOpen={onOpenProvider}
             onReorder={onReorderProviders}
             onToggle={onToggleProvider}

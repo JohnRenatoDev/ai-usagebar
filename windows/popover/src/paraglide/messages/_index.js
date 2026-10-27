@@ -20,6 +20,7 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{}} Add_Claude_Code_AccountInputs */
 /** @typedef {{}} Add_Claude_Desktop_AccountInputs */
 /** @typedef {{}} Add_Codex_AccountInputs */
+/** @typedef {{}} Add_One_To_Track_UsageInputs */
 /** @typedef {{}} Alert_ThresholdInputs */
 /** @typedef {{}} Alert_Threshold_HintInputs */
 /** @typedef {{}} AlertsInputs */
@@ -142,6 +143,7 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{}} Monthly_LowercaseInputs */
 /** @typedef {{}} MoreInputs */
 /** @typedef {{}} NativeInputs */
+/** @typedef {{}} Needs_Api_Key_HintInputs */
 /** @typedef {{}} New_UpdateInputs */
 /** @typedef {{}} New_Version_ReadyInputs */
 /** @typedef {{}} New_Version_UninstallableInputs */
@@ -149,6 +151,7 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{ duration: NonNullable<unknown> }} Next_Update_InInputs */
 /** @typedef {{}} No_AnswerInputs */
 /** @typedef {{}} No_Api_KeyInputs */
+/** @typedef {{}} No_Details_GivenInputs */
 /** @typedef {{}} No_Providers_DetectedInputs */
 /** @typedef {{}} No_Providers_EnabledInputs */
 /** @typedef {{}} No_Providers_Enabled_HintInputs */
@@ -167,10 +170,7 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{}} Open_CustomizeInputs */
 /** @typedef {{ owner: NonNullable<unknown> }} Open_Source_ByInputs */
 /** @typedef {{}} Open_TuiInputs */
-/** @typedef {{}} Open_Tui_For_DetailsInputs */
-/** @typedef {{}} Open_Tui_Settings_To_Add_OneInputs */
 /** @typedef {{}} Open_Tui_Settings_To_Sign_InInputs */
-/** @typedef {{}} Open_Tui_Settings_To_Turn_One_OnInputs */
 /** @typedef {{}} OptionsInputs */
 /** @typedef {{ percent: NonNullable<unknown> }} Pace_By_ResetInputs */
 /** @typedef {{ duration: NonNullable<unknown> }} Pace_Shows_After_FirstInputs */
@@ -254,6 +254,7 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{}} Try_Refresh_In_A_BitInputs */
 /** @typedef {{}} Try_Refresh_In_A_MinuteInputs */
 /** @typedef {{}} Turn_On_A_Provider_In_CustomizeInputs */
+/** @typedef {{}} Turn_One_On_In_CustomizeInputs */
 /** @typedef {{}} UnstarInputs */
 /** @typedef {{}} Unstar_From_Menu_BarInputs */
 /** @typedef {{}} Up_To_2_Stars_Per_ProviderInputs */
@@ -592,6 +593,22 @@ export const add_codex_account = /** @type {((inputs?: Add_Codex_AccountInputs, 
 	if (locale === "ko") return __ko.add_codex_account(inputs)
 	if (locale === "es") return __es.add_codex_account(inputs)
 	return __en.add_codex_account(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Add one to start tracking usage." |
+*
+* @param {Add_One_To_Track_UsageInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const add_one_to_track_usage = /** @type {((inputs?: Add_One_To_Track_UsageInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Add_One_To_Track_UsageInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.add_one_to_track_usage(inputs)
+	if (locale === "ko") return __ko.add_one_to_track_usage(inputs)
+	if (locale === "es") return __es.add_one_to_track_usage(inputs)
+	return __en.add_one_to_track_usage(inputs)
 });
 /**
 * | output |
@@ -2548,6 +2565,22 @@ export const native = /** @type {((inputs?: NativeInputs, options?: { locale?: "
 /**
 * | output |
 * | --- |
+* | "Needs an API key: add it with the key button." |
+*
+* @param {Needs_Api_Key_HintInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const needs_api_key_hint = /** @type {((inputs?: Needs_Api_Key_HintInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Needs_Api_Key_HintInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.needs_api_key_hint(inputs)
+	if (locale === "ko") return __ko.needs_api_key_hint(inputs)
+	if (locale === "es") return __es.needs_api_key_hint(inputs)
+	return __en.needs_api_key_hint(inputs)
+});
+/**
+* | output |
+* | --- |
 * | "An update" |
 *
 * @param {New_UpdateInputs} inputs
@@ -2656,6 +2689,22 @@ export const no_api_key = /** @type {((inputs?: No_Api_KeyInputs, options?: { lo
 	if (locale === "ko") return __ko.no_api_key(inputs)
 	if (locale === "es") return __es.no_api_key(inputs)
 	return __en.no_api_key(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "No details were given." |
+*
+* @param {No_Details_GivenInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const no_details_given = /** @type {((inputs?: No_Details_GivenInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<No_Details_GivenInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.no_details_given(inputs)
+	if (locale === "ko") return __ko.no_details_given(inputs)
+	if (locale === "es") return __es.no_details_given(inputs)
+	return __en.no_details_given(inputs)
 });
 /**
 * | output |
@@ -2948,38 +2997,6 @@ export const open_tui = /** @type {((inputs?: Open_TuiInputs, options?: { locale
 /**
 * | output |
 * | --- |
-* | "Open TUI for details." |
-*
-* @param {Open_Tui_For_DetailsInputs} inputs
-* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
-* @returns {LocalizedString}
-*/
-export const open_tui_for_details = /** @type {((inputs?: Open_Tui_For_DetailsInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Open_Tui_For_DetailsInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
-	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
-	if (locale === "pt-BR") return __pt_br2.open_tui_for_details(inputs)
-	if (locale === "ko") return __ko.open_tui_for_details(inputs)
-	if (locale === "es") return __es.open_tui_for_details(inputs)
-	return __en.open_tui_for_details(inputs)
-});
-/**
-* | output |
-* | --- |
-* | "Open TUI → Settings to add one." |
-*
-* @param {Open_Tui_Settings_To_Add_OneInputs} inputs
-* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
-* @returns {LocalizedString}
-*/
-export const open_tui_settings_to_add_one = /** @type {((inputs?: Open_Tui_Settings_To_Add_OneInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Open_Tui_Settings_To_Add_OneInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
-	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
-	if (locale === "pt-BR") return __pt_br2.open_tui_settings_to_add_one(inputs)
-	if (locale === "ko") return __ko.open_tui_settings_to_add_one(inputs)
-	if (locale === "es") return __es.open_tui_settings_to_add_one(inputs)
-	return __en.open_tui_settings_to_add_one(inputs)
-});
-/**
-* | output |
-* | --- |
 * | "Open TUI → Settings to sign in." |
 *
 * @param {Open_Tui_Settings_To_Sign_InInputs} inputs
@@ -2992,22 +3009,6 @@ export const open_tui_settings_to_sign_in = /** @type {((inputs?: Open_Tui_Setti
 	if (locale === "ko") return __ko.open_tui_settings_to_sign_in(inputs)
 	if (locale === "es") return __es.open_tui_settings_to_sign_in(inputs)
 	return __en.open_tui_settings_to_sign_in(inputs)
-});
-/**
-* | output |
-* | --- |
-* | "Open TUI → Settings to turn one on." |
-*
-* @param {Open_Tui_Settings_To_Turn_One_OnInputs} inputs
-* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
-* @returns {LocalizedString}
-*/
-export const open_tui_settings_to_turn_one_on = /** @type {((inputs?: Open_Tui_Settings_To_Turn_One_OnInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Open_Tui_Settings_To_Turn_One_OnInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
-	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
-	if (locale === "pt-BR") return __pt_br2.open_tui_settings_to_turn_one_on(inputs)
-	if (locale === "ko") return __ko.open_tui_settings_to_turn_one_on(inputs)
-	if (locale === "es") return __es.open_tui_settings_to_turn_one_on(inputs)
-	return __en.open_tui_settings_to_turn_one_on(inputs)
 });
 /**
 * | output |
@@ -4336,6 +4337,22 @@ export const turn_on_a_provider_in_customize = /** @type {((inputs?: Turn_On_A_P
 	if (locale === "ko") return __ko.turn_on_a_provider_in_customize(inputs)
 	if (locale === "es") return __es.turn_on_a_provider_in_customize(inputs)
 	return __en.turn_on_a_provider_in_customize(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Turn one on in Customize." |
+*
+* @param {Turn_One_On_In_CustomizeInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const turn_one_on_in_customize = /** @type {((inputs?: Turn_One_On_In_CustomizeInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Turn_One_On_In_CustomizeInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.turn_one_on_in_customize(inputs)
+	if (locale === "ko") return __ko.turn_one_on_in_customize(inputs)
+	if (locale === "es") return __es.turn_one_on_in_customize(inputs)
+	return __en.turn_one_on_in_customize(inputs)
 });
 /**
 * | output |

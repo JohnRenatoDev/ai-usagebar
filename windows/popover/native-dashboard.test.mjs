@@ -499,6 +499,26 @@ try {
   // Closed renders nothing.
   assert.equal(renderToStaticMarkup(React.createElement(LanguageProvider, { language: 'en' },
     React.createElement(ApiKeyDialog, { provider: null, keyCheck: null, nowMs: 1, onClose() {} }))), '');
+  // A card that has no key offers "Add key", which opens the key dialog inside
+  // the popover (the button carries the provider for focus to come back to);
+  // nothing in it points at the TUI.
+  const { ErrorRow } = await server.ssrLoadModule('/src/components/ProviderSection.tsx');
+  const { explainError } = await server.ssrLoadModule('/src/model.js');
+  const noKeyRow = renderToStaticMarkup(React.createElement(LanguageProvider, { language: 'en' },
+    React.createElement(ErrorRow, { explained: explainError('no API key', 'zai', 'en') })));
+  assert.match(noKeyRow, /<button[^>]*data-key-row="zai"[^>]*>Add key<\/button>/);
+  assert.doesNotMatch(noKeyRow, /TUI/);
+  // In the list, a key-only provider's alert says to use the key button
+  // instead of the host's "in Settings" hint.
+  const keyOnlyList = renderToStaticMarkup(React.createElement(TooltipProvider, {},
+    React.createElement(LanguageProvider, { language: 'en' },
+      React.createElement(ProviderList, {
+        cards: [], error: '', layout: emptyLayout(),
+        providers: [{ id: 'zai', name: 'Z.AI', enabled: true, configured: false, env: '', signIn: 'Add an API key in Settings, then Refresh.', action: 'settings', addAccounts: [], keyLabel: 'API key', keyNote: '' }],
+        onOpen() {}, onReorder() {}, onToggle() {},
+      }))));
+  assert.match(keyOnlyList, /aria-label="Needs an API key: add it with the key button\."/);
+  assert.doesNotMatch(keyOnlyList, /in Settings, then Refresh/);
   console.log('native dashboard: ok');
 } finally {
   await server.close();

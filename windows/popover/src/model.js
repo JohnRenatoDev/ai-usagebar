@@ -1976,7 +1976,7 @@ function shortenDiagnostic(raw, locale) {
   text = text.replace(/^[A-Za-z0-9. _-]+:\s+/, "");
   // A bare path says where, never what went wrong: it is no diagnosis.
   if (/^~[\\/]\S*$/.test(text)) text = "";
-  if (text === "") return m.open_tui_for_details({}, { locale: lang(locale) });
+  if (text === "") return m.no_details_given({}, { locale: lang(locale) });
   // The card wraps long hints, so keep the whole diagnosis; only a runaway
   // body (an HTML error page pasted into the message) is cut.
   if (text.length <= 400) return text;
@@ -1990,14 +1990,20 @@ function shortenDiagnostic(raw, locale) {
 export function explainError(text, entry, locale) {
   const raw = clean(text, 1200);
   const options = { locale: lang(locale) };
-  const openTui = { cmd: "open-tui", label: m.open_tui({}, options) };
   const refresh = { cmd: "refresh", label: m.refresh({}, options) };
   if (raw === "") return { title: "", hint: "" };
   if (/no vendors enabled/i.test(raw)) {
-    return { title: m.no_providers_enabled({}, options), hint: m.open_tui_settings_to_turn_one_on({}, options), action: openTui };
+    return { title: m.no_providers_enabled({}, options), hint: m.turn_one_on_in_customize({}, options), action: { cmd: "customize", label: m.customize({}, options) } };
   }
   if (/no API key/i.test(raw)) {
-    return { title: m.no_api_key({}, options), hint: m.open_tui_settings_to_add_one({}, options), action: openTui };
+    // The popover takes the key itself (the key dialog); a host-wide error
+    // names no provider, so it points at Customize, where the rows are.
+    const id = typeof entry === "string" ? providerOf(entry) : entry && entry.id ? providerOf(entry.id) : "";
+    return {
+      title: m.no_api_key({}, options),
+      hint: m.add_one_to_track_usage({}, options),
+      action: id ? { cmd: "add-key", id, label: m.provider_add_key({}, options) } : { cmd: "customize", label: m.customize({}, options) },
+    };
   }
   if (/no local server found|Antigravity must be running|no local language server/i.test(raw)) {
     return {
@@ -2029,7 +2035,7 @@ export function explainError(text, entry, locale) {
     return { title: m.can_t_reach_the_server({}, options), hint: m.connection_retry_hint({}, options), action: refresh };
   }
   if (/io error/i.test(raw)) {
-    return { title: m.couldn_t_read_local_files({}, options), hint: m.open_tui_for_details({}, options), action: openTui };
+    return { title: m.couldn_t_read_local_files({}, options), hint: shortenDiagnostic(raw, locale), action: refresh };
   }
   if (/did not contain valid JSON/i.test(raw)) {
     return { title: m.couldn_t_read_usage_data({}, options), hint: m.error_recovery_hint({}, options), action: refresh };

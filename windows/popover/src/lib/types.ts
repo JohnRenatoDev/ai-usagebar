@@ -112,7 +112,10 @@ export interface ResetCreditsRow extends ResetCredits {
 export type Row = BlockRow | MetricRow | ResetCreditsRow | TextRow;
 
 export interface ErrorAction {
+  /** A host command, or one the popover runs itself: "add-key" (with `id`) or "customize". */
   cmd: string;
+  /** The provider the key dialog opens for ("add-key" only). */
+  id?: string;
   label: string;
 }
 

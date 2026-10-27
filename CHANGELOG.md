@@ -8,7 +8,9 @@
   with the same writer the Settings overlay uses (mode 600), fetches that
   provider alone while the dialog shows a spinner, and keeps the key only
   when the provider accepts it. A refused key puts the previous value back
-  and the dialog says why, so you can paste another.
+  and the dialog says why, so you can paste another. A provider card that
+  reads "No API key" opens the same dialog instead of pointing at the TUI,
+  and "No providers enabled" opens Customize.
 
 ### Changed
 

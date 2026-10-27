@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentType, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type ComponentType, type MouseEvent, type ReactNode } from "react";
 import MdiAlert from "~icons/mdi/alert";
 import MdiChevronRight from "~icons/mdi/chevron-right";
 import MdiConsole from "~icons/mdi/console";
 import MdiKeyPlus from "~icons/mdi/key-plus";
 import MdiOpenInApp from "~icons/mdi/open-in-app";
 import MdiPlus from "~icons/mdi/plus";
-import { ApiKeyDialog, type KeyDialogProvider } from "@/components/ApiKeyDialog";
 import { DragHandle } from "@/components/DragHandle";
 import { Hint } from "@/components/Hint";
 import { ProviderIcon } from "@/components/ProviderIcon";
@@ -18,7 +17,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { Card, KeyCheck, Layout, ProviderInfo, ProviderListRow } from "@/lib/types";
+import type { Card, Layout, ProviderInfo, ProviderListRow } from "@/lib/types";
+import { usePopoverActions } from "@/lib/popoverActions";
 import { m } from "@/paraglide/messages.js";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -35,10 +35,6 @@ interface ProviderListProps {
   providers: ProviderInfo[];
   /** The header's right side next to Detect (Settings' reset button). */
   headerExtra?: ReactNode;
-  /** The host's verdict on the last key sent from the key dialog. */
-  keyCheck: KeyCheck | null;
-  /** The popover's clock, for the key dialog's no-answer limit. */
-  nowMs: number;
 }
 
 const ADD_ACCOUNT_LABELS: Record<string, () => string> = { code: m.add_claude_code_account, desktop: m.add_claude_desktop_account, codex: m.add_codex_account };
@@ -53,33 +49,16 @@ const ADD_ACCOUNT_LABELS: Record<string, () => string> = { code: m.add_claude_co
  * live in its subtitle; the accounts themselves are chosen there, in the
  * detail, not in this list.
  */
-export function ProviderList({ cards, error, headerExtra, keyCheck, layout, nowMs, onOpen, onReorder, onToggle, providers }: ProviderListProps) {
+export function ProviderList({ cards, error, headerExtra, layout, onOpen, onReorder, onToggle, providers }: ProviderListProps) {
   // The host re-reads credentials only when asked, so ask whenever the list opens.
   useEffect(() => {
     sendCommand("providers");
   }, []);
-  const [keyProvider, setKeyProvider] = useState<KeyDialogProvider | null>(null);
-  const keyTrigger = useRef<HTMLElement | null>(null);
-  const list = useRef<HTMLDivElement | null>(null);
-  const closeKeyDialog = useCallback(() => setKeyProvider(null), []);
-  // Focus goes back to the key icon that opened the dialog. An accepted key
-  // can remove that icon (the row no longer needs its credential): then it
-  // lands on the same row's switch, not on the top of the screen.
-  const keyFocus = useCallback(() => {
-    const trigger = keyTrigger.current;
-    if (trigger && trigger.isConnected) return trigger;
-    const row = trigger?.dataset.keyRow
-      ? list.current?.querySelector(`[data-provider-id="${CSS.escape(trigger.dataset.keyRow)}"]`)
-      : null;
-    return row ? row.querySelector<HTMLElement>('button[role="switch"]') : null;
-  }, []);
-  const onAddKey = (row: ProviderListRow, trigger: HTMLElement) => {
-    keyTrigger.current = trigger;
-    setKeyProvider({ icon: row.icon, id: row.id, keyLabel: row.keyLabel, keyNote: row.keyNote, name: row.name });
-  };
+  const actions = usePopoverActions();
+  const onAddKey = (row: ProviderListRow, trigger: HTMLElement) => actions.addKey(row.id, trigger);
   const { enabled, disabled } = providerListRows(providers, cards, layout);
   return (
-    <div ref={list} className="flex flex-col gap-[var(--header-card-gap)]">
+    <div className="flex flex-col gap-[var(--header-card-gap)]">
       <div className="flex items-center justify-between gap-2">
         <div className="section-title">{m.providers()}</div>
         <div className="flex items-center gap-2">
@@ -120,7 +99,6 @@ export function ProviderList({ cards, error, headerExtra, keyCheck, layout, nowM
       <div className={cn("px-[var(--card-pad)] text-[length:var(--sz-badge)]", error ? "text-meter-red" : "text-label-2")}>
         {error || m.all_providers_hint()}
       </div>
-      <ApiKeyDialog keyCheck={keyCheck} nowMs={nowMs} provider={keyProvider} returnFocus={keyFocus} onClose={closeKeyDialog} />
     </div>
   );
 }
@@ -174,6 +152,9 @@ function ProviderRow({ row, handle, off = false, onAddKey, onOpen, onToggle }: P
         : { icon: MdiOpenInApp, label: m.provider_open_app() }
     : null;
   const add = addAccountDecision(row);
+  // The host's hint names the TUI ("Add an API key in Settings"); a key-only
+  // provider takes its key here, so its hint points at the key button.
+  const hint = row.action === "settings" && row.keyLabel ? m.needs_api_key_hint() : row.signIn;
   const identity = (
     <>
       <ProviderIcon className="text-label-2" size="var(--row-icon-box)" slug={row.icon} title={row.name} />
@@ -183,9 +164,9 @@ function ProviderRow({ row, handle, off = false, onAddKey, onOpen, onToggle }: P
           <span className="text-[length:var(--sz-badge)] break-words text-label-2">{subtitle}</span>
         ) : null}
       </span>
-      {needs && row.signIn ? (
-        <Hint content={row.signIn}>
-          <span tabIndex={0} role="img" aria-label={row.signIn}>
+      {needs && hint ? (
+        <Hint content={hint}>
+          <span tabIndex={0} role="img" aria-label={hint}>
             <MdiAlert className="size-[var(--icon-mark)] shrink-0 text-notice" />
           </span>
         </Hint>

@@ -268,7 +268,7 @@ assert.equal(updateMessage({ state: 'available', installable: true }, 'pt-BR'), 
 assert.equal(updateMessage({ state: 'downloading' }, 'pt-BR'), 'Baixando a nova versão…');
 assert.equal(updateMessage({ state: 'downloading' }), 'Downloading the new version…');
 // A diagnosis that is only a path cleans to nothing: the fallback hint is translated too.
-assert.equal(explainError('/Users/someone/.config/x', 'zai', 'pt-BR').hint, 'Abra o TUI para ver detalhes.');
+assert.equal(explainError('/Users/someone/.config/x', 'zai', 'pt-BR').hint, 'Nenhum detalhe foi informado.');
 
 const bad = parseHostPayload('{');
 assert.equal(bad.hostError.includes('valid JSON'), true);
@@ -338,7 +338,7 @@ assert.equal(nextUpdateLabel({ nextRefreshAt: 0 }, 1), 'Updating…');
 
 assert.equal(
   friendlyError('Zai: no API key. Either set an API key in a valid environment variable or set `api_key` under [zai] in C:\\Users\\dj4lm\\AppData\\Roaming\\ai-usagebar\\config\\config.toml.'),
-  'No API key. Open TUI → Settings to add one.',
+  'No API key. Add one to start tracking usage.',
 );
 assert.equal(
   friendlyError('HTTP 429: Rate limited. Please try again later.'),
@@ -1584,8 +1584,19 @@ assert.equal(quotaAlternate(null, 'left'), '');
   assert.equal(cards[0].warning, null);
 
   // ASSERT: actions by error class
-  assert.deepEqual(explainError('no API key', 'zai').action, { cmd: 'open-tui', label: 'Open TUI' });
-  assert.deepEqual(explainError('no vendors enabled').action, { cmd: 'open-tui', label: 'Open TUI' });
+  // A missing key opens the key dialog for that provider, and no provider on
+  // opens Customize: both are fixed inside the popover, never in the TUI.
+  assert.deepEqual(explainError('no API key', 'zai').action, { cmd: 'add-key', id: 'zai', label: 'Add key' });
+  assert.deepEqual(explainError('no API key', 'zai@work').action, { cmd: 'add-key', id: 'zai', label: 'Add key' });
+  assert.deepEqual(explainError('no API key', { id: 'openrouter' }).action, { cmd: 'add-key', id: 'openrouter', label: 'Add key' });
+  assert.deepEqual(explainError('no API key').action, { cmd: 'customize', label: 'Customize' });
+  assert.deepEqual(explainError('no vendors enabled').action, { cmd: 'customize', label: 'Customize' });
+  assert.equal(explainError('no vendors enabled').hint, 'Turn one on in Customize.');
+  // A local read failure shows its own diagnosis and offers Refresh.
+  const ioFailure = explainError('io error: permission denied reading ~/.codex/sessions', 'openai');
+  assert.deepEqual(ioFailure.action, { cmd: 'refresh', label: 'Refresh' });
+  assert.match(ioFailure.hint, /permission denied/);
+  assert.doesNotMatch(JSON.stringify([explainError('no API key', 'zai'), explainError('no vendors enabled'), ioFailure]), /TUI/);
   assert.deepEqual(explainError('HTTP 503: down', 'zai').action, { cmd: 'refresh', label: 'Refresh' });
   assert.deepEqual(explainError('network transport error: connection refused', 'openai').action, { cmd: 'refresh', label: 'Refresh' });
   assert.equal(explainError('HTTP 401: authentication rejected', 'openai').action, undefined);

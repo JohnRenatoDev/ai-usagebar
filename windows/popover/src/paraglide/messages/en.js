@@ -18,6 +18,7 @@
 /** @typedef {{}} Add_Claude_Code_AccountInputs */
 /** @typedef {{}} Add_Claude_Desktop_AccountInputs */
 /** @typedef {{}} Add_Codex_AccountInputs */
+/** @typedef {{}} Add_One_To_Track_UsageInputs */
 /** @typedef {{}} Alert_ThresholdInputs */
 /** @typedef {{}} Alert_Threshold_HintInputs */
 /** @typedef {{}} AlertsInputs */
@@ -140,6 +141,7 @@
 /** @typedef {{}} Monthly_LowercaseInputs */
 /** @typedef {{}} MoreInputs */
 /** @typedef {{}} NativeInputs */
+/** @typedef {{}} Needs_Api_Key_HintInputs */
 /** @typedef {{}} New_UpdateInputs */
 /** @typedef {{}} New_Version_ReadyInputs */
 /** @typedef {{}} New_Version_UninstallableInputs */
@@ -147,6 +149,7 @@
 /** @typedef {{ duration: NonNullable<unknown> }} Next_Update_InInputs */
 /** @typedef {{}} No_AnswerInputs */
 /** @typedef {{}} No_Api_KeyInputs */
+/** @typedef {{}} No_Details_GivenInputs */
 /** @typedef {{}} No_Providers_DetectedInputs */
 /** @typedef {{}} No_Providers_EnabledInputs */
 /** @typedef {{}} No_Providers_Enabled_HintInputs */
@@ -165,10 +168,7 @@
 /** @typedef {{}} Open_CustomizeInputs */
 /** @typedef {{ owner: NonNullable<unknown> }} Open_Source_ByInputs */
 /** @typedef {{}} Open_TuiInputs */
-/** @typedef {{}} Open_Tui_For_DetailsInputs */
-/** @typedef {{}} Open_Tui_Settings_To_Add_OneInputs */
 /** @typedef {{}} Open_Tui_Settings_To_Sign_InInputs */
-/** @typedef {{}} Open_Tui_Settings_To_Turn_One_OnInputs */
 /** @typedef {{}} OptionsInputs */
 /** @typedef {{ percent: NonNullable<unknown> }} Pace_By_ResetInputs */
 /** @typedef {{ duration: NonNullable<unknown> }} Pace_Shows_After_FirstInputs */
@@ -252,6 +252,7 @@
 /** @typedef {{}} Try_Refresh_In_A_BitInputs */
 /** @typedef {{}} Try_Refresh_In_A_MinuteInputs */
 /** @typedef {{}} Turn_On_A_Provider_In_CustomizeInputs */
+/** @typedef {{}} Turn_One_On_In_CustomizeInputs */
 /** @typedef {{}} UnstarInputs */
 /** @typedef {{}} Unstar_From_Menu_BarInputs */
 /** @typedef {{}} Up_To_2_Stars_Per_ProviderInputs */
@@ -362,6 +363,10 @@ export const add_claude_desktop_account = /** @type {(inputs: Add_Claude_Desktop
 
 export const add_codex_account = /** @type {(inputs: Add_Codex_AccountInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`Add Codex account`)
+};
+
+export const add_one_to_track_usage = /** @type {(inputs: Add_One_To_Track_UsageInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Add one to start tracking usage.`)
 };
 
 export const alert_threshold = /** @type {(inputs: Alert_ThresholdInputs) => LocalizedString} */ () => {
@@ -852,6 +857,10 @@ export const native = /** @type {(inputs: NativeInputs) => LocalizedString} */ (
 	return /** @type {LocalizedString} */ (`Native`)
 };
 
+export const needs_api_key_hint = /** @type {(inputs: Needs_Api_Key_HintInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Needs an API key: add it with the key button.`)
+};
+
 export const new_update = /** @type {(inputs: New_UpdateInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`An update`)
 };
@@ -878,6 +887,10 @@ export const no_answer = /** @type {(inputs: No_AnswerInputs) => LocalizedString
 
 export const no_api_key = /** @type {(inputs: No_Api_KeyInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`No API key`)
+};
+
+export const no_details_given = /** @type {(inputs: No_Details_GivenInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`No details were given.`)
 };
 
 export const no_providers_detected = /** @type {(inputs: No_Providers_DetectedInputs) => LocalizedString} */ () => {
@@ -952,20 +965,8 @@ export const open_tui = /** @type {(inputs: Open_TuiInputs) => LocalizedString} 
 	return /** @type {LocalizedString} */ (`Open TUI`)
 };
 
-export const open_tui_for_details = /** @type {(inputs: Open_Tui_For_DetailsInputs) => LocalizedString} */ () => {
-	return /** @type {LocalizedString} */ (`Open TUI for details.`)
-};
-
-export const open_tui_settings_to_add_one = /** @type {(inputs: Open_Tui_Settings_To_Add_OneInputs) => LocalizedString} */ () => {
-	return /** @type {LocalizedString} */ (`Open TUI → Settings to add one.`)
-};
-
 export const open_tui_settings_to_sign_in = /** @type {(inputs: Open_Tui_Settings_To_Sign_InInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`Open TUI → Settings to sign in.`)
-};
-
-export const open_tui_settings_to_turn_one_on = /** @type {(inputs: Open_Tui_Settings_To_Turn_One_OnInputs) => LocalizedString} */ () => {
-	return /** @type {LocalizedString} */ (`Open TUI → Settings to turn one on.`)
 };
 
 export const options = /** @type {(inputs: OptionsInputs) => LocalizedString} */ () => {
@@ -1298,6 +1299,10 @@ export const try_refresh_in_a_minute = /** @type {(inputs: Try_Refresh_In_A_Minu
 
 export const turn_on_a_provider_in_customize = /** @type {(inputs: Turn_On_A_Provider_In_CustomizeInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`Turn on a provider in Customize.`)
+};
+
+export const turn_one_on_in_customize = /** @type {(inputs: Turn_One_On_In_CustomizeInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Turn one on in Customize.`)
 };
 
 export const unstar = /** @type {(inputs: UnstarInputs) => LocalizedString} */ () => {

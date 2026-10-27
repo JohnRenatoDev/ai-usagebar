@@ -1,10 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Footer, TopBar } from "@/components/Chrome";
 import type { RowAction } from "@/components/RowMenu";
 import type { RowLists } from "@/components/dnd";
+import { ApiKeyDialog, type KeyDialogProvider } from "@/components/ApiKeyDialog";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import type { Layout, Screen } from "@/lib/types";
 import { LanguageProvider } from "@/lib/i18n";
+import { PopoverActionsProvider, type PopoverActions } from "@/lib/popoverActions";
 import { m } from "@/paraglide/messages.js";
 import { cn } from "@/lib/utils";
 import { About } from "@/screens/About";
@@ -30,6 +32,7 @@ import {
   prefsForCard,
   projectCards,
   providerGroups,
+  providerIconId,
   resolvedTheme,
   saveLayout,
   seedStars,
@@ -79,6 +82,24 @@ export default function App() {
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [rowMenuOpen, setRowMenuOpen] = useState(false);
   const [resetArmed, setResetArmed] = useState(false);
+  // The key dialog, opened from the provider list's key icon or from a card's
+  // "No API key" row; focus returns to whichever control opened it.
+  const [keyProvider, setKeyProvider] = useState<KeyDialogProvider | null>(null);
+  const keyTrigger = useRef<HTMLElement | null>(null);
+  const closeKeyDialog = useCallback(() => setKeyProvider(null), []);
+  // An accepted key can remove the control that opened the dialog (the row or
+  // the card no longer needs its credential): then focus lands on that
+  // provider's switch in the list, or on its card's header action.
+  const keyFocus = useCallback(() => {
+    const trigger = keyTrigger.current;
+    if (trigger && trigger.isConnected) return trigger;
+    const id = trigger?.dataset.keyRow;
+    if (!id) return null;
+    const escaped = CSS.escape(id);
+    return document.querySelector<HTMLElement>(
+      `[data-provider-id="${escaped}"] button[role="switch"], [data-card-id="${escaped}"] .header-action`,
+    );
+  }, []);
   const [starError, setStarError] = useState("");
   const [popoverVisible, setPopoverVisible] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -416,8 +437,29 @@ export default function App() {
             ? (currentGroup && currentGroup.cards.length > 1 ? currentProviderName : currentCard?.title) || m.provider({}, { locale: layout.language })
             : currentCard?.title || m.provider({}, { locale: layout.language });
 
+  const popoverActions: PopoverActions = {
+    addKey(providerId, trigger) {
+      const provider = payload.providers.find((item) => item.id === providerId);
+      // Only a key-only provider has a key to take here; anything else keeps the TUI.
+      if (!provider || !provider.keyLabel) {
+        sendCommand("open-tui");
+        return;
+      }
+      keyTrigger.current = trigger;
+      setKeyProvider({
+        icon: providerIconId(provider.id),
+        id: provider.id,
+        keyLabel: provider.keyLabel,
+        keyNote: provider.keyNote || "",
+        name: provider.name,
+      });
+    },
+    openCustomize: () => go("customize"),
+  };
+
   return (
     <LanguageProvider language={layout.language}>
+    <PopoverActionsProvider value={popoverActions}>
     <div
       ref={shellRef}
       data-os={payload.os}
@@ -500,7 +542,6 @@ export default function App() {
             <Customize
               cards={cards}
               layout={layout}
-              nowMs={nowMs}
               payload={payload}
               onOpen={(id) => openProvider(id, "customize")}
               onOpenSettings={() => go("settings")}
@@ -591,7 +632,15 @@ export default function App() {
         onCheck={requestCheck}
         onOpenChange={setUpdateDialogOpen}
       />
+      <ApiKeyDialog
+        keyCheck={payload.keyCheck}
+        nowMs={nowMs}
+        provider={keyProvider}
+        returnFocus={keyFocus}
+        onClose={closeKeyDialog}
+      />
     </div>
+    </PopoverActionsProvider>
     </LanguageProvider>
   );
 }

@@ -34,6 +34,7 @@ import type {
 import { m } from "@/paraglide/messages.js";
 import { translateUsage, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { usePopoverActions } from "@/lib/popoverActions";
 import {
   cardHasExtras,
   condensedTextRowIndexes,
@@ -571,10 +572,20 @@ interface ErrorRowProps {
 }
 
 /**
- * A provider with nothing to show: the verdict, the one-line hint, and — when the fix is a host
- * command — a small action button. Terminal-side fixes (sign-in) and waits (429) get no button.
+ * A provider with nothing to show: the verdict, the one-line hint, and — when there is a fix to
+ * offer — a small action button. A missing key opens the key dialog and no provider switched on
+ * opens Customize, both inside the popover; the rest are host commands. Terminal-side fixes
+ * (sign-in) and waits (429) get no button.
  */
 export function ErrorRow({ explained }: ErrorRowProps) {
+  const actions = usePopoverActions();
+  function run(trigger: HTMLElement) {
+    const action = explained.action;
+    if (!action) return;
+    if (action.cmd === "add-key" && action.id) actions.addKey(action.id, trigger);
+    else if (action.cmd === "customize") actions.openCustomize();
+    else sendCommand(action.cmd);
+  }
   return (
     <div className="flex flex-col gap-[var(--gap-stack)] px-[var(--card-pad)] py-[var(--pad-text-row)]">
       <span className="text-[length:var(--sz-support)] font-semibold">{explained.title || m.couldn_t_update()}</span>
@@ -585,7 +596,8 @@ export function ErrorRow({ explained }: ErrorRowProps) {
         <button
           type="button"
           className="action-btn mt-[var(--gap-stack)] w-fit"
-          onClick={() => sendCommand(explained.action?.cmd)}
+          data-key-row={explained.action.cmd === "add-key" ? explained.action.id : undefined}
+          onClick={(event) => run(event.currentTarget)}
         >
           {explained.action.label}
         </button>
