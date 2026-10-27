@@ -2,6 +2,13 @@
 
 ### Fixed
 
+- **`~` now works in `[opencode-go] auth_paths` and `[droid] cli_path`.**
+  Every other path setting expands a leading `~` when the config loads, but
+  these two kept it literally. Configuring `auth_paths` with a `~` path
+  prevented OpenCode Go from detecting or reading credentials in home, and
+  `cli_path = "~/.local/bin/droid"` caused Droid token renewal spawns to fail
+  with NotFound.
+
 - **Cursor still reads the IDE session after 3.27.12's opaque token.** That
   release replaced the `cursorAuth/accessToken` JWT with an opaque `curs…`
   string, so the provider's claim decoding failed and reported "session token
