@@ -2515,6 +2515,7 @@ impl Config {
                 *path = expand_tilde(path);
             }
         }
+        expand_tilde_opt(&mut self.droid.cli_path);
     }
 
     /// Explicitly enumerate every inline credential field. Adding a new
