@@ -42,6 +42,17 @@
   A JWT is still preferred when present, and an opaque token with no cached
   profile keeps the original sign-in error.
 
+- **Saving `config.toml` from the tray, the TUI, and the CLI waits for the
+  other instead of overwriting it.** Their saves are read-modify-writes of
+  the same file, and a save that landed between another process's read and
+  write used to be silently lost — including the TUI's key, which the tray's
+  key check could replace with the candidate it was checking. Every save
+  now takes an exclusive `config.toml.lock` beside the config for the whole
+  read-modify-write, and the key check's snapshot, "no key yet" condition,
+  and conditional write happen under that same lock. A save that cannot get
+  the lock within five seconds fails with "config.toml is being saved by
+  another process; try again." instead of writing.
+
 ## [1.44.0] — 2026-10-25
 
 ### Added

@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, value};
 
 use crate::config::{
-    Config, is_valid_env_var_name, read_config_document, set_bool, set_value, write_config_document,
+    Config, edit_config_document, is_valid_env_var_name, read_config_document, set_bool, set_value,
 };
 use crate::error::{AppError, Result};
 use crate::theme::Theme;
@@ -704,82 +704,85 @@ fn save_to_config_default(state: &SettingsState) -> Result<()> {
 /// Same as `save_to_config_default` but with an explicit path — exposed for
 /// tests. Writing a non-empty credential also sets that vendor's `enabled = true`.
 pub fn save_to_path(state: &SettingsState, path: &Path) -> Result<()> {
-    let mut doc = read_config_document(path)?;
-
-    // Remove fields written by the short-lived inline Copilot-token design.
-    // GitHub CLI owns the OAuth credential now; retaining a secret this app
-    // neither reads nor supports would be misleading and unsafe.
-    if let Some(table) = doc
-        .get_mut("copilot")
-        .and_then(toml_edit::Item::as_table_mut)
-    {
-        table.remove("token");
-        table.remove("token_env");
-    }
-
-    // Only Copilot is deliberately offered before it is enabled: choosing it
-    // is the explicit opt-in after the GitHub CLI login. The env-only key
-    // vendors (any `KEY_VENDORS` entry whose credential the user reached via
-    // `OLLAMA_API_KEY` or another env var) are also offered before they are
-    // enabled, and selecting them is the explicit opt-in for that vendor —
-    // otherwise a user could pick a vendor in the overlay and the fetch
-    // would still fail because `enabled = false`. Every other choice remains
-    // enabled-only, so no failed provider is persisted as primary.
-    if state.primary_choices.contains(&state.primary) {
-        set_string(&mut doc, "ui", "primary", state.primary.slug())?;
-        if state.primary == VendorId::Copilot || KEY_VENDORS.iter().any(|kv| kv.id == state.primary)
+    // One locked read-modify-write: a key check's candidate write and this
+    // save queue on the same lock instead of overwriting each other.
+    edit_config_document(path, |doc| {
+        // Remove fields written by the short-lived inline Copilot-token design.
+        // GitHub CLI owns the OAuth credential now; retaining a secret this app
+        // neither reads nor supports would be misleading and unsafe.
+        if let Some(table) = doc
+            .get_mut("copilot")
+            .and_then(toml_edit::Item::as_table_mut)
         {
-            set_bool(&mut doc, state.primary.config_section(), "enabled", true)?;
+            table.remove("token");
+            table.remove("token_env");
         }
-    }
 
-    for (i, kv) in KEY_VENDORS.iter().enumerate() {
-        let Some(input) = state.keys.get(i) else {
-            continue;
-        };
-        update_key(&mut doc, kv, input)?;
-    }
-
-    // Provider on/off switches (#244): written after the credential fields so
-    // an explicit off wins over the enable-a-pasted-key-implied rule above,
-    // and each one goes through the same whitelisted setter the native
-    // settings bridge uses. Only toggled rows are written, so an untouched
-    // overlay save never creates a `[<vendor>]` section the config never had.
-    for (i, id) in VendorId::all().iter().enumerate() {
-        let Some(switch) = state.vendors.get(i) else {
-            continue;
-        };
-        if switch.dirty {
-            crate::config::set_vendor_enabled_in_doc(&mut doc, id.slug(), switch.enabled)?;
-        }
-    }
-
-    // [notifications]: each field is written only when the user touched it,
-    // so an untouched overlay save leaves an absent/commented section alone.
-    if state.notify_enabled_dirty {
-        set_bool(&mut doc, "notifications", "enabled", state.notify_enabled)?;
-    }
-    if state.notify_threshold.dirty {
-        let raw = state.notify_threshold.buf.trim();
-        let threshold = raw.parse::<u8>();
-        match threshold {
-            Ok(threshold) if (1..=100).contains(&threshold) => {
-                set_value(
-                    &mut doc,
-                    "notifications",
-                    "threshold",
-                    Some(toml_edit::Value::from(i64::from(threshold))),
-                )?;
-            }
-            _ => {
-                return Err(AppError::Other(format!(
-                    "[notifications] threshold must be a whole number between 1 and 100, got {raw:?}"
-                )));
+        // Only Copilot is deliberately offered before it is enabled: choosing it
+        // is the explicit opt-in after the GitHub CLI login. The env-only key
+        // vendors (any `KEY_VENDORS` entry whose credential the user reached via
+        // `OLLAMA_API_KEY` or another env var) are also offered before they are
+        // enabled, and selecting them is the explicit opt-in for that vendor —
+        // otherwise a user could pick a vendor in the overlay and the fetch
+        // would still fail because `enabled = false`. Every other choice remains
+        // enabled-only, so no failed provider is persisted as primary.
+        if state.primary_choices.contains(&state.primary) {
+            set_string(doc, "ui", "primary", state.primary.slug())?;
+            if state.primary == VendorId::Copilot
+                || KEY_VENDORS.iter().any(|kv| kv.id == state.primary)
+            {
+                set_bool(doc, state.primary.config_section(), "enabled", true)?;
             }
         }
-    }
 
-    write_config_document(path, &doc)
+        for (i, kv) in KEY_VENDORS.iter().enumerate() {
+            let Some(input) = state.keys.get(i) else {
+                continue;
+            };
+            update_key(doc, kv, input)?;
+        }
+
+        // Provider on/off switches (#244): written after the credential fields so
+        // an explicit off wins over the enable-a-pasted-key-implied rule above,
+        // and each one goes through the same whitelisted setter the native
+        // settings bridge uses. Only toggled rows are written, so an untouched
+        // overlay save never creates a `[<vendor>]` section the config never had.
+        for (i, id) in VendorId::all().iter().enumerate() {
+            let Some(switch) = state.vendors.get(i) else {
+                continue;
+            };
+            if switch.dirty {
+                crate::config::set_vendor_enabled_in_doc(doc, id.slug(), switch.enabled)?;
+            }
+        }
+
+        // [notifications]: each field is written only when the user touched it,
+        // so an untouched overlay save leaves an absent/commented section alone.
+        if state.notify_enabled_dirty {
+            set_bool(doc, "notifications", "enabled", state.notify_enabled)?;
+        }
+        if state.notify_threshold.dirty {
+            let raw = state.notify_threshold.buf.trim();
+            let threshold = raw.parse::<u8>();
+            match threshold {
+                Ok(threshold) if (1..=100).contains(&threshold) => {
+                    set_value(
+                        doc,
+                        "notifications",
+                        "threshold",
+                        Some(toml_edit::Value::from(i64::from(threshold))),
+                    )?;
+                }
+                _ => {
+                    return Err(AppError::Other(format!(
+                        "[notifications] threshold must be a whole number between 1 and 100, got {raw:?}"
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    })
 }
 
 /// The credential rules every apply path enforces: the TUI's `settings
@@ -833,6 +836,10 @@ pub(crate) struct KeyItemSnapshot {
 /// found. A restore touches only those two fields — everything else in the
 /// document is left as the document holds it at restore time.
 pub(crate) struct KeySnapshot {
+    /// Recorded for the tests and for the snapshot's own contract; the
+    /// restore's file-removal step now keys off the document being left
+    /// empty by [`crate::config::edit_config_document`], not off this flag.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub file_existed: bool,
     pub section_existed: bool,
     pub key: Option<KeyItemSnapshot>,
@@ -859,22 +866,33 @@ fn capture_key_item(table: &dyn toml_edit::TableLike, name: &str) -> Option<KeyI
 pub(crate) fn snapshot_inline_key(path: &Path, vendor: &KeyVendor) -> Result<KeySnapshot> {
     let file_existed = path.exists();
     let doc = read_config_document(path)?;
+    Ok(key_snapshot_of_doc(&doc, file_existed, vendor))
+}
+
+/// [`snapshot_inline_key`] over a document already in hand — the capture
+/// the locked check write runs inside [`edit_config_document`], where the
+/// file's state is settled under the lock.
+fn key_snapshot_of_doc(
+    doc: &toml_edit::DocumentMut,
+    file_existed: bool,
+    vendor: &KeyVendor,
+) -> KeySnapshot {
     match doc
         .get(vendor.section)
         .and_then(toml_edit::Item::as_table_like)
     {
-        Some(table) => Ok(KeySnapshot {
+        Some(table) => KeySnapshot {
             file_existed,
             section_existed: true,
             key: capture_key_item(table, vendor.config_key),
             enabled: capture_key_item(table, "enabled"),
-        }),
-        None => Ok(KeySnapshot {
+        },
+        None => KeySnapshot {
             file_existed,
             section_existed: false,
             key: None,
             enabled: None,
-        }),
+        },
     }
 }
 
@@ -899,53 +917,50 @@ pub(crate) fn saved_inline_key(snapshot: &KeySnapshot) -> Option<String> {
 }
 
 /// Write one inline credential the way the overlay's save does: `toml_edit`,
-/// the vendor's own section, `chmod 600` through [`write_config_document`].
-/// A non-empty credential also opts the vendor in, like `update_key`: a key
-/// that stays disabled is a key the fetch never sees. The value is validated
-/// first, so a refused key never touches the file. The key check itself uses
-/// the conditional [`write_inline_key_if_absent`]; the unconditional write
+/// the vendor's own section, `chmod 600` through the locked
+/// [`edit_config_document`]. A non-empty credential also opts the vendor in,
+/// like `update_key`: a key that stays disabled is a key the fetch never
+/// sees. The value is validated first, so a refused key never touches the
+/// file. The key check itself uses
+/// [`snapshot_and_write_inline_key_if_absent`], which re-checks the
+/// "no key yet" precondition under the same lock; this unconditional write
 /// is what a user-driven save does, and the tests stand in for it.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn write_inline_key(path: &Path, vendor: &KeyVendor, value: &str) -> Result<()> {
     validate_key_value(vendor, value)?;
-    let mut doc = read_config_document(path)?;
-    set_string(&mut doc, vendor.section, vendor.config_key, value)?;
-    set_bool(&mut doc, vendor.section, "enabled", true)?;
-    write_config_document(path, &doc)
+    edit_config_document(path, |doc| {
+        set_string(doc, vendor.section, vendor.config_key, value)?;
+        set_bool(doc, vendor.section, "enabled", true)
+    })
 }
 
-/// [`write_inline_key`] that refuses to replace a saved credential: the
-/// "no key yet" precondition is re-checked inside the same
-/// read-modify-write, so the window between deciding and writing is the
-/// file's own. A non-empty key found there is a later decision on the same
-/// field and stays — the refusal is the
-/// [`KEY_ALREADY_SAVED_MESSAGE`], and the file is left untouched. An empty
-/// value counts as absent, by the catalog's rule.
-pub(crate) fn write_inline_key_if_absent(
+/// The key check's whole read-modify-write in one locked step: snapshot the
+/// credential state, and only while no key is still saved, write `value` —
+/// plus the vendor's opt-in — and return the snapshot the later restore
+/// compares against. The snapshot, the "no key yet" condition, and the
+/// write happen under the same config lock the TUI's save takes, so a TUI
+/// save that lands between any two of the steps is either fully before
+/// (the condition sees its key and the check refuses with
+/// [`KEY_ALREADY_SAVED_MESSAGE`], leaving the file alone) or fully after
+/// (its write is the later decision and wins) — the candidate can no longer
+/// overwrite a key the TUI saved in the window between deciding and
+/// writing. An empty value counts as absent, by the catalog's rule; the
+/// value is validated first, so a refused key never touches the file.
+pub(crate) fn snapshot_and_write_inline_key_if_absent(
     path: &Path,
     vendor: &KeyVendor,
     value: &str,
-) -> Result<()> {
+) -> Result<KeySnapshot> {
     validate_key_value(vendor, value)?;
-    let mut doc = read_config_document(path)?;
-    if saved_inline_key_in_doc(&doc, vendor).is_some() {
-        return Err(AppError::Other(KEY_ALREADY_SAVED_MESSAGE.to_string()));
-    }
-    set_string(&mut doc, vendor.section, vendor.config_key, value)?;
-    set_bool(&mut doc, vendor.section, "enabled", true)?;
-    write_config_document(path, &doc)
-}
-
-/// The precondition [`write_inline_key_if_absent`] refuses on, read from a
-/// document already in hand — the same catalog rule as
-/// [`saved_inline_key`]: an empty value is no credential.
-fn saved_inline_key_in_doc(doc: &toml_edit::DocumentMut, vendor: &KeyVendor) -> Option<String> {
-    doc.get(vendor.section)?
-        .as_table_like()
-        .and_then(|table| table.get(vendor.config_key))
-        .and_then(toml_edit::Item::as_str)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+    edit_config_document(path, |doc| {
+        let snapshot = key_snapshot_of_doc(doc, path.exists(), vendor);
+        if saved_inline_key(&snapshot).is_some() {
+            return Err(AppError::Other(KEY_ALREADY_SAVED_MESSAGE.to_string()));
+        }
+        set_string(doc, vendor.section, vendor.config_key, value)?;
+        set_bool(doc, vendor.section, "enabled", true)?;
+        Ok(snapshot)
+    })
 }
 
 /// Give the config back the state [`snapshot_inline_key`] captured,
@@ -957,73 +972,74 @@ fn saved_inline_key_in_doc(doc: &toml_edit::DocumentMut, vendor: &KeyVendor) -> 
 /// to the user now and survives. No other field in the file is touched,
 /// so edits made to it in the meantime survive the restore. A section the
 /// check created is removed when nothing else is left in it, and a file
-/// the check created is removed when the document is left empty. No
-/// validation runs: the captured values already lived in the user's
-/// config.
+/// the check created is removed when the document is left empty —
+/// [`edit_config_document`] owns that step. No validation runs: the
+/// captured values already lived in the user's config. The whole
+/// compare-and-restore is one locked read-modify-write under the same lock
+/// the TUI's save takes, so a save made while the check waited is seen
+/// here, not clobbered by it.
 pub(crate) fn restore_inline_key_snapshot(
     path: &Path,
     vendor: &KeyVendor,
     snapshot: &KeySnapshot,
     candidate: &str,
 ) -> Result<()> {
-    let mut doc = read_config_document(path)?;
-    let table = doc
-        .entry(vendor.section)
-        .or_insert_with(toml_edit::table)
-        .as_table_mut()
-        .ok_or_else(|| {
-            AppError::Other(format!("config.toml: [{}] is not a table", vendor.section))
-        })?;
-    // Compare-and-restore: the check wrote `candidate` as the key and
-    // `true` as the vendor's `enabled` switch, so each field goes back —
-    // with its captured value and decoration, or out when it was absent —
-    // only while it still holds exactly what the check wrote. A later
-    // decision on the same field, made while the check waited for the
-    // provider (a key saved, the vendor switched off), belongs to the user
-    // now and survives.
-    let current_key = table
-        .get(vendor.config_key)
-        .and_then(toml_edit::Item::as_str);
-    match &snapshot.key {
-        Some(captured) if current_key == Some(candidate) => {
-            let key =
-                toml_edit::Key::new(vendor.config_key).with_leaf_decor(captured.key_decor.clone());
-            table.insert_formatted(&key, toml_edit::Item::Value(captured.value.clone()));
+    edit_config_document(path, |doc| {
+        let table = doc
+            .entry(vendor.section)
+            .or_insert_with(toml_edit::table)
+            .as_table_mut()
+            .ok_or_else(|| {
+                AppError::Other(format!("config.toml: [{}] is not a table", vendor.section))
+            })?;
+        // Compare-and-restore: the check wrote `candidate` as the key and
+        // `true` as the vendor's `enabled` switch, so each field goes back —
+        // with its captured value and decoration, or out when it was absent —
+        // only while it still holds exactly what the check wrote. A later
+        // decision on the same field, made while the check waited for the
+        // provider (a key saved, the vendor switched off), belongs to the user
+        // now and survives.
+        let current_key = table
+            .get(vendor.config_key)
+            .and_then(toml_edit::Item::as_str);
+        match &snapshot.key {
+            Some(captured) if current_key == Some(candidate) => {
+                let key = toml_edit::Key::new(vendor.config_key)
+                    .with_leaf_decor(captured.key_decor.clone());
+                table.insert_formatted(&key, toml_edit::Item::Value(captured.value.clone()));
+            }
+            None if current_key == Some(candidate) => {
+                table.remove(vendor.config_key);
+            }
+            // The field holds someone else's value: leave it.
+            _ => {}
         }
-        None if current_key == Some(candidate) => {
-            table.remove(vendor.config_key);
+        let current_enabled = table.get("enabled").and_then(toml_edit::Item::as_bool);
+        match &snapshot.enabled {
+            Some(captured) if current_enabled == Some(true) => {
+                let key =
+                    toml_edit::Key::new("enabled").with_leaf_decor(captured.key_decor.clone());
+                table.insert_formatted(&key, toml_edit::Item::Value(captured.value.clone()));
+            }
+            None if current_enabled == Some(true) => {
+                table.remove("enabled");
+            }
+            // The user switched the vendor: leave their decision.
+            _ => {}
         }
-        // The field holds someone else's value: leave it.
-        _ => {}
-    }
-    let current_enabled = table.get("enabled").and_then(toml_edit::Item::as_bool);
-    match &snapshot.enabled {
-        Some(captured) if current_enabled == Some(true) => {
-            let key = toml_edit::Key::new("enabled").with_leaf_decor(captured.key_decor.clone());
-            table.insert_formatted(&key, toml_edit::Item::Value(captured.value.clone()));
+        // A section the check created must not survive the restore as an
+        // empty husk — but one that holds anything the check did not write
+        // does.
+        if !snapshot.section_existed
+            && doc
+                .get(vendor.section)
+                .and_then(toml_edit::Item::as_table_like)
+                .is_some_and(|table| table.is_empty())
+        {
+            doc.remove(vendor.section);
         }
-        None if current_enabled == Some(true) => {
-            table.remove("enabled");
-        }
-        // The user switched the vendor: leave their decision.
-        _ => {}
-    }
-    // A section the check created must not survive the restore as an empty
-    // husk — but one that holds anything the check did not write does.
-    if !snapshot.section_existed
-        && doc
-            .get(vendor.section)
-            .and_then(toml_edit::Item::as_table_like)
-            .is_some_and(|table| table.is_empty())
-    {
-        doc.remove(vendor.section);
-    }
-    // Likewise a file the check created, when the document is left empty.
-    if !snapshot.file_existed && doc.as_table().is_empty() {
-        std::fs::remove_file(path)?;
-        return Ok(());
-    }
-    write_config_document(path, &doc)
+        Ok(())
+    })
 }
 
 /// Apply one credential field to the document. Untouched fields are left
@@ -1308,13 +1324,9 @@ fn apply_settings_from_stdin() -> Result<()> {
 
 /// Explicit user opt-in, unlike discovery which respects an existing false.
 fn enable_vendor_at(path: &Path, vendor: VendorId) -> Result<()> {
-    let mut doc = read_config_document(path)?;
-    let before = doc.to_string();
-    set_bool(&mut doc, vendor.config_section(), "enabled", true)?;
-    if doc.to_string() != before {
-        write_config_document(path, &doc)?;
-    }
-    Ok(())
+    edit_config_document(path, |doc| {
+        set_bool(doc, vendor.config_section(), "enabled", true)
+    })
 }
 
 /// Administrative settings bridge for native frontends. `show` never emits a
@@ -2783,28 +2795,129 @@ api_key_env = "OPENROUTER_WORK_API_KEY"
     }
 
     #[test]
-    fn write_inline_key_if_absent_refuses_a_saved_nonempty_key() {
+    fn check_write_refuses_a_saved_nonempty_key() {
         let vendor = key_vendor_for_slug(VendorId::Zai.slug()).unwrap();
         let original = "[ui]\nprimary = \"zai\"\n[zai]\napi_key = \"old-key-value\"\n";
         let (_dir, path) = temp_config(Some(original));
-        let error = write_inline_key_if_absent(&path, vendor, "test-key-value")
-            .expect_err("a saved key must not be replaced by the check's write");
+        let error = match snapshot_and_write_inline_key_if_absent(&path, vendor, "test-key-value") {
+            Ok(_) => panic!("a saved key must not be replaced by the check's write"),
+            Err(error) => error,
+        };
         assert_eq!(error.user_message(), KEY_ALREADY_SAVED_MESSAGE);
-        // The refusal is inside the read-modify-write: nothing was written.
+        // The refusal is inside the locked read-modify-write: nothing was
+        // written.
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     }
 
     #[test]
-    fn write_inline_key_if_absent_accepts_an_empty_field() {
+    fn check_write_accepts_an_empty_field_and_returns_the_pre_state() {
         let vendor = key_vendor_for_slug(VendorId::Zai.slug()).unwrap();
-        let original = "[zai]\napi_key = ''\nenabled = false\n";
-        let (_dir, path) = temp_config(Some(original));
+        let (_dir, path) = temp_config(Some("[zai]\napi_key = ''\nenabled = false\n"));
         // The catalog offers the dialog for this file, so the conditional
         // write must too: the empty value counts as absent.
-        write_inline_key_if_absent(&path, vendor, "test-key-value").unwrap();
+        let snapshot =
+            snapshot_and_write_inline_key_if_absent(&path, vendor, "test-key-value").unwrap();
+        assert!(snapshot.file_existed);
+        assert!(snapshot.section_existed);
+        // The snapshot is the state before the write: the empty field, and
+        // the vendor still off — what a later restore compares against.
+        assert_eq!(
+            saved_inline_key(&snapshot),
+            None,
+            "an empty field is no credential, even when captured"
+        );
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(raw.contains(r#"api_key = "test-key-value""#), "{raw}");
         assert!(raw.contains("enabled = true"), "{raw}");
+    }
+
+    /// F6's scenario under the lock: the TUI's save and the check's
+    /// conditional write both wait on the lock the test holds from the
+    /// outside, and once it is released they run one after the other — in
+    /// either order the key the TUI saved is never overwritten by the
+    /// candidate.
+    #[test]
+    fn tui_save_and_check_write_serialize_on_the_config_lock() {
+        use std::sync::mpsc;
+        let (dir, path) = temp_config(Some("[ui]\nprimary = \"zai\"\n"));
+        let _ = dir;
+        let lock_path = crate::config::config_lock_path(&path);
+
+        // Both real writers, queued on the lock the test holds: the TUI's
+        // `save_to_path` and the check's locked snapshot—write.
+        let waiters =
+            |path: &std::path::Path, tx: mpsc::Sender<()>, tx_check: mpsc::Sender<Result<()>>| {
+                let tui_path = path.to_path_buf();
+                let tui = std::thread::spawn(move || {
+                    let state = state_with("tui-key-value", "openrouter-key-value", VendorId::Zai);
+                    tx.send(()).unwrap();
+                    save_to_path(&state, &tui_path).unwrap();
+                });
+                let check_path = path.to_path_buf();
+                let check = std::thread::spawn(move || {
+                    let vendor = key_vendor_for_slug("zai").unwrap();
+                    tx_check
+                        .send(
+                            snapshot_and_write_inline_key_if_absent(
+                                &check_path,
+                                vendor,
+                                "candidate-key-value",
+                            )
+                            .map(|_| ()),
+                        )
+                        .unwrap();
+                });
+                (tui, check)
+            };
+
+        // Round 1: no key is saved yet. Both writers wait, the lock is
+        // released, and whatever order the lock grants, the TUI's key is
+        // what is left — the candidate either refused or got replaced by
+        // the TUI's later save.
+        let held = crate::cache::acquire_lock(&lock_path, std::time::Duration::from_secs(30))
+            .expect("the test takes the config lock");
+        let (tx, rx) = mpsc::channel();
+        let (tx_check, rx_check) = mpsc::channel();
+        let (tui, check) = waiters(&path, tx, tx_check);
+        rx.recv().unwrap();
+        drop(held);
+        let check_result = rx_check.recv().unwrap();
+        tui.join().unwrap();
+        check.join().unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.contains(r#"api_key = "tui-key-value""#),
+            "the TUI's key must survive: {raw}"
+        );
+        assert!(
+            !raw.contains("candidate-key-value"),
+            "the candidate must not overwrite the TUI's key: {raw}"
+        );
+        if let Err(error) = check_result {
+            // The TUI's save ran first: the check saw its key and refused
+            // with the existing saved-key message.
+            assert_eq!(error.user_message(), KEY_ALREADY_SAVED_MESSAGE);
+        }
+
+        // Round 2: the TUI's key is saved now. The same two writers wait
+        // again; whatever order the lock grants, the check must refuse and
+        // the file must not change.
+        let before = std::fs::read_to_string(&path).unwrap();
+        let held = crate::cache::acquire_lock(&lock_path, std::time::Duration::from_secs(30))
+            .expect("the test takes the config lock again");
+        let (tx, rx) = mpsc::channel();
+        let (tx_check, rx_check) = mpsc::channel();
+        let (tui, check) = waiters(&path, tx, tx_check);
+        rx.recv().unwrap();
+        drop(held);
+        let error = rx_check
+            .recv()
+            .unwrap()
+            .expect_err("a saved key must refuse the candidate");
+        tui.join().unwrap();
+        check.join().unwrap();
+        assert_eq!(error.user_message(), KEY_ALREADY_SAVED_MESSAGE);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
     }
     #[test]
     fn inline_key_snapshot_removes_the_key_when_there_was_none() {
