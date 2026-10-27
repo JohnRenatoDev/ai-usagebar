@@ -256,11 +256,11 @@ mod tests {
         let endpoints = Endpoints {
             quota: format!("{}/api/monitor/usage/quota/limit", server.url()),
         };
-        let err = crate::tui::app::fetch_api_keyed(
+        let err = crate::outcome::fetch_api_keyed(
             async {
                 fetch_snapshot(&client, key, &cache, &endpoints, Duration::ZERO, None)
                     .await
-                    .map(Into::into)
+                    .map(crate::vendor::VendorOutcome::from)
             },
             key,
         )

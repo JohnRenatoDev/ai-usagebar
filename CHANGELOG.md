@@ -58,14 +58,19 @@
 ### Security
 
 - **A provider's answer that quotes the API key is no longer written to the
-  cache or shown in the report.** A provider that echoes the key a fetch was
-  sent with in its failure answer (Z.AI puts the reason in `msg` inside an
-  HTTP 200 with `success: false`) used to leave the key in the vendor
-  cache's `.last_error` and in the error the report shows. The key is now
-  removed before the first point of writing: the failure diagnostic is
-  redacted as the cache records it, and the error that reaches the report is
-  redacted with the same key. The key check's final scrub stays as a second
-  layer.
+  cache or shown in the report, the widget, or the CLI.** A provider that
+  echoes the key a fetch was sent with in its answer (Z.AI puts the reason in
+  `msg` inside an HTTP 200 with `success: false`) used to leave the key in
+  the vendor cache's `.last_error` and in the error the report shows; the
+  widget and the CLI built their caches without that protection at all, and
+  a successful answer that quoted the key was written to the payload as it
+  arrived. The key is now removed before the first point of writing on every
+  path: the failure diagnostic is redacted as the cache records it, the
+  error that reaches the report, the bar, or the terminal is redacted with
+  the same key, and a successful answer is redacted before it is persisted —
+  a key whose characters could change inside a JSON string is left out of
+  the payload entirely rather than risk corrupting it. The key check's final
+  scrub stays as a second layer.
 
 - **The tray's IPC bridge only answers the popover's own page, and the
   WebView no longer navigates outside it.** The tray hosts accepted any
