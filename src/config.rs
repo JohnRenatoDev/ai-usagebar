@@ -2510,6 +2510,11 @@ impl Config {
                 *path = expand_tilde(path);
             }
         }
+        if let Some(paths) = &mut self.opencode_go.auth_paths {
+            for path in paths {
+                *path = expand_tilde(path);
+            }
+        }
     }
 
     /// Explicitly enumerate every inline credential field. Adding a new
