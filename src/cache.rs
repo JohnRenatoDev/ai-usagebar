@@ -271,34 +271,27 @@ impl Cache {
     /// A cache attached to a key via [`Cache::redacting`] redacts the
     /// payload too: a provider's *successful* answer can quote the key the
     /// fetch was sent with (Z.AI carries `msg` inside an HTTP 200), and the
-    /// payload is the second sink. When the secret is built only of
-    /// characters that cannot change inside a JSON string, every exact
-    /// occurrence in the bytes becomes `[key]`. When it is not — a quote,
-    /// a backslash, a space — an occurrence can straddle JSON structure and
-    /// replacing it would corrupt the payload, so the payload is not
-    /// persisted at all: the fetch still returns its in-memory value, only
-    /// the cache keeps no payload of this answer. The partial-echo heuristic
-    /// does not apply here: a payload is data, and replacing its whole text
-    /// would destroy it. Caches without an attached secret are untouched.
+    /// payload is the second sink. See [`redact_payload`]: a JSON payload is
+    /// redacted on its decoded strings (an escaped echo counts, and numbers
+    /// and structure are never touched); a payload that is not JSON and
+    /// quotes the key is not persisted at all — the fetch still returns its
+    /// in-memory value, and the cache is left exactly as it was. The
+    /// partial-echo heuristic does not apply here: a payload is data, and
+    /// replacing its whole text would destroy it. Caches without an
+    /// attached secret are untouched.
     pub fn write_payload(&self, bytes: &[u8]) -> Result<()> {
         let owned;
-        let bytes = match &self.redacting {
-            Some(secret)
-                if !secret.is_empty() && find_bytes(bytes, secret.as_bytes()).is_some() =>
-            {
-                if payload_secret_is_json_safe(secret) {
-                    owned = replace_all_bytes(bytes, secret.as_bytes(), b"[key]");
-                    &owned
-                } else {
-                    // The secret has a character that can change inside a
-                    // JSON string, so its occurrence may straddle JSON
-                    // structure: replacing it would corrupt the payload, so
-                    // nothing is persisted. The success side effects are
-                    // skipped too — the cache is left exactly as it was.
-                    return Ok(());
-                }
+        let bytes = match self
+            .redacting
+            .as_deref()
+            .map(|secret| redact_payload(bytes, secret))
+        {
+            None | Some(PayloadRedaction::Keep) => bytes,
+            Some(PayloadRedaction::Replace(redacted)) => {
+                owned = redacted;
+                &owned
             }
-            _ => bytes,
+            Some(PayloadRedaction::Skip) => return Ok(()),
         };
         self.ensure_dir()?;
         let mut tmp = tempfile::Builder::new()
@@ -558,26 +551,73 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 /// closes the string, no backslash that escapes, no control that must be
 /// escaped, and no non-ASCII whose UTF-8 bytes a byte-level scan could
 /// straddle.
-fn payload_secret_is_json_safe(secret: &str) -> bool {
-    secret
-        .chars()
-        .all(|c| matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '~' | '+' | '/' | '=' | '-'))
+/// What [`Cache::write_payload`] persists for a payload and the secret
+/// attached to the cache.
+#[derive(Debug, PartialEq, Eq)]
+enum PayloadRedaction {
+    /// The payload does not quote the secret: write it as it arrived.
+    Keep,
+    /// A JSON payload whose strings quoted the secret, re-serialized with
+    /// every occurrence replaced by `[key]`.
+    Replace(Vec<u8>),
+    /// The payload quotes the secret where it cannot be replaced safely (it
+    /// is not JSON, or an object key holds it): do not persist it.
+    Skip,
 }
 
-/// Replace every occurrence of `needle` in `bytes` with `replacement`, at
-/// the byte level. The needle is ASCII whenever
-/// [`payload_secret_is_json_safe`] accepts it, so an exact occurrence is
-/// well-defined over the payload bytes whatever their UTF-8 state.
-fn replace_all_bytes(bytes: &[u8], needle: &[u8], replacement: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut rest = bytes;
-    while let Some(pos) = find_bytes(rest, needle) {
-        out.extend_from_slice(&rest[..pos]);
-        out.extend_from_slice(replacement);
-        rest = &rest[pos + needle.len()..];
+/// Decide on the decoded value, never on the raw bytes: a JSON string may
+/// carry the secret escaped (`\u0074…`, a quote as `\"`), and a byte-level
+/// replace could also hit a number that happens to equal a short secret.
+/// So a JSON payload is parsed, every string value with the secret gets it
+/// replaced, and the document is re-serialized only when something changed;
+/// numbers and structure are never touched. A payload that is not JSON is
+/// only checked for the literal secret, and skipped when it holds it.
+fn redact_payload(bytes: &[u8], secret: &str) -> PayloadRedaction {
+    if secret.is_empty() {
+        return PayloadRedaction::Keep;
     }
-    out.extend_from_slice(rest);
-    out
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return if find_bytes(bytes, secret.as_bytes()).is_some() {
+            PayloadRedaction::Skip
+        } else {
+            PayloadRedaction::Keep
+        };
+    };
+    let mut changed = false;
+    if !redact_json_strings(&mut value, secret, &mut changed) {
+        return PayloadRedaction::Skip;
+    }
+    if !changed {
+        return PayloadRedaction::Keep;
+    }
+    match serde_json::to_vec(&value) {
+        Ok(redacted) => PayloadRedaction::Replace(redacted),
+        Err(_) => PayloadRedaction::Skip,
+    }
+}
+
+/// Replace the secret in every string of `value`; `false` when an object
+/// key holds it (a key cannot be rewritten without changing the data's
+/// shape, so the payload is skipped instead).
+fn redact_json_strings(value: &mut serde_json::Value, secret: &str, changed: &mut bool) -> bool {
+    match value {
+        serde_json::Value::String(text) if text.contains(secret) => {
+            *text = text.replace(secret, "[key]");
+            *changed = true;
+            true
+        }
+        serde_json::Value::Array(items) => items
+            .iter_mut()
+            .all(|item| redact_json_strings(item, secret, changed)),
+        serde_json::Value::Object(map) => {
+            if map.keys().any(|key| key.contains(secret)) {
+                return false;
+            }
+            map.values_mut()
+                .all(|item| redact_json_strings(item, secret, changed))
+        }
+        _ => true,
+    }
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -1243,10 +1283,10 @@ mod tests {
 
     /// A provider's *successful* answer can quote the key it was sent with
     /// (Z.AI carries `msg` inside an HTTP 200): the cache attached to that
-    /// key redacts the payload at the first point of writing, at the byte
-    /// level — every exact occurrence is replaced, the JSON survives, and
-    /// the partial-echo heuristic does not reach the payload (it would
-    /// destroy data).
+    /// key redacts the payload at the first point of writing, on its decoded
+    /// strings — every occurrence is replaced, the JSON survives, and the
+    /// partial-echo heuristic does not reach the payload (it would destroy
+    /// data).
     #[test]
     fn write_payload_redacts_the_attached_secret() {
         let (_td, cache) = fixture();
@@ -1274,24 +1314,58 @@ mod tests {
         assert_eq!(fs::read(cache.payload_path()).unwrap(), raw);
     }
 
-    /// A secret with a character that can change inside a JSON string (here
-    /// the quote): its occurrence may straddle JSON structure, so redacting
-    /// it would corrupt the payload. Such a payload is not persisted at all
-    /// — the fetch still returns its in-memory value, only the cache keeps
-    /// no payload of that answer — and the rest of the cache is left
-    /// exactly as it was: an older payload is not clobbered, and the
-    /// success side effects do not run for an answer the cache refused.
+    /// The decision is made on decoded strings, not raw bytes: an echo that
+    /// arrives escaped in valid JSON is still redacted, a secret with a quote
+    /// is redacted inside its (escaped) string, and a number equal to a
+    /// short secret is not a string, so the payload is written unchanged.
     #[test]
-    fn write_payload_skips_a_payload_that_quotes_an_unsafe_secret() {
-        let secret = "a\"b";
+    fn write_payload_redacts_escaped_echoes_and_leaves_numbers_alone() {
+        // `\u0074` is `t`: the bytes never hold the key literally.
+        let (_td, cache) = fixture();
+        let cache = cache.redacting("test-key-value");
+        cache
+            .write_payload(br#"{"msg":"ok \u0074est-key-value"}"#)
+            .unwrap();
+        assert_eq!(
+            fs::read(cache.payload_path()).unwrap(),
+            br#"{"msg":"ok [key]"}"#
+        );
+
+        // A quote in the key: valid JSON escapes it, and it is redacted.
+        let (_td, cache) = fixture();
+        let cache = cache.redacting("a\"b");
+        cache.write_payload(br#"{"msg":"ok a\"b"}"#).unwrap();
+        assert_eq!(
+            fs::read(cache.payload_path()).unwrap(),
+            br#"{"msg":"ok [key]"}"#
+        );
+
+        // A short numeric key equal to a number: numbers are not strings,
+        // so the payload is written exactly as it arrived.
+        let (_td, cache) = fixture();
+        let cache = cache.redacting("12");
+        let raw = br#"{"used":12,"msg":"fine"}"#;
+        cache.write_payload(raw).unwrap();
+        assert_eq!(fs::read(cache.payload_path()).unwrap(), raw);
+    }
+
+    /// A payload that is not JSON and quotes the secret cannot be redacted
+    /// safely, so it is not persisted at all — the fetch still returns its
+    /// in-memory value, only the cache keeps no payload of that answer — and
+    /// the rest of the cache is left exactly as it was: an older payload is
+    /// not clobbered, and the success side effects do not run. An object key
+    /// that holds the secret is skipped the same way.
+    #[test]
+    fn write_payload_skips_a_payload_it_cannot_redact() {
+        let secret = "test-key-value";
 
         // A cold cache stays cold: no payload file is written.
         let (_td, cache) = fixture();
         let cache = cache.redacting(secret);
-        cache.write_payload(br#"{"msg":"ok a"b"}"#).unwrap();
+        cache.write_payload(b"plain text test-key-value").unwrap();
         assert!(
             cache.maybe_payload().unwrap().is_none(),
-            "a payload quoting an unsafe secret must not be persisted"
+            "a non-JSON payload quoting the secret must not be persisted"
         );
         assert!(!cache.payload_path().exists());
 
@@ -1301,7 +1375,7 @@ mod tests {
         cache.write_payload(br#"{"msg":"last good"}"#).unwrap();
         cache.mark_stale();
         cache.write_last_error(500, "an older failure");
-        cache.write_payload(br#"{"msg":"ok a"b"}"#).unwrap();
+        cache.write_payload(br#"{"test-key-value":1}"#).unwrap();
         assert_eq!(
             fs::read(cache.payload_path()).unwrap(),
             br#"{"msg":"last good"}"#

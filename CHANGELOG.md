@@ -67,10 +67,11 @@
   arrived. The key is now removed before the first point of writing on every
   path: the failure diagnostic is redacted as the cache records it, the
   error that reaches the report, the bar, or the terminal is redacted with
-  the same key, and a successful answer is redacted before it is persisted —
-  a key whose characters could change inside a JSON string is left out of
-  the payload entirely rather than risk corrupting it. The key check's final
-  scrub stays as a second layer.
+  the same key, and a successful answer is redacted on its decoded JSON
+  strings before it is persisted (an escaped echo counts; numbers and
+  structure are left alone), while an answer that is not JSON and quotes the
+  key is not persisted at all. The key check's final scrub stays as a second
+  layer.
 
 - **The tray's IPC bridge only answers the popover's own page, and the
   WebView no longer navigates outside it.** The tray hosts accepted any
