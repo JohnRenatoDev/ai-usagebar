@@ -919,12 +919,16 @@ fn edit_config_document_within<T>(
     let before = doc.to_string();
     let value = edit(&mut doc)?;
     if doc.to_string() != before {
-        if doc.as_table().is_empty() {
-            // Nothing is left in the config: remove the file. A missing file
-            // and an empty one load identically, so a reader sees nothing
-            // change — but the file the edit's own earlier write created is
-            // gone, which is what the key check's restore wants.
-            std::fs::remove_file(path)?;
+        if doc.to_string().trim().is_empty() {
+            // Nothing is left in the config, not even a comment: remove the
+            // file. A missing file and an empty one load identically, so a
+            // reader sees nothing change — but the file the edit's own earlier
+            // write created is gone, which is what the key check's restore
+            // wants. A file that still holds the user's comments is written.
+            match std::fs::remove_file(path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+                _ => {}
+            }
         } else {
             write_config_document(path, &doc)?;
         }
@@ -6860,6 +6864,30 @@ enabled = true
             !path.exists(),
             "an emptied config must not linger as an empty file"
         );
+    }
+
+    /// A config that holds only the user's comments is not an empty one: an
+    /// edit that adds a section and takes it back (the key check's write and
+    /// restore) leaves the file in place, byte for byte.
+    #[test]
+    fn edit_config_document_keeps_a_file_that_still_holds_comments() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = "# my notes\n# [zai]\n# enabled = true\n";
+        std::fs::write(&path, original).unwrap();
+
+        edit_config_document(&path, |doc| {
+            doc["zai"] = toml_edit::table();
+            doc["zai"]["api_key"] = toml_edit::value("candidate");
+            Ok(())
+        })
+        .unwrap();
+        edit_config_document(&path, |doc| {
+            doc.remove("zai");
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     }
 
     /// An unchanged document is not rewritten (the writers' old

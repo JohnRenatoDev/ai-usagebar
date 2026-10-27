@@ -18,7 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { Card, Layout, ProviderInfo, ProviderListRow } from "@/lib/types";
-import { usePopoverActions } from "@/lib/popoverActions";
+import { handFocusOnRemoval, usePopoverActions } from "@/lib/popoverActions";
 import { m } from "@/paraglide/messages.js";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -272,13 +272,7 @@ function CredentialAction({ icon: Icon, label, onClick, rowId }: CredentialActio
   useLayoutEffect(() => {
     const node = button.current;
     // A layout cleanup on removal runs while the node is still in the document.
-    return () => {
-      if (!node || node !== document.activeElement) return;
-      window.requestAnimationFrame(() => {
-        const row = document.querySelector(`[data-provider-id="${CSS.escape(rowId)}"]`);
-        row?.querySelector<HTMLElement>('button[role="switch"]')?.focus();
-      });
-    };
+    return () => handFocusOnRemoval(node, rowId);
   }, [rowId]);
   return (
     <Hint content={label}>

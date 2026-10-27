@@ -6,7 +6,7 @@ import { ApiKeyDialog, type KeyDialogProvider } from "@/components/ApiKeyDialog"
 import { UpdateDialog } from "@/components/UpdateDialog";
 import type { Layout, Screen } from "@/lib/types";
 import { LanguageProvider } from "@/lib/i18n";
-import { PopoverActionsProvider, type PopoverActions } from "@/lib/popoverActions";
+import { PopoverActionsProvider, providerFocusTarget, type PopoverActions } from "@/lib/popoverActions";
 import { m } from "@/paraglide/messages.js";
 import { cn } from "@/lib/utils";
 import { About } from "@/screens/About";
@@ -94,11 +94,7 @@ export default function App() {
     const trigger = keyTrigger.current;
     if (trigger && trigger.isConnected) return trigger;
     const id = trigger?.dataset.keyRow;
-    if (!id) return null;
-    const escaped = CSS.escape(id);
-    return document.querySelector<HTMLElement>(
-      `[data-provider-id="${escaped}"] button[role="switch"], [data-card-id="${escaped}"] .header-action`,
-    );
+    return id ? providerFocusTarget(id) : null;
   }, []);
   const [starError, setStarError] = useState("");
   const [popoverVisible, setPopoverVisible] = useState(false);
