@@ -272,6 +272,10 @@ export interface ProviderInfo {
   enabled: boolean;
   env: string;
   id: string;
+  /** The credential's label for an API-key provider ("" for the others). */
+  keyLabel?: string;
+  /** The credential's note; "" when the host has none. */
+  keyNote?: string;
   name: string;
   signIn: string;
 }
@@ -300,6 +304,15 @@ export interface ProviderListRow {
   metrics: number;
 }
 
+/** The host's verdict for one key send, matched to it by `seq`. */
+export interface KeyCheck {
+  /** The provider slug the check ran for. */
+  id: string;
+  error: string;
+  seq: number;
+  state: "checking" | "failed" | "ok";
+}
+
 export interface Payload {
   /** Switchable logins keyed by vendor slug ("anthropic", "openai", "claude-desktop"); empty off macOS. */
   accounts: Record<string, AccountSwitchInfo>;
@@ -307,6 +320,8 @@ export interface Payload {
   entries: Entry[];
   generatedAt: number;
   hostError: string;
+  /** The host's last key-check verdict; null before the first send. */
+  keyCheck: KeyCheck | null;
   /** macOS menu-bar look the host draws. */
   menuBarLook: MenuBarLook;
   /** Whether the Quattro look draws the short name beside the logo. */

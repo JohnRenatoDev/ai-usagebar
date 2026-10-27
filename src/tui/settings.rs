@@ -782,6 +782,93 @@ pub fn save_to_path(state: &SettingsState, path: &Path) -> Result<()> {
     write_config_document(path, &doc)
 }
 
+/// The credential rules every apply path enforces: the TUI's `settings
+/// apply` and the tray's `set-api-key` check must refuse the same keys, so
+/// the rule lives here instead of in each caller.
+fn reject_invalid_key(secret_label: &str, vendor_slug: &str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        return Err(AppError::Other(format!(
+            "{secret_label} for {vendor_slug:?} is empty; use the clear action to remove it"
+        )));
+    }
+    if value.len() > MAX_API_KEY_BYTES {
+        return Err(AppError::Other(format!(
+            "{secret_label} for {vendor_slug:?} exceeds {MAX_API_KEY_BYTES} bytes"
+        )));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(AppError::Other(format!(
+            "{secret_label} for {vendor_slug:?} contains control characters"
+        )));
+    }
+    Ok(())
+}
+
+/// The key vendor a credential request names, by `VendorId::slug()`. The
+/// tray's `set-api-key` sends the slug its provider row carries; anything
+/// else — including the OAuth vendors' slugs — has no credential field.
+pub(crate) fn key_vendor_for_slug(slug: &str) -> Option<&'static KeyVendor> {
+    KEY_VENDORS.iter().find(|vendor| vendor.id.slug() == slug)
+}
+
+/// Validate one credential the way [`state_from_apply_request`] does, so
+/// the tray's `set-api-key` check and the TUI's save refuse the same keys.
+pub(crate) fn validate_key_value(vendor: &KeyVendor, value: &str) -> Result<()> {
+    reject_invalid_key(vendor.secret_label, vendor.id.slug(), value)
+}
+
+/// Read the credential a vendor keeps inline in the config at `path`, if
+/// any: the value the tray's `set-api-key` check restores when the provider
+/// refuses the new one. A missing file reads as no key; an unparseable
+/// config is an error rather than a guess.
+pub(crate) fn read_inline_key(path: &Path, vendor: &KeyVendor) -> Result<Option<String>> {
+    let doc = read_config_document(path)?;
+    Ok(doc
+        .get(vendor.section)
+        .and_then(toml_edit::Item::as_table_like)
+        .and_then(|table| table.get(vendor.config_key))
+        .and_then(toml_edit::Item::as_str)
+        .map(str::to_owned))
+}
+
+/// Write one inline credential the way the overlay's save does: `toml_edit`,
+/// the vendor's own section, `chmod 600` through [`write_config_document`].
+/// A non-empty credential also opts the vendor in, like `update_key`: a key
+/// that stays disabled is a key the fetch never sees. The value is validated
+/// first, so a refused key never touches the file.
+pub(crate) fn write_inline_key(path: &Path, vendor: &KeyVendor, value: &str) -> Result<()> {
+    validate_key_value(vendor, value)?;
+    let mut doc = read_config_document(path)?;
+    set_string(&mut doc, vendor.section, vendor.config_key, value)?;
+    set_bool(&mut doc, vendor.section, "enabled", true)?;
+    write_config_document(path, &doc)
+}
+
+/// Put the config back where the `set-api-key` check found it: write the
+/// previous value back, or remove the key when there was none. The vendor's
+/// `enabled` switch is left as the check's write left it — the restore
+/// covers the key, and no validation runs because the previous value
+/// already lived in the user's config.
+pub(crate) fn restore_inline_key(
+    path: &Path,
+    vendor: &KeyVendor,
+    previous: Option<&str>,
+) -> Result<()> {
+    let mut doc = read_config_document(path)?;
+    match previous {
+        Some(value) => set_string(&mut doc, vendor.section, vendor.config_key, value)?,
+        None => {
+            if let Some(table) = doc
+                .get_mut(vendor.section)
+                .and_then(toml_edit::Item::as_table_like_mut)
+            {
+                table.remove(vendor.config_key);
+            }
+        }
+    }
+    write_config_document(path, &doc)
+}
+
 /// Apply one credential field to the document. Untouched fields are left
 /// alone; a field the user cleared is *removed*, so an inline secret can be
 /// deleted from the overlay rather than lingering in the file. Writing a
@@ -902,7 +989,8 @@ enum KeyMutation {
 
 const SETTINGS_SCHEMA_VERSION: u8 = 1;
 const MAX_SETTINGS_REQUEST_BYTES: u64 = 64 * 1024;
-const MAX_API_KEY_BYTES: usize = 16 * 1024;
+/// `pub(crate)`: the tray's `set-api-key` check enforces the same rule.
+pub(crate) const MAX_API_KEY_BYTES: usize = 16 * 1024;
 
 fn snapshot_from_config_with(
     cfg: &Config,
@@ -1003,24 +1091,7 @@ fn state_from_apply_request(cfg: &Config, raw: &str) -> Result<SettingsState> {
         let input = &mut state.keys[index];
         match mutation {
             KeyMutation::Set { value } => {
-                if value.is_empty() {
-                    return Err(AppError::Other(format!(
-                        "{} for {id:?} is empty; use the clear action to remove it",
-                        KEY_VENDORS[index].secret_label
-                    )));
-                }
-                if value.len() > MAX_API_KEY_BYTES {
-                    return Err(AppError::Other(format!(
-                        "{} for {id:?} exceeds {MAX_API_KEY_BYTES} bytes",
-                        KEY_VENDORS[index].secret_label
-                    )));
-                }
-                if value.chars().any(char::is_control) {
-                    return Err(AppError::Other(format!(
-                        "{} for {id:?} contains control characters",
-                        KEY_VENDORS[index].secret_label
-                    )));
-                }
+                reject_invalid_key(KEY_VENDORS[index].secret_label, &id, &value)?;
                 input.buf = value;
             }
             KeyMutation::Clear => input.buf.clear(),
@@ -2390,6 +2461,154 @@ api_key_env = "OPENROUTER_WORK_API_KEY"
         save_to_path(&s, &path).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn key_vendor_for_slug_finds_only_the_key_table() {
+        // Every key vendor resolves by slug...
+        for vendor in KEY_VENDORS {
+            assert_eq!(
+                key_vendor_for_slug(vendor.id.slug()).map(|kv| kv.id),
+                Some(vendor.id),
+                "{} must resolve",
+                vendor.id.slug()
+            );
+        }
+        // ...and no vendor outside the table does: the OAuth vendors' slugs
+        // and the custom ids have no credential field to fill.
+        for id in VendorId::all() {
+            if KEY_VENDORS.iter().any(|kv| kv.id == *id) {
+                continue;
+            }
+            assert!(key_vendor_for_slug(id.slug()).is_none(), "{:?}", id);
+        }
+        assert!(key_vendor_for_slug("no-such-vendor").is_none());
+    }
+
+    #[test]
+    fn validate_key_value_refuses_empty_long_and_controlled() {
+        let vendor = key_vendor_for_slug(VendorId::Zai.slug()).unwrap();
+        assert!(validate_key_value(vendor, "test-key-value").is_ok());
+        let empty = validate_key_value(vendor, "");
+        assert!(empty.is_err());
+        assert!(empty.unwrap_err().to_string().contains("is empty"));
+        let long = "x".repeat(MAX_API_KEY_BYTES + 1);
+        let over = validate_key_value(vendor, &long);
+        assert!(over.is_err());
+        assert!(
+            over.unwrap_err()
+                .to_string()
+                .contains(&format!("exceeds {MAX_API_KEY_BYTES}"))
+        );
+        let controlled = validate_key_value(vendor, "a\u{1b}[31mb");
+        assert!(controlled.is_err());
+        assert!(
+            controlled
+                .unwrap_err()
+                .to_string()
+                .contains("control characters")
+        );
+        // The apply request enforces the same rule through the same code:
+        // one accepted by the helper must be accepted by the request, and
+        // one refused by the helper must be refused there.
+        let cfg = crate::config::Config::default();
+        let bad = serde_json::json!({
+            "schema_version": 1,
+            "keys": { VendorId::Zai.slug(): { "action": "set", "value": "a\u{1b}[31mb" } }
+        })
+        .to_string();
+        assert!(state_from_apply_request(&cfg, &bad).is_err());
+        let good = serde_json::json!({
+            "schema_version": 1,
+            "keys": { VendorId::Zai.slug(): { "action": "set", "value": "test-key-value" } }
+        })
+        .to_string();
+        assert!(state_from_apply_request(&cfg, &good).is_ok());
+    }
+
+    #[test]
+    fn inline_key_write_leaves_the_value_in_the_right_section() {
+        let vendor = key_vendor_for_slug(VendorId::Zai.slug()).unwrap();
+        let (_dir, path) = temp_config(Some("# keep me\n[ui]\nprimary = \"zai\"\n"));
+        write_inline_key(&path, vendor, "test-key-value").unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("[zai]"), "{raw}");
+        assert!(raw.contains(r#"api_key = "test-key-value""#), "{raw}");
+        // A non-empty credential opts the vendor in, as the overlay does.
+        assert!(raw.contains("enabled = true"), "{raw}");
+        // And everything else of the config survives.
+        assert!(raw.contains("# keep me"), "{raw}");
+        assert!(raw.contains(r#"primary = "zai""#), "{raw}");
+        // The file is back to a parseable config with the value readable.
+        assert_eq!(
+            read_inline_key(&path, vendor).unwrap(),
+            Some("test-key-value".into())
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn inline_key_write_chmods_the_config_to_600() {
+        use std::os::unix::fs::PermissionsExt;
+        let vendor = key_vendor_for_slug(VendorId::Openrouter.slug()).unwrap();
+        let (_dir, path) = temp_config(None);
+        write_inline_key(&path, vendor, "test-key-value").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn inline_key_write_refuses_invalid_values_without_touching_the_file() {
+        let vendor = key_vendor_for_slug(VendorId::Zai.slug()).unwrap();
+        let original = "[zai]\napi_key = \"old-key-value\"\n";
+        let (_dir, path) = temp_config(Some(original));
+        let long = "x".repeat(MAX_API_KEY_BYTES + 1);
+        for bad in ["", long.as_str(), "a\u{1b}[31mb"] {
+            assert!(write_inline_key(&path, vendor, bad).is_err(), "{bad:?}");
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                original,
+                "the file must not move for {bad:?}"
+            );
+        }
+        // A missing config is created only by a valid value.
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("config.toml");
+        assert!(write_inline_key(&empty, vendor, "").is_err());
+        assert!(!empty.exists());
+    }
+
+    #[test]
+    fn inline_key_restore_puts_the_previous_value_back() {
+        let vendor = key_vendor_for_slug(VendorId::Zai.slug()).unwrap();
+        let original =
+            "[ui]\nprimary = \"zai\"\n[zai]\napi_key = \"old-key-value\"\nenabled = true\n";
+        let (_dir, path) = temp_config(Some(original));
+        write_inline_key(&path, vendor, "test-key-value").unwrap();
+        assert_ne!(std::fs::read_to_string(&path).unwrap(), original);
+        restore_inline_key(&path, vendor, Some("old-key-value")).unwrap();
+        // Byte-for-byte back where the check found the file.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn inline_key_restore_removes_the_key_when_there_was_none() {
+        let vendor = key_vendor_for_slug(VendorId::Deepseek.slug()).unwrap();
+        let (_dir, path) = temp_config(Some("[ui]\nprimary = \"deepseek\"\n"));
+        write_inline_key(&path, vendor, "test-key-value").unwrap();
+        restore_inline_key(&path, vendor, None).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("api_key"), "the key must be gone: {raw}");
+        assert!(raw.contains(r#"primary = "deepseek""#), "{raw}");
+        assert_eq!(read_inline_key(&path, vendor).unwrap(), None);
+    }
+
+    #[test]
+    fn inline_key_read_is_none_without_a_file() {
+        let vendor = key_vendor_for_slug(VendorId::Kimi.slug()).unwrap();
+        let (dir, path) = temp_config(None);
+        let _ = dir;
+        assert_eq!(read_inline_key(&path, vendor).unwrap(), None);
     }
 
     #[test]

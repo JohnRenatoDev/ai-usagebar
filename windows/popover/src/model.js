@@ -59,6 +59,7 @@ export function emptyPayload(hostError) {
     providers: [],
     providersError: "",
     accent: null,
+    keyCheck: null,
   };
 }
 
@@ -110,6 +111,7 @@ function normalizePayload(parsed) {
     providers: normalizeProviders(parsed.providers),
     providersError: clean(parsed.providers_error, 300),
     accent: normalizeAccent(parsed.accent),
+    keyCheck: normalizeKeyCheck(parsed.key_check),
   };
 }
 
@@ -119,6 +121,40 @@ function normalizeAccent(value) {
   const color = /^#[0-9a-f]{6}$/i;
   if (!color.test(value.light) || !color.test(value.dark)) return null;
   return { light: value.light.toLowerCase(), dark: value.dark.toLowerCase() };
+}
+
+// The host's key-check verdict (`key_check` in the payload). Only the three
+// states the host publishes reach the dialog; any other shape means "no
+// fact" rather than a guessed one, exactly like a missing account switch.
+const KEY_CHECK_STATES = ["checking", "ok", "failed"];
+
+/** @returns {import("./lib/types").KeyCheck | null} */
+function normalizeKeyCheck(value) {
+  if (!isPlainObject(value)) return null;
+  const state = KEY_CHECK_STATES.includes(value.state) ? value.state : null;
+  if (!state) return null;
+  const id = clean(value.id, 64).trim();
+  const seq = Number(value.seq);
+  if (!id || !Number.isInteger(seq) || seq < 0) return null;
+  return { id, seq, state, error: clean(value.error, 300) };
+}
+
+/** A check that has not answered by then is reported, not left spinning. */
+export const KEY_CHECK_NO_ANSWER_MS = 60_000;
+
+/**
+ * The key dialog's phase for one send. Only the verdict for `pendingSeq`
+ * belongs to the dialog: a verdict for another send — or none — is no
+ * answer, and the wait is measured on this clock, from the send, exactly
+ * like the update check. The host's clock never enters the comparison.
+ *
+ * @returns {"idle" | "checking" | "ok" | "failed" | "no-answer"}
+ */
+export function keyDialogPhase(keyCheck, pendingSeq, sentAtMs, nowMs) {
+  if (pendingSeq === null || pendingSeq === undefined) return "idle";
+  const mine = keyCheck && keyCheck.seq === pendingSeq ? keyCheck : null;
+  if (mine && (mine.state === "ok" || mine.state === "failed")) return mine.state;
+  return Number(nowMs) - Number(sentAtMs) >= KEY_CHECK_NO_ANSWER_MS ? "no-answer" : "checking";
 }
 
 const SIGN_IN_ACTIONS = ["terminal", "app", "settings"];
@@ -140,6 +176,8 @@ function normalizeProviders(value) {
       configured: raw.configured === true,
       env: clean(raw.env, 120),
       signIn: clean(raw.sign_in, 200),
+      keyLabel: clean(raw.key_label, 120),
+      keyNote: clean(raw.key_note, 300),
       action: SIGN_IN_ACTIONS.includes(raw.action) ? raw.action : "",
       addAccounts: Array.isArray(raw.add_accounts) ? ADD_ACCOUNT_KINDS.filter((kind) => raw.add_accounts.includes(kind)) : [],
     });

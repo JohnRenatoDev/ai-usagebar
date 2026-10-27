@@ -29,6 +29,11 @@
 /** @typedef {{}} Always_VisibleInputs */
 /** @typedef {{}} Antigravity_Not_RunningInputs */
 /** @typedef {{}} Antigravity_Start_HintInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Api_Key_CheckingInputs */
+/** @typedef {{ provider: NonNullable<unknown>, label: NonNullable<unknown> }} Api_Key_Dialog_TitleInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Api_Key_No_AnswerInputs */
+/** @typedef {{}} Api_Key_SaveInputs */
+/** @typedef {{}} Api_Key_Stored_NoteInputs */
 /** @typedef {{}} Api_KeysInputs */
 /** @typedef {{}} AppearanceInputs */
 /** @typedef {{}} AutoInputs */
@@ -96,6 +101,7 @@
 /** @typedef {{}} Global_ShortcutInputs */
 /** @typedef {{}} Global_Shortcut_HintInputs */
 /** @typedef {{}} Goal_NowInputs */
+/** @typedef {{}} Hide_KeyInputs */
 /** @typedef {{}} Hide_RowInputs */
 /** @typedef {{}} HighestInputs */
 /** @typedef {{ hours: NonNullable<unknown> }} Hours_AgoInputs */
@@ -215,6 +221,7 @@
 /** @typedef {{}} Shortcut_Recording_HintInputs */
 /** @typedef {{}} ShowInputs */
 /** @typedef {{}} Show_Expiry_DatesInputs */
+/** @typedef {{}} Show_KeyInputs */
 /** @typedef {{}} Show_LessInputs */
 /** @typedef {{}} Show_MoreInputs */
 /** @typedef {{}} Show_On_DemandInputs */
@@ -397,6 +404,26 @@ export const antigravity_not_running = /** @type {(inputs: Antigravity_Not_Runni
 
 export const antigravity_start_hint = /** @type {(inputs: Antigravity_Start_HintInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`Antigravity 앱이나 agy 세션을 연 뒤 새로 고치세요.`)
+};
+
+export const api_key_checking = /** @type {(inputs: Api_Key_CheckingInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`${i?.provider} 키 확인 중…`)
+};
+
+export const api_key_dialog_title = /** @type {(inputs: Api_Key_Dialog_TitleInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`${i?.provider} ${i?.label}`)
+};
+
+export const api_key_no_answer = /** @type {(inputs: Api_Key_No_AnswerInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`${i?.provider}가 아직 응답하지 않았습니다. 잠시 후 다시 시도하세요.`)
+};
+
+export const api_key_save = /** @type {(inputs: Api_Key_SaveInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`저장`)
+};
+
+export const api_key_stored_note = /** @type {(inputs: Api_Key_Stored_NoteInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`config.toml에 저장되며, 본인이만 읽을 수 있습니다.`)
 };
 
 export const api_keys = /** @type {(inputs: Api_KeysInputs) => LocalizedString} */ () => {
@@ -665,6 +692,10 @@ export const global_shortcut_hint = /** @type {(inputs: Global_Shortcut_HintInpu
 
 export const goal_now = /** @type {(inputs: Goal_NowInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`현재 목표`)
+};
+
+export const hide_key = /** @type {(inputs: Hide_KeyInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`키 숨ingi`)
 };
 
 export const hide_row = /** @type {(inputs: Hide_RowInputs) => LocalizedString} */ () => {
@@ -1141,6 +1172,10 @@ export const show = /** @type {(inputs: ShowInputs) => LocalizedString} */ () =>
 
 export const show_expiry_dates = /** @type {(inputs: Show_Expiry_DatesInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`만료일 보기`)
+};
+
+export const show_key = /** @type {(inputs: Show_KeyInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`키 표시`)
 };
 
 export const show_less = /** @type {(inputs: Show_LessInputs) => LocalizedString} */ () => {

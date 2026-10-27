@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Added
+
+- **The tray popover sets API keys in its own window.** For the key-only providers the popover's dialog takes the key and hands it to the host, which saves it to `config.toml` with the same code the Settings overlay's apply uses, fetches that provider alone, and keeps the key only if the provider accepts the reading — a refusal restores the previous value and shows the provider's error.
+
 ### Changed
 
 - **The tray lists providers once, and accounts live in tabs.** Customize

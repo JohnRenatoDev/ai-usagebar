@@ -31,6 +31,11 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{}} Always_VisibleInputs */
 /** @typedef {{}} Antigravity_Not_RunningInputs */
 /** @typedef {{}} Antigravity_Start_HintInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Api_Key_CheckingInputs */
+/** @typedef {{ provider: NonNullable<unknown>, label: NonNullable<unknown> }} Api_Key_Dialog_TitleInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Api_Key_No_AnswerInputs */
+/** @typedef {{}} Api_Key_SaveInputs */
+/** @typedef {{}} Api_Key_Stored_NoteInputs */
 /** @typedef {{}} Api_KeysInputs */
 /** @typedef {{}} AppearanceInputs */
 /** @typedef {{}} AutoInputs */
@@ -98,6 +103,7 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{}} Global_ShortcutInputs */
 /** @typedef {{}} Global_Shortcut_HintInputs */
 /** @typedef {{}} Goal_NowInputs */
+/** @typedef {{}} Hide_KeyInputs */
 /** @typedef {{}} Hide_RowInputs */
 /** @typedef {{}} HighestInputs */
 /** @typedef {{ hours: NonNullable<unknown> }} Hours_AgoInputs */
@@ -217,6 +223,7 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{}} Shortcut_Recording_HintInputs */
 /** @typedef {{}} ShowInputs */
 /** @typedef {{}} Show_Expiry_DatesInputs */
+/** @typedef {{}} Show_KeyInputs */
 /** @typedef {{}} Show_LessInputs */
 /** @typedef {{}} Show_MoreInputs */
 /** @typedef {{}} Show_On_DemandInputs */
@@ -759,6 +766,86 @@ export const antigravity_start_hint = /** @type {((inputs?: Antigravity_Start_Hi
 	if (locale === "ko") return __ko.antigravity_start_hint(inputs)
 	if (locale === "es") return __es.antigravity_start_hint(inputs)
 	return __en.antigravity_start_hint(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Checking the key with {provider}…" |
+*
+* @param {Api_Key_CheckingInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const api_key_checking = /** @type {((inputs: Api_Key_CheckingInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Api_Key_CheckingInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.api_key_checking(inputs)
+	if (locale === "ko") return __ko.api_key_checking(inputs)
+	if (locale === "es") return __es.api_key_checking(inputs)
+	return __en.api_key_checking(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "{provider} {label}" |
+*
+* @param {Api_Key_Dialog_TitleInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const api_key_dialog_title = /** @type {((inputs: Api_Key_Dialog_TitleInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Api_Key_Dialog_TitleInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.api_key_dialog_title(inputs)
+	if (locale === "ko") return __ko.api_key_dialog_title(inputs)
+	if (locale === "es") return __es.api_key_dialog_title(inputs)
+	return __en.api_key_dialog_title(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "No answer from {provider} yet. Try again in a moment." |
+*
+* @param {Api_Key_No_AnswerInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const api_key_no_answer = /** @type {((inputs: Api_Key_No_AnswerInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Api_Key_No_AnswerInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.api_key_no_answer(inputs)
+	if (locale === "ko") return __ko.api_key_no_answer(inputs)
+	if (locale === "es") return __es.api_key_no_answer(inputs)
+	return __en.api_key_no_answer(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Save" |
+*
+* @param {Api_Key_SaveInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const api_key_save = /** @type {((inputs?: Api_Key_SaveInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Api_Key_SaveInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.api_key_save(inputs)
+	if (locale === "ko") return __ko.api_key_save(inputs)
+	if (locale === "es") return __es.api_key_save(inputs)
+	return __en.api_key_save(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Saved in config.toml, readable only by you." |
+*
+* @param {Api_Key_Stored_NoteInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const api_key_stored_note = /** @type {((inputs?: Api_Key_Stored_NoteInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Api_Key_Stored_NoteInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.api_key_stored_note(inputs)
+	if (locale === "ko") return __ko.api_key_stored_note(inputs)
+	if (locale === "es") return __es.api_key_stored_note(inputs)
+	return __en.api_key_stored_note(inputs)
 });
 /**
 * | output |
@@ -1831,6 +1918,22 @@ export const goal_now = /** @type {((inputs?: Goal_NowInputs, options?: { locale
 	if (locale === "ko") return __ko.goal_now(inputs)
 	if (locale === "es") return __es.goal_now(inputs)
 	return __en.goal_now(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Hide key" |
+*
+* @param {Hide_KeyInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const hide_key = /** @type {((inputs?: Hide_KeyInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Hide_KeyInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.hide_key(inputs)
+	if (locale === "ko") return __ko.hide_key(inputs)
+	if (locale === "es") return __es.hide_key(inputs)
+	return __en.hide_key(inputs)
 });
 /**
 * | output |
@@ -3735,6 +3838,22 @@ export const show_expiry_dates = /** @type {((inputs?: Show_Expiry_DatesInputs, 
 	if (locale === "ko") return __ko.show_expiry_dates(inputs)
 	if (locale === "es") return __es.show_expiry_dates(inputs)
 	return __en.show_expiry_dates(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Show key" |
+*
+* @param {Show_KeyInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const show_key = /** @type {((inputs?: Show_KeyInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Show_KeyInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.show_key(inputs)
+	if (locale === "ko") return __ko.show_key(inputs)
+	if (locale === "es") return __es.show_key(inputs)
+	return __en.show_key(inputs)
 });
 /**
 * | output |

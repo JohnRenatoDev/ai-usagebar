@@ -582,6 +582,7 @@ fn stamp_facts(state: &mut TrayState) {
         "refresh_minutes",
         "repository",
         "version",
+        "key_check",
     ] {
         obj.insert(key.into(), stamped[key].clone());
     }
@@ -825,6 +826,21 @@ fn handle_ipc(state: &mut TrayState, body: &str, control_flow: &mut ControlFlow)
             let _ = state.worker.send(WorkerCmd::Refresh);
         }
         "sign-in-provider" => super::providers::sign_in(&value),
+        "set-api-key" => {
+            let proxy = state.proxy.clone();
+            let worker = state.worker.clone();
+            match super::providers::request_key_check(&state.facts, &value, move || {
+                let _ = proxy.send_event(UserEvent::Facts);
+                let _ = worker.send(WorkerCmd::Refresh);
+            }) {
+                // `Ok(None)` is an ignored request: nothing to publish.
+                Ok(_) => apply_facts(state),
+                Err(fact) => {
+                    with_facts(&state.facts, |f| f.key_check = Some(fact));
+                    apply_facts(state);
+                }
+            }
+        }
         "open-tui" => tui_launch::open(),
         "close" => {
             trace("ipc close → hide");

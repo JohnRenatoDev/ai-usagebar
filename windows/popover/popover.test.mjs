@@ -10,6 +10,8 @@ import {
   projectCards,
   resetLabel,
   friendlyError,
+  keyDialogPhase,
+  KEY_CHECK_NO_ANSWER_MS,
   explainError,
   displayPlan,
   leftLabel,
@@ -2427,4 +2429,165 @@ console.log('ok');
   const [stale, fresh] = projectCards(payload, 0, 'en');
   assert.equal(stale.fetchedAt, Date.parse('2026-10-16T12:00:00Z'));
   assert.equal(fresh.fetchedAt, 0);
+}
+
+// --- the key dialog: key_check from the host -------------------------------------
+{
+  const ok = parseHostPayload(JSON.stringify({ key_check: { id: 'zai', seq: 7, state: 'ok', error: '' } }));
+  assert.deepEqual(ok.keyCheck, { id: 'zai', seq: 7, state: 'ok', error: '' });
+  // Absent, non-object, missing id, or an unknown state all mean "no fact",
+  // never a guessed one.
+  assert.equal(parseHostPayload('{}').keyCheck, null);
+  assert.equal(parseHostPayload(JSON.stringify({ key_check: null })).keyCheck, null);
+  assert.equal(parseHostPayload(JSON.stringify({ key_check: 'ok' })).keyCheck, null);
+  assert.equal(parseHostPayload(JSON.stringify({ key_check: { id: 'zai', seq: 7, state: 'exploded' } })).keyCheck, null);
+  assert.equal(parseHostPayload(JSON.stringify({ key_check: { seq: 7, state: 'ok' } })).keyCheck, null);
+  assert.equal(parseHostPayload(JSON.stringify({ key_check: { id: 'zai', seq: 7.5, state: 'ok' } })).keyCheck, null);
+  assert.equal(parseHostPayload(JSON.stringify({ key_check: { id: 'zai', seq: -1, state: 'ok' } })).keyCheck, null);
+  // The error is untrusted text: it is cleaned with the same limit as providers_error.
+  const dirty = parseHostPayload(JSON.stringify({ key_check: { id: 'zai', seq: 7, state: 'failed', error: 'bad\u001b[31m key' } }));
+  assert.equal(dirty.keyCheck.state, 'failed');
+  assert.equal(dirty.keyCheck.id, 'zai');
+  assert.ok(!dirty.keyCheck.error.includes('\u001b'));
+  assert.match(dirty.keyCheck.error, /bad/);
+}
+
+// --- the key dialog: keyDialogPhase -----------------------------------------------
+{
+  const now = 10_000_000;
+  const sent = (ago) => now - ago;
+  assert.equal(keyDialogPhase(null, null, 0, now), 'idle');
+  // Nothing pending means idle, even when a verdict for another send is on screen.
+  assert.equal(keyDialogPhase({ id: 'zai', seq: 1, state: 'ok', error: '' }, null, sent(1_000), now), 'idle');
+  const inFlight = { id: 'zai', seq: 5, state: 'checking', error: '' };
+  assert.equal(keyDialogPhase(inFlight, 5, sent(1_000), now), 'checking');
+  assert.equal(keyDialogPhase({ id: 'zai', seq: 5, state: 'ok', error: '' }, 5, sent(1_000), now), 'ok');
+  assert.equal(keyDialogPhase({ id: 'zai', seq: 5, state: 'failed', error: '' }, 5, sent(1_000), now), 'failed');
+  // A verdict for another send is not this dialog's: earlier or later, it
+  // counts as no answer and the spinner keeps running.
+  assert.equal(keyDialogPhase({ id: 'zai', seq: 4, state: 'ok', error: '' }, 5, sent(1_000), now), 'checking');
+  assert.equal(keyDialogPhase({ id: 'zai', seq: 6, state: 'failed', error: '' }, 5, sent(1_000), now), 'checking');
+  // No answer at the limit, inclusive; still checking one millisecond before it.
+  assert.equal(keyDialogPhase(inFlight, 5, sent(KEY_CHECK_NO_ANSWER_MS - 1), now), 'checking');
+  assert.equal(keyDialogPhase(inFlight, 5, sent(KEY_CHECK_NO_ANSWER_MS), now), 'no-answer');
+  assert.equal(keyDialogPhase(null, 5, sent(KEY_CHECK_NO_ANSWER_MS), now), 'no-answer');
+  assert.equal(KEY_CHECK_NO_ANSWER_MS, 60_000);
+}
+
+// --- the catalog rows carry the credential's label and note -----------------------
+{
+  const payload = parseHostPayload(JSON.stringify({ providers: [
+    { id: 'zai', name: 'Z.AI', enabled: true, configured: true, key_label: 'API key', key_note: 'From the Z.AI console.' },
+    { id: 'anthropic', name: 'Anthropic', enabled: true, configured: true },
+  ] }));
+  assert.equal(payload.providers[0].keyLabel, 'API key');
+  assert.equal(payload.providers[0].keyNote, 'From the Z.AI console.');
+  // A row without the pair carries the pair as empty text, not undefined.
+  assert.equal(payload.providers[1].keyLabel, '');
+  assert.equal(payload.providers[1].keyNote, '');
+}
+
+// --- the key dialog: SSR of the open content --------------------------------------
+// Radix keeps portaled content out of static markup (as it does the menus), so
+// the contract is tested on `ApiKeyDialogView`, the content the dialog renders;
+// the wrapper itself is checked for the closed and open states. The block runs
+// only with vite installed and from the popover's own directory — the icons
+// plugin cannot collect its collections from anywhere else, which is the same
+// separation the Makefile draws between desktop-test and popover-ssr-test.
+{
+  const popoverDir = new URL('.', import.meta.url).pathname.replace(/\/$/, '');
+  const { createRequire } = await import('node:module');
+  const requireHere = createRequire(import.meta.url);
+  let vite = null;
+  try {
+    vite = requireHere('vite');
+  } catch {
+    vite = null;
+  }
+  if (!vite) {
+    console.log('skipping the ApiKeyDialog SSR: vite is not installed here');
+  } else if (process.cwd() !== popoverDir) {
+    console.log('skipping the ApiKeyDialog SSR: run it from the popover directory (npm test)');
+  } else {
+    const React = requireHere('react');
+    const { renderToStaticMarkup } = requireHere('react-dom/server');
+    const server = await vite.createServer({ root: popoverDir, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
+    try {
+    const { ApiKeyDialog, ApiKeyDialogView } = await server.ssrLoadModule('/src/components/ApiKeyDialog.tsx');
+    const { Dialog } = await server.ssrLoadModule('/src/components/ui/dialog.tsx');
+    const { LanguageProvider } = await server.ssrLoadModule('/src/lib/i18n.tsx');
+    const provider = { id: 'zai', name: 'Z.AI', keyLabel: 'API key', keyNote: 'From the Z.AI console.' };
+    // `DialogTitle`/`DialogDescription` read Radix's dialog context, so the
+    // view renders under a `Dialog` root, without the portaled content.
+    const view = (props) =>
+      renderToStaticMarkup(
+        React.createElement(
+          LanguageProvider,
+          { language: 'en' },
+          React.createElement(
+            Dialog,
+            { open: true, onOpenChange() {} },
+            React.createElement(ApiKeyDialogView, {
+              checking: false,
+              error: '',
+              keyDraft: '',
+              language: 'en',
+              noAnswer: false,
+              provider,
+              revealed: false,
+              onKeyChange() {},
+              onRevealToggle() {},
+              onCancel() {},
+              onSave() {},
+              ...props,
+            }),
+          ),
+        ),
+      );
+    // The title and note come from the host's catalog row.
+    const idle = view({});
+    assert.match(idle, /Z\.AI API key/);
+    assert.match(idle, /From the Z\.AI console\./);
+    assert.match(idle, /Saved in config\.toml, readable only by you\./);
+    assert.match(idle, /type="password"/);
+    assert.doesNotMatch(idle, /<input[^>]*\sdisabled\s*=/); // the attribute, not the disabled: class
+    // An empty draft disables Save; Cancel stays live.
+    const idleButtons = idle.match(/<button[^>]*>/g) ?? [];
+    assert.equal(idleButtons.filter((b) => b.includes('disabled')).length, 1);
+    // Checking: the spinner and the host's line, the field and Save wait,
+    // and only Cancel stays enabled.
+    const checking = view({ checking: true });
+    assert.match(checking, /animate-spin/);
+    assert.match(checking, /Checking the key with Z\.AI/);
+    assert.match(checking, /<input[^>]*\sdisabled\s*=/);
+    const checkingButtons = checking.match(/<button[^>]*>[^<]*<\/button>/g) ?? [];
+    assert.equal(checkingButtons.filter((b) => !/\sdisabled\s*=/.test(b)).length, 1);
+    assert.match(checkingButtons.filter((b) => !/\sdisabled\s*=/.test(b))[0], /Cancel/);
+    // Failed: the error in red (friendlyError's shape), the field back to
+    // empty and enabled, Save waiting for the next draft.
+    const failed = view({ error: 'HTTP 401: invalid key' });
+    assert.match(failed, /text-meter-red[^>]*>.*Sign-in expired/s);
+    assert.doesNotMatch(failed, /<input[^>]*\sdisabled\s*=/);
+    const failedButtons = failed.match(/<button[^>]*>/g) ?? [];
+    assert.equal(failedButtons.filter((b) => b.includes('disabled')).length, 1);
+    // No answer: the fixed line, the field enabled.
+    const noAnswer = view({ noAnswer: true });
+    assert.match(noAnswer, /No answer from Z\.AI yet/);
+    assert.doesNotMatch(noAnswer, /<input[^>]*\sdisabled\s*=/);
+    // The wrapper: closed is empty, open composes without crashing — the
+    // portaled content is out of static markup by Radix's design.
+    const closed = renderToStaticMarkup(
+      React.createElement(LanguageProvider, { language: 'en' },
+        React.createElement(ApiKeyDialog, { provider: null, keyCheck: null, nowMs: 1, onClose() {} })),
+    );
+    assert.equal(closed, '');
+    const open = renderToStaticMarkup(
+      React.createElement(LanguageProvider, { language: 'en' },
+        React.createElement(ApiKeyDialog, { provider, keyCheck: null, nowMs: 1, onClose() {} })),
+    );
+    assert.equal(open, '');
+  } finally {
+    await server.close();
+  }
+  }
 }
