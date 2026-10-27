@@ -26,7 +26,10 @@
   read "70.5%" rather than collapsing the figure to a whole number. The
   refilling budget also reports `reading: "left"`, so the panel and bar read
   Synthetic as what remains (a fuel gauge) whatever the global reading
-  setting; every other provider keeps following that setting.
+  setting; every other provider keeps following that setting. The entry can
+  carry a plan label via `[synthetic] plan_tier` (go/standard/big — the
+  quotas API has no tier identifier), naming the panel hero, report, and
+  `{plan}` like the other providers' plans do.
 - **Cursor still reads the IDE session after 3.27.12's opaque token.** That
   release replaced the `cursorAuth/accessToken` JWT with an opaque `curs…`
   string, so the provider's claim decoding failed and reported "session token

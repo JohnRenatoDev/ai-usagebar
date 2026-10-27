@@ -821,9 +821,15 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
         VendorId::Synthetic => {
             let (api_key, cache) = api_key_and_cache(config, vendor, tab.account.as_deref())?;
             let endpoints = crate::synthetic::fetch::Endpoints::default();
-            let outcome =
-                crate::synthetic::fetch_snapshot(client, &api_key, &cache, &endpoints, DEFAULT_TTL)
-                    .await?;
+            let outcome = crate::synthetic::fetch_snapshot(
+                client,
+                &api_key,
+                &cache,
+                &endpoints,
+                DEFAULT_TTL,
+                config.synthetic.plan_tier.as_deref(),
+            )
+            .await?;
             Ok(outcome.into())
         }
         VendorId::Moonshot => {

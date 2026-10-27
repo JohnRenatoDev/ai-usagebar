@@ -148,6 +148,7 @@ fn the_synthetic_placeholders_the_macos_menu_bar_reads_keep_their_names() {
         window_duration: chrono::Duration::days(30),
     };
     let snapshot = ai_usagebar::usage::SyntheticSnapshot {
+        plan: None,
         weekly,
         credits: Some(ai_usagebar::usage::WeeklyCredits {
             used: 600.0,

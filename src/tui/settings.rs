@@ -127,7 +127,7 @@ pub const KEY_VENDORS: &[KeyVendor] = &[
         section: VendorId::Synthetic.config_section(),
         config_key: "api_key",
         secret_label: "API key",
-        note: "subscription request quota",
+        note: "weekly credit quota",
     },
     KeyVendor {
         id: VendorId::Moonshot,

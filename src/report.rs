@@ -1745,6 +1745,7 @@ mod tests {
                         resets_at: Some(reset_at),
                         window_duration: duration,
                     },
+                    plan: None,
                     credits: None,
                     next_regen_percent: None,
                     utilization_precise: 35.0,
@@ -1776,6 +1777,7 @@ mod tests {
                     resets_at: Some(reset_at),
                     window_duration: chrono::Duration::zero(),
                 },
+                plan: Some("Standard".to_string()),
                 credits: None,
                 next_regen_percent: Some(2.0),
                 utilization_precise: 30.0,
@@ -1803,6 +1805,9 @@ mod tests {
         // reading; other providers' metrics carry no reading at all.
         assert_eq!(first["metrics"][0]["reading"], "left");
         assert_eq!(first["sections"][1]["reading"], "left");
+        // The configured plan tier label names the entry like other
+        // providers' plans do.
+        assert_eq!(first["plan"], "Standard");
         let detail = first["metrics"][0]["detail"].as_str().unwrap();
         assert!(detail.starts_with("Regenerates 2% in "), "{detail}");
         // The standalone next-regen row is gone: the countdown carries it.

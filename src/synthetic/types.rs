@@ -54,6 +54,7 @@ impl WeeklyFigures {
         let utilization_pct = (100.0 - self.percent_remaining).round() as i32;
         let utilization_precise = ((100.0 - self.percent_remaining) * 100.0).round() / 100.0;
         SyntheticSnapshot {
+            plan: None,
             weekly: UsageWindow {
                 utilization_pct,
                 resets_at: Some(self.renews_at),

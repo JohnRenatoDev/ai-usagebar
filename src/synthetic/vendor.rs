@@ -26,7 +26,13 @@ pub fn build_placeholders(
     placeholders([
         ("icon", VendorId::Synthetic.bar_icon().into()),
         ("vendor_short", VendorId::Synthetic.short_name().into()),
-        ("plan", "Synthetic".into()),
+        (
+            "plan",
+            snapshot
+                .plan
+                .clone()
+                .unwrap_or_else(|| "Synthetic".to_string()),
+        ),
         ("session_pct", window.pct.clone()),
         ("session_reset", window.reset.clone()),
         ("weekly_pct", window.pct.clone()),
@@ -156,6 +162,7 @@ mod tests {
     fn renderer_exports_documented_count_and_percent() {
         let now = DateTime::from_timestamp(1_791_014_400, 0).unwrap();
         let snapshot = SyntheticSnapshot {
+            plan: Some("Standard".to_string()),
             weekly: UsageWindow {
                 utilization_pct: 31,
                 resets_at: Some(now + chrono::Duration::days(2)),
@@ -187,12 +194,19 @@ mod tests {
         assert!(rendered.text.contains("31%"));
         assert!(rendered.tooltip.contains("Credits 5.28 / 30"));
         assert!(rendered.tooltip.contains("Next regen +0.60 credits"));
+        // The configured plan tier names the entry.
+        let placeholders = build_placeholders(&snapshot, &opts, now);
+        assert_eq!(
+            placeholders.get("plan").map(String::as_str),
+            Some("Standard")
+        );
     }
 
     #[test]
     fn percentage_only_plans_skip_the_credit_rows() {
         let now = DateTime::from_timestamp(1_791_014_400, 0).unwrap();
         let snapshot = SyntheticSnapshot {
+            plan: None,
             weekly: UsageWindow {
                 utilization_pct: 31,
                 resets_at: Some(now + chrono::Duration::days(2)),
@@ -219,7 +233,12 @@ mod tests {
         let rendered = render(&outcome, &snapshot, &Theme::default(), &opts, now);
         assert!(rendered.tooltip.contains("Next regen +2%"));
         assert!(rendered.tooltip.contains("percentage only"));
+        // Without a configured tier the vendor label stands in.
         let placeholders = build_placeholders(&snapshot, &opts, now);
+        assert_eq!(
+            placeholders.get("plan").map(String::as_str),
+            Some("Synthetic")
+        );
         assert_eq!(
             placeholders.get("synthetic_requests").map(String::as_str),
             Some("")

@@ -685,6 +685,9 @@ impl Eq for NovitaSnapshot {}
 /// stopped being tracked when the weekly window became the only metric.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SyntheticSnapshot {
+    /// Configured plan tier label (go/standard/big) — the quotas API has no
+    /// tier identifier, so this is display-only config.
+    pub plan: Option<String>,
     pub weekly: UsageWindow,
     /// Credit spend figures when the plan reports a credit budget.
     pub credits: Option<WeeklyCredits>,

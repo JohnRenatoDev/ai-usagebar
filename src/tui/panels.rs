@@ -1775,7 +1775,7 @@ fn synthetic_sections(
     tolerance: u32,
 ) -> SectionBuilder {
     let mut sections = SectionBuilder::new(vec![Section::Title {
-        left: "Synthetic".into(),
+        left: s.plan.clone().unwrap_or_else(|| "Synthetic".to_string()),
         right: None,
     }]);
     push_window(
