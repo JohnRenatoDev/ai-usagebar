@@ -615,6 +615,8 @@ function brandFileFor(provider) {
       return "ollama.svg"
     case "muse-code":
       return "muse-code.svg"
+    case "synthetic":
+      return "synthetic.svg"
     default:
       return ""
   }

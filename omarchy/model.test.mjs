@@ -670,6 +670,8 @@ assert.equal(model.brandIconFile({id: 'grokbot'}), 'grokbot.svg');
 assert.equal(model.brandIconFile({id: 'copilot'}), 'copilot.svg');
 assert.equal(model.brandIconFile({id: 'devin'}), 'devin.svg');
 assert.equal(model.brandIconFile({id: 'devin@work'}), 'devin.svg');
+assert.equal(model.brandIconFile({id: 'synthetic'}), 'synthetic.svg');
+assert.equal(model.brandIconFile({id: 'synthetic', brand: 'synthetic'}), 'synthetic.svg');
 assert.equal(model.brandIconFile({id: 'custom:devin', brand: 'devin'}), 'devin.svg');
 const devinMark = fs.readFileSync(new URL('./icons/devin.svg', import.meta.url), 'utf8');
 assert.match(devinMark, /viewBox="0 0 24 24"/);
