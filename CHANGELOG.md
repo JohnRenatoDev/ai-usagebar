@@ -67,6 +67,18 @@
   redacted with the same key. The key check's final scrub stays as a second
   layer.
 
+- **The tray's IPC bridge only answers the popover's own page, and the
+  WebView no longer navigates outside it.** The tray hosts accepted any
+  message on the `window.ipc` bridge regardless of who sent it and let the
+  WebView navigate anywhere. Now that the bridge writes keys to
+  `config.toml` (`set-api-key`), a message is only served when it comes from
+  the popover's own origin — `aiub://localhost` on macOS, `http://aiub.localhost`
+  on Windows — and any other origin is dropped before it is parsed, without
+  a reply. The WebView stays pinned to that origin too: navigation to a
+  `http`/`https` URL outside it is handed to the default browser (the same
+  path as the `open-url` command) and denied in place, and anything else —
+  `file://`, `javascript:`, a new window from `window.open` — is refused.
+
 ## [1.44.0] — 2026-10-25
 
 ### Added
