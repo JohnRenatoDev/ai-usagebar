@@ -204,6 +204,7 @@ pub(crate) fn request_key_check(
         value,
         fetch_filtered_report,
         bust_vendor_cache,
+        clean_vendor_diagnostic,
         |name| std::env::var_os(name).is_some_and(|value| !value.is_empty()),
         request,
         notify,
@@ -212,7 +213,9 @@ pub(crate) fn request_key_check(
 
 /// The production fetch: one provider's report through the same entry point
 /// the tray's report uses, on a current-thread runtime like the account
-/// prepare. Tests pass a fake so a check never touches the wire.
+/// prepare. The wire-only read grants a zero TTL, so a payload another
+/// producer left in the vendor's cache cannot answer for the key just
+/// written. Tests pass a fake so a check never touches the wire.
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn fetch_filtered_report(slug: &str) -> std::result::Result<String, String> {
     tokio::runtime::Builder::new_current_thread()
@@ -221,31 +224,53 @@ fn fetch_filtered_report(slug: &str) -> std::result::Result<String, String> {
         .ok()
         .and_then(|runtime| {
             runtime
-                .block_on(crate::report::collect_filtered_json(Some(slug), None))
+                .block_on(crate::report::collect_filtered_json_from_wire(Some(slug)))
                 .ok()
         })
         .ok_or_else(|| "Could not start the key check worker.".to_string())
 }
 
+/// The production final cleanup after a refused verdict: drop the vendor's
+/// cache again, and when that removal fails, rewrite the `.last_error` in
+/// place with the key scrubbed out — the directory may be read-only for
+/// creation while the file itself is still writable. Best effort: a cleanup
+/// that cannot run still must not bring the check down.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+fn clean_vendor_diagnostic(slug: &str, key: &str) {
+    let Ok(cache) = crate::cache::Cache::for_vendor(slug) else {
+        return;
+    };
+    if cache.try_forget().is_err() {
+        // The diagnostic's layout is `code\nmessage`; the code line survives
+        // the scrub, the message does not name the key.
+        let _ = cache.scrub_last_error(|raw| {
+            let (code, message) = raw.split_once('\n').unwrap_or((raw, ""));
+            format!("{code}\n{}", scrub_key(message, key))
+        });
+    }
+}
+
 /// The shared check: parse the request, publish `Checking`, run the
 /// snapshot — write — fetch — restore dance on its own thread. `fetch`,
-/// `bust_cache`, `env_set`, `on_catalog` and `notify` are the seams the
-/// hosts and the tests plug in, so the thread never names either one. A
-/// malformed request — a missing field, a non-string slug or key, a `seq`
-/// that is not a `u64`, a vendor outside `KEY_VENDORS`, or a key the
-/// overlay would refuse — is ignored: `Ok(None)`, no response, no write.
-/// The dialog only exists for a provider without an inline credential, so
-/// a config that already saves the key is refused before the write, as is
-/// a vendor whose environment variable is defined: the fetch would
-/// authenticate with the environment's key, not the one being checked. The
-/// error is the verdict the host publishes when the check is refused or
-/// the thread cannot even be started.
+/// `bust_cache`, `clean_diagnostic`, `env_set`, `on_catalog` and `notify`
+/// are the seams the hosts and the tests plug in, so the thread never names
+/// either one. A malformed request — a missing field, a non-string slug or
+/// key, a `seq` that is not a `u64`, a vendor outside `KEY_VENDORS`, or a
+/// key the overlay would refuse — is ignored: `Ok(None)`, no response, no
+/// write. The dialog only exists for a provider without an inline
+/// credential, so a config that already saves a non-empty key is refused
+/// before the write, as is a vendor whose environment variable is defined:
+/// the fetch would authenticate with the environment's key, not the one
+/// being checked. The error is the verdict the host publishes when the
+/// check is refused or the thread cannot even be started.
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn request_key_check_with(
     facts: &SharedFacts,
     value: &Value,
     fetch: impl FnOnce(&str) -> std::result::Result<String, String> + Send + 'static,
     bust_cache: impl Fn(&str) -> std::result::Result<(), String> + Send + 'static,
+    clean_diagnostic: impl Fn(&str, &str) + Send + 'static,
     env_set: impl Fn(&str) -> bool + Send + 'static,
     on_catalog: impl Fn() + Send + 'static,
     notify: impl FnOnce() + Send + 'static,
@@ -270,20 +295,22 @@ pub(crate) fn request_key_check_with(
         error: "Could not resolve the config.toml path.".into(),
     })?;
     // The dialog only exists for a provider without an inline credential:
-    // a key already saved in the config is replaced in the TUI settings,
-    // not checked here. Refusing it also closes the race in which a
-    // concurrent refresh under the old key would refill the cache between
-    // the bust and the fetch. A config that cannot be parsed skips the
-    // check — the write below fails with the real error.
+    // a non-empty key already saved in the config is replaced in the TUI
+    // settings, not checked here (an empty field counts as absent, by the
+    // catalog's rule). Refusing it also keeps a queued check from replacing
+    // a key the TUI saves while the thread waits — re-checked under the
+    // lock, and again inside the write's own read-modify-write. A config
+    // that cannot be parsed skips the check — the write below fails with
+    // the real error.
     let already_saved = crate::tui::settings::snapshot_inline_key(&path, vendor)
         .ok()
-        .is_some_and(|snapshot| snapshot.key.is_some());
+        .is_some_and(|snapshot| crate::tui::settings::saved_inline_key(&snapshot).is_some());
     if already_saved {
         return Err(KeyCheckFact {
             id: slug,
             seq,
             state: KeyCheckState::Failed,
-            error: "A key is already saved in config.toml; replace it in the TUI settings.".into(),
+            error: crate::tui::settings::KEY_ALREADY_SAVED_MESSAGE.into(),
         });
     }
     // The vendor's effective environment variable — an `api_key_env`
@@ -334,6 +361,7 @@ pub(crate) fn request_key_check_with(
                 seq,
                 fetch,
                 bust_cache,
+                clean_diagnostic,
                 on_catalog,
                 notify,
             )
@@ -366,14 +394,16 @@ fn key_check_request(value: &Value) -> Option<(String, String, u64)> {
 static KEY_CHECK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The check's thread: under the single-flight lock, verify the send was
-/// not superseded, snapshot the config's credential state, write the new
-/// key with the overlay's writer, drop the vendor's cache — proving the
-/// removal — and fetch the provider alone. On a refusal, put the config
-/// back the state the snapshot found it, then drop the cache again so the
-/// provider's answer (which may name the key) and the backoff it armed do
-/// not outlive the check. The key is stripped from the verdict's error and
-/// dropped before the restore runs, so nothing after the scrub may name
-/// it.
+/// not superseded and the config still saves no key (the TUI is not behind
+/// this lock — a key it saved while the thread queued is a later decision,
+/// not an absent credential), write the new key only while it is still
+/// absent, drop the vendor's cache — proving the removal — and fetch the
+/// provider alone. On a refusal, put the config back the state the snapshot
+/// found it, then drop the cache again — and when that removal fails,
+/// scrub the diagnostic in place — so the provider's answer (which may
+/// name the key) and the backoff it armed do not outlive the check. The
+/// key is stripped from the verdict's error and from the diagnostic before
+/// it is dropped, so nothing after the scrub may name it.
 #[allow(clippy::too_many_arguments)] // the seams stay flat: tests name each one
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn run_key_check(
@@ -384,6 +414,7 @@ fn run_key_check(
     seq: u64,
     fetch: impl FnOnce(&str) -> std::result::Result<String, String>,
     bust_cache: impl Fn(&str) -> std::result::Result<(), String>,
+    clean_diagnostic: impl Fn(&str, &str),
     on_catalog: impl Fn(),
     notify: impl FnOnce(),
 ) {
@@ -418,9 +449,27 @@ fn run_key_check(
             return;
         }
     };
-    if let Err(error) = crate::tui::settings::write_inline_key(path, vendor, &key) {
-        // The write failed: the file is untouched, so there is nothing to
-        // restore.
+    // Re-validate the dialog's precondition where it counts — under the
+    // lock, over the config as it stands now. A key the TUI saved while
+    // this thread queued belongs to the user; replacing it would be the
+    // very swap the TUI owns, so refuse it and leave the file alone.
+    if crate::tui::settings::saved_inline_key(&snapshot).is_some() {
+        finish_key_check(
+            facts,
+            slug,
+            seq,
+            KeyCheckState::Failed,
+            crate::tui::settings::KEY_ALREADY_SAVED_MESSAGE.into(),
+            on_catalog,
+            notify,
+        );
+        return;
+    }
+    if let Err(error) = crate::tui::settings::write_inline_key_if_absent(path, vendor, &key) {
+        // The write failed — a key that appeared inside its own
+        // read-modify-write, or an I/O error — and the candidate never
+        // touched the file, so there is nothing to restore. The refusal
+        // message is the verdict.
         finish_key_check(
             facts,
             slug,
@@ -468,13 +517,15 @@ fn run_key_check(
     {
         error.push_str(" The new key stayed in config.toml.");
     }
-    drop(key);
     // A refused check must not leave the key in the persisted diagnostic
     // the fetch wrote (the provider's answer may name it) or in the 429
-    // backoff the candidate key armed: bust the cache again, best effort.
+    // backoff the candidate key armed: bust the cache again, and when that
+    // removal fails, scrub the diagnostic in place. The scrub needs the
+    // key, so this is its last use: it runs before the drop.
     if state == KeyCheckState::Failed {
-        let _ = (bust_cache)(slug);
+        (clean_diagnostic)(slug, &key);
     }
+    drop(key);
     error = cut_key_check_error(&error);
     // The snapshot — write — restore window is over; the publish and the
     // catalog request may run while the next check takes the lock.
@@ -832,6 +883,7 @@ mod tests {
                     Ok::<_, String>(slug.to_string())
                 },
                 |_| Ok(()),
+                |_, _| {},
                 |_| false,
                 || {},
                 || {},
@@ -874,6 +926,7 @@ mod tests {
                 Ok(r#"{"entries":[{"id":"zai","status":"error","stale":false,"error":"HTTP 401: invalid key"}]}"#.into())
             },
             |_| Ok(()),
+            |_, _| {},
             |_| false,
             move || {
                 counter.fetch_add(1, Ordering::Relaxed);
@@ -913,6 +966,7 @@ mod tests {
             &key_check_value("zai", "test-key-value", 3),
             |_| Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into()),
             |_| Ok(()),
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -950,6 +1004,7 @@ mod tests {
             &key_check_value("zai", "test-key-value", 4),
             |_| Err("HTTP 429: rate limited".to_string()),
             |_| Ok(()),
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -993,6 +1048,7 @@ mod tests {
                 Err("HTTP 401: invalid key".to_string())
             },
             |_| Ok(()),
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -1032,6 +1088,7 @@ mod tests {
             &key_check_value("zai", "first-key", 10),
             |_| Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into()),
             |_| Ok(()),
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -1043,6 +1100,7 @@ mod tests {
             &key_check_value("zai", "second-key", 11),
             |_| Err("HTTP 401: invalid key".to_string()),
             |_| Ok(()),
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -1062,6 +1120,7 @@ mod tests {
             &key_check_value("zai", "older-key", 9),
             |_| unreachable!("the superseded send must not fetch"),
             |_| Ok(()),
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -1109,6 +1168,7 @@ mod tests {
             &key_check_value("zai", "test-key-value", 9),
             |_| Err("HTTP 401: rejected".to_string()),
             |_| Ok(()),
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -1145,6 +1205,7 @@ mod tests {
             &key_check_value("zai", "test-key-value", 14),
             |_| Err("key is test-key-value, try again".to_string()),
             |_| Ok(()),
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -1186,6 +1247,7 @@ mod tests {
                 Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into())
             },
             |_| Ok(()),
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -1197,6 +1259,7 @@ mod tests {
             &key_check_value("zai", "second-key", 11),
             |_| Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into()),
             |_| Ok(()),
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -1256,6 +1319,7 @@ mod tests {
                 Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into())
             },
             |_| Ok(()),
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -1282,6 +1346,7 @@ mod tests {
             &key_check_value("zai", "second-key", 101),
             |_| unreachable!("the refused send must not fetch"),
             |_| Ok(()),
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -1358,6 +1423,7 @@ mod tests {
                     .try_forget()
                     .map_err(|error| error.to_string())
             },
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -1403,6 +1469,7 @@ mod tests {
                 Ok(String::new())
             },
             |_| Ok(()),
+            |_, _| {},
             move |name| {
                 consulted
                     .lock()
@@ -1461,6 +1528,7 @@ mod tests {
                 assert_eq!(slug, "zai");
                 Err("read-only cache directory".to_string())
             },
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -1509,6 +1577,8 @@ mod tests {
             .unwrap();
         let facts = default_facts();
         let error_cache = cache_dir.clone();
+        let bust_root = cache_root.clone();
+        let clean_root = cache_root.clone();
         let handle = request_key_check_with(
             &facts,
             &key_check_value("zai", "test-key-value", 21),
@@ -1523,9 +1593,12 @@ mod tests {
                 Err("key is test-key-value".to_string())
             },
             move |slug| {
-                crate::cache::Cache::at(cache_root.join(slug))
+                crate::cache::Cache::at(bust_root.join(slug))
                     .try_forget()
                     .map_err(|error| error.to_string())
+            },
+            move |slug, _key| {
+                let _ = crate::cache::Cache::at(clean_root.join(slug)).try_forget();
             },
             |_| false,
             || {},
@@ -1583,6 +1656,7 @@ mod tests {
                 Err("HTTP 401: invalid key".to_string())
             },
             |_| Ok(()),
+            |_, _| {},
             |_| false,
             || {},
             || {},
@@ -1607,6 +1681,239 @@ mod tests {
 
     #[test]
     #[cfg(any(windows, target_os = "macos"))]
+    fn key_check_wire_fetch_ignores_a_payload_refilled_after_the_bust() {
+        let guard = override_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ui]\nprimary = \"zai\"\n").unwrap();
+        crate::config::set_override_path(&path);
+        let facts = default_facts();
+        // A producer that started under the old key lands its reading in
+        // the vendor's cache after the bust succeeded: the race that makes
+        // a cached payload a lie about the key just written. The layout
+        // mirrors `Cache::for_vendor(slug)`.
+        let cache_root = dir.path().join("cache");
+        let bust_root = cache_root.clone();
+        let fetch_root = cache_root.clone();
+        let clean_root = cache_root.clone();
+        let refilled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let bust_refill = std::sync::Arc::clone(&refilled);
+        let handle = request_key_check_with(
+            &facts,
+            &key_check_value("zai", "test-key-value", 30),
+            move |slug| {
+                // The real fetch's one pre-network hook, at the check's
+                // zero TTL: a payload the old producer left is not an
+                // answer about the key just written, so the wire decides —
+                // the injected refusal.
+                let cache = crate::cache::Cache::at(fetch_root.join(slug));
+                match cache.fresh_payload(std::time::Duration::ZERO) {
+                    Ok(Some(payload)) => Ok(String::from_utf8_lossy(&payload).into()),
+                    Ok(None) => Err("HTTP 401: invalid key".to_string()),
+                    Err(error) => Err(error.user_message()),
+                }
+            },
+            move |slug| {
+                let cache = crate::cache::Cache::at(bust_root.join(slug));
+                let result = cache.try_forget().map_err(|error| error.to_string());
+                // The old producer's answer lands after the bust: a fresh
+                // mtime, so an ordinary TTL would call it fresh.
+                if result.is_ok() && !bust_refill.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    cache
+                        .write_payload(
+                            br#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#,
+                        )
+                        .unwrap();
+                }
+                result
+            },
+            move |slug, _key| {
+                let _ = crate::cache::Cache::at(clean_root.join(slug)).try_forget();
+            },
+            |_| false,
+            || {},
+            || {},
+        )
+        .expect("spawn")
+        .unwrap();
+        handle.join().unwrap();
+        // The refilled payload never decided the verdict: the wire
+        // refusal did, and the key went back where it came from.
+        let fact = facts_snapshot(&facts)
+            .key_check
+            .expect("the verdict must be published");
+        assert_eq!(fact.state, KeyCheckState::Failed);
+        assert_eq!(fact.error, "HTTP 401: invalid key");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[ui]\nprimary = \"zai\"\n"
+        );
+        // The final cleanup dropped the refilled payload, too.
+        assert!(!cache_root.join("zai").join("usage.json").exists());
+        drop(guard);
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "macos"))]
+    fn key_check_empty_inline_field_is_not_a_saved_key() {
+        let guard = override_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // The catalog's rule: an empty `api_key` offers the dialog, so the
+        // check must not refuse it as an existing key.
+        let original = "[ui]\nprimary = \"zai\"\n[zai]\napi_key = ''\nenabled = true\n";
+        std::fs::write(&path, original).unwrap();
+        crate::config::set_override_path(&path);
+        let facts = default_facts();
+        let handle = request_key_check_with(
+            &facts,
+            &key_check_value("zai", "test-key-value", 31),
+            |_| Err("HTTP 401: invalid key".to_string()),
+            |_| Ok(()),
+            |_, _| {},
+            |_| false,
+            || {},
+            || {},
+        )
+        .expect("spawn")
+        .expect("an empty field must not refuse the check");
+        handle.join().unwrap();
+        // The refusal restores the file exactly — the empty field
+        // included.
+        let fact = facts_snapshot(&facts)
+            .key_check
+            .expect("the verdict must be published");
+        assert_eq!(fact.state, KeyCheckState::Failed);
+        assert_eq!(fact.error, "HTTP 401: invalid key");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        drop(guard);
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "macos"))]
+    fn key_check_key_saved_by_the_tui_while_queued_is_not_replaced() {
+        let guard = override_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ui]\nprimary = \"zai\"\n").unwrap();
+        crate::config::set_override_path(&path);
+        let facts = default_facts();
+        // Another check holds the lock; this send is admitted (no key
+        // saved yet) and queues. While it waits, the TUI saves a key with
+        // its writer, on the same file — the TUI is not behind this lock.
+        let lock_guard = KEY_CHECK_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let fetch_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called = std::sync::Arc::clone(&fetch_called);
+        let handle = request_key_check_with(
+            &facts,
+            &key_check_value("zai", "test-key-value", 32),
+            move |_| {
+                called.store(true, Ordering::Relaxed);
+                Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into())
+            },
+            |_| Ok(()),
+            |_, _| {},
+            |_| false,
+            || {},
+            || {},
+        )
+        .expect("spawn")
+        .expect("admitted while no key is saved");
+        let vendor = crate::tui::settings::key_vendor_for_slug("zai").unwrap();
+        crate::tui::settings::write_inline_key(&path, vendor, "tui-key-value").unwrap();
+        drop(lock_guard);
+        handle.join().unwrap();
+        // The queued check re-validated under the lock and found the TUI's
+        // key: it refused, left the key alone, and never fetched.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains(r#"api_key = "tui-key-value""#), "{raw}");
+        assert!(!raw.contains("test-key-value"), "{raw}");
+        assert!(
+            !fetch_called.load(Ordering::Relaxed),
+            "a refused check must not fetch"
+        );
+        let fact = facts_snapshot(&facts)
+            .key_check
+            .expect("the refusal verdict must be published");
+        assert_eq!(fact.seq, 32);
+        assert_eq!(fact.state, KeyCheckState::Failed);
+        assert_eq!(fact.error, crate::tui::settings::KEY_ALREADY_SAVED_MESSAGE);
+        drop(guard);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn key_check_final_cleanup_scrubs_the_diagnostic_when_the_bust_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let guard = override_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ui]\nprimary = \"zai\"\n").unwrap();
+        crate::config::set_override_path(&path);
+        // The fetch's writer persists the provider's answer — naming the
+        // key — before the final cleanup; the cache directory then loses
+        // write permission, so the cleanup's bust fails and the in-place
+        // scrub must take over. The layout mirrors `Cache::for_vendor`.
+        let cache_root = dir.path().join("cache");
+        let cache_dir = cache_root.join("zai");
+        crate::cache::Cache::at(cache_dir.clone())
+            .ensure_dir()
+            .unwrap();
+        let facts = default_facts();
+        let fetch_dir = cache_dir.clone();
+        let clean_dir = cache_dir.clone();
+        let clean_root = cache_root.clone();
+        let handle = request_key_check_with(
+            &facts,
+            &key_check_value("zai", "test-key-value", 33),
+            move |_| {
+                crate::cache::Cache::at(fetch_dir).write_last_error(0, "key is test-key-value");
+                Err("key is test-key-value".to_string())
+            },
+            |_| Ok(()),
+            move |slug, key| {
+                // The production cleanup: the bust now fails (read-only
+                // directory), and the scrub rewrites the diagnostic in
+                // place.
+                std::fs::set_permissions(&clean_dir, std::fs::Permissions::from_mode(0o555))
+                    .unwrap();
+                let cache = crate::cache::Cache::at(clean_root.join(slug));
+                if cache.try_forget().is_err() {
+                    let _ = cache.scrub_last_error(|raw| {
+                        let (code, message) = raw.split_once('\n').unwrap_or((raw, ""));
+                        format!("{code}\n{}", scrub_key(message, key))
+                    });
+                }
+                std::fs::set_permissions(&clean_dir, std::fs::Permissions::from_mode(0o755))
+                    .unwrap();
+            },
+            |_| false,
+            || {},
+            || {},
+        )
+        .expect("spawn")
+        .unwrap();
+        handle.join().unwrap();
+        let fact = facts_snapshot(&facts)
+            .key_check
+            .expect("the verdict must be published");
+        assert_eq!(fact.state, KeyCheckState::Failed);
+        assert_eq!(fact.error, "key is [key]");
+        // The diagnostic survived (the directory refused removal) but no
+        // longer names the key: it was rewritten in place, not recreated.
+        let raw = std::fs::read_to_string(cache_dir.join(".last_error")).unwrap();
+        assert!(!raw.contains("test-key-value"), "{raw}");
+        assert!(raw.contains("[key]"), "{raw}");
+        assert!(raw.starts_with("0\n"), "the code line must survive: {raw}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[ui]\nprimary = \"zai\"\n"
+        );
+        drop(guard);
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "macos"))]
     fn key_check_env_var_precedence_refuses_before_writing() {
         let guard = override_guard();
         let dir = tempfile::tempdir().unwrap();
@@ -1626,6 +1933,7 @@ mod tests {
                 Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into())
             },
             |_| Ok(()),
+            |_, _| {},
             move |name| {
                 consulted_env
                     .lock()
@@ -1662,6 +1970,7 @@ mod tests {
             &key_check_value("zai", "test-key-value", 15),
             |_| Ok(String::new()),
             |_| Ok(()),
+            |_, _| {},
             move |name| {
                 consulted_env
                     .lock()

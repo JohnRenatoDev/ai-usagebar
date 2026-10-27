@@ -700,18 +700,30 @@ mod tests {
             .unwrap();
         let endpoints = Endpoints { base: server.url() };
 
-        for _ in 0..2 {
-            let outcome = fetch_snapshot_with(
-                &safe_client(),
-                &credentials,
-                &cache,
-                &endpoints,
-                Duration::ZERO,
-            )
-            .await
-            .unwrap();
-            assert_eq!(outcome.snapshot, snapshot());
-        }
+        // The first pass reaches the wire — a zero TTL is the wire-only
+        // read — and the 429 arms the backoff; the second pass, at a
+        // positive TTL like production, is served from the last good
+        // payload instead of the network.
+        let first = fetch_snapshot_with(
+            &safe_client(),
+            &credentials,
+            &cache,
+            &endpoints,
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.snapshot, snapshot());
+        let second = fetch_snapshot_with(
+            &safe_client(),
+            &credentials,
+            &cache,
+            &endpoints,
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+        assert_eq!(second.snapshot, snapshot());
         request.assert_async().await;
     }
 

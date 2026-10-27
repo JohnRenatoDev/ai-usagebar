@@ -878,17 +878,74 @@ pub(crate) fn snapshot_inline_key(path: &Path, vendor: &KeyVendor) -> Result<Key
     }
 }
 
+/// The verdict the key check publishes when a non-empty key is already
+/// saved: the dialog only exists for a provider without an inline
+/// credential, and a saved key is replaced in the TUI settings, not
+/// checked here.
+pub(crate) const KEY_ALREADY_SAVED_MESSAGE: &str =
+    "A key is already saved in config.toml; replace it in the TUI settings.";
+
+/// The vendor's saved inline key by the catalog's rule — the same one
+/// `Config::inline_api_key` applies: an absent field, or a field that holds
+/// the empty string, is no credential. An `api_key = ''` left by a cleared
+/// field must not block the dialog the catalog offers for it.
+pub(crate) fn saved_inline_key(snapshot: &KeySnapshot) -> Option<String> {
+    snapshot
+        .key
+        .as_ref()
+        .and_then(|item| item.value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 /// Write one inline credential the way the overlay's save does: `toml_edit`,
 /// the vendor's own section, `chmod 600` through [`write_config_document`].
 /// A non-empty credential also opts the vendor in, like `update_key`: a key
 /// that stays disabled is a key the fetch never sees. The value is validated
-/// first, so a refused key never touches the file.
+/// first, so a refused key never touches the file. The key check itself uses
+/// the conditional [`write_inline_key_if_absent`]; the unconditional write
+/// is what a user-driven save does, and the tests stand in for it.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn write_inline_key(path: &Path, vendor: &KeyVendor, value: &str) -> Result<()> {
     validate_key_value(vendor, value)?;
     let mut doc = read_config_document(path)?;
     set_string(&mut doc, vendor.section, vendor.config_key, value)?;
     set_bool(&mut doc, vendor.section, "enabled", true)?;
     write_config_document(path, &doc)
+}
+
+/// [`write_inline_key`] that refuses to replace a saved credential: the
+/// "no key yet" precondition is re-checked inside the same
+/// read-modify-write, so the window between deciding and writing is the
+/// file's own. A non-empty key found there is a later decision on the same
+/// field and stays — the refusal is the
+/// [`KEY_ALREADY_SAVED_MESSAGE`], and the file is left untouched. An empty
+/// value counts as absent, by the catalog's rule.
+pub(crate) fn write_inline_key_if_absent(
+    path: &Path,
+    vendor: &KeyVendor,
+    value: &str,
+) -> Result<()> {
+    validate_key_value(vendor, value)?;
+    let mut doc = read_config_document(path)?;
+    if saved_inline_key_in_doc(&doc, vendor).is_some() {
+        return Err(AppError::Other(KEY_ALREADY_SAVED_MESSAGE.to_string()));
+    }
+    set_string(&mut doc, vendor.section, vendor.config_key, value)?;
+    set_bool(&mut doc, vendor.section, "enabled", true)?;
+    write_config_document(path, &doc)
+}
+
+/// The precondition [`write_inline_key_if_absent`] refuses on, read from a
+/// document already in hand — the same catalog rule as
+/// [`saved_inline_key`]: an empty value is no credential.
+fn saved_inline_key_in_doc(doc: &toml_edit::DocumentMut, vendor: &KeyVendor) -> Option<String> {
+    doc.get(vendor.section)?
+        .as_table_like()
+        .and_then(|table| table.get(vendor.config_key))
+        .and_then(toml_edit::Item::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 /// Give the config back the state [`snapshot_inline_key`] captured,
@@ -2713,6 +2770,42 @@ api_key_env = "OPENROUTER_WORK_API_KEY"
         assert!(!raw.contains("old-key-value"), "{raw}");
     }
 
+    #[test]
+    fn saved_inline_key_counts_an_empty_field_as_absent() {
+        let vendor = key_vendor_for_slug(VendorId::Zai.slug()).unwrap();
+        // The catalog's rule: `Config::inline_api_key` filters the empty
+        // string, so a cleared field offers the key dialog again.
+        let (_dir, path) = temp_config(Some("[zai]\napi_key = ''\n"));
+        assert!(saved_inline_key(&snapshot_inline_key(&path, vendor).unwrap()).is_none());
+        let (_dir, path) = temp_config(Some("[zai]\napi_key = \"k\"\n"));
+        let snapshot = snapshot_inline_key(&path, vendor).unwrap();
+        assert_eq!(saved_inline_key(&snapshot).as_deref(), Some("k"));
+    }
+
+    #[test]
+    fn write_inline_key_if_absent_refuses_a_saved_nonempty_key() {
+        let vendor = key_vendor_for_slug(VendorId::Zai.slug()).unwrap();
+        let original = "[ui]\nprimary = \"zai\"\n[zai]\napi_key = \"old-key-value\"\n";
+        let (_dir, path) = temp_config(Some(original));
+        let error = write_inline_key_if_absent(&path, vendor, "test-key-value")
+            .expect_err("a saved key must not be replaced by the check's write");
+        assert_eq!(error.user_message(), KEY_ALREADY_SAVED_MESSAGE);
+        // The refusal is inside the read-modify-write: nothing was written.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn write_inline_key_if_absent_accepts_an_empty_field() {
+        let vendor = key_vendor_for_slug(VendorId::Zai.slug()).unwrap();
+        let original = "[zai]\napi_key = ''\nenabled = false\n";
+        let (_dir, path) = temp_config(Some(original));
+        // The catalog offers the dialog for this file, so the conditional
+        // write must too: the empty value counts as absent.
+        write_inline_key_if_absent(&path, vendor, "test-key-value").unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains(r#"api_key = "test-key-value""#), "{raw}");
+        assert!(raw.contains("enabled = true"), "{raw}");
+    }
     #[test]
     fn inline_key_snapshot_removes_the_key_when_there_was_none() {
         let vendor = key_vendor_for_slug(VendorId::Deepseek.slug()).unwrap();

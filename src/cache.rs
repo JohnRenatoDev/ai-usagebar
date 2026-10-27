@@ -118,7 +118,12 @@ impl Cache {
     ///    without touching the network. With nothing worth showing this returns
     ///    an [`AppError::Http`] with status 429 whose body names the time until
     ///    the next attempt; the vendor's `?` propagates it and the network is
-    ///    never reached. `.last_error` is left as the vendor wrote it.
+    ///    never reached. `.last_error` is left as the vendor wrote it. A
+    ///    wire-only read (`ttl = 0`) never serves a payload in either branch:
+    ///    its answer must be a reading made now, and one left by another
+    ///    producer is not. Claude Desktop's prepare also reads with a zero
+    ///    TTL and refuses a cached reading either way; under a backoff it now
+    ///    gets the 429 that says when to retry.
     /// 2. Otherwise the ordinary TTL check runs unchanged.
     pub fn fresh_payload(&self, ttl: Duration) -> Result<Option<Vec<u8>>> {
         self.fresh_payload_at(ttl, SystemTime::now())
@@ -129,7 +134,11 @@ impl Cache {
     /// clock via [`Cache::payload_age`].
     pub fn fresh_payload_at(&self, ttl: Duration, now: SystemTime) -> Result<Option<Vec<u8>>> {
         if let Some(remaining) = self.backoff_remaining_at(now) {
-            if self.payload_age().is_some_and(|age| age <= MAX_STALE) {
+            // The wire-only read skips the backoff's serve branch: a payload
+            // another producer left is not a reading made under the key this
+            // caller just wrote, even though the bar's ordinary callers keep
+            // their last good figure.
+            if !ttl.is_zero() && self.payload_age().is_some_and(|age| age <= MAX_STALE) {
                 return self.read_payload().map(Some);
             }
             return Err(AppError::Http {
@@ -284,6 +293,32 @@ impl Cache {
             }
         }
         Ok(())
+    }
+
+    /// Rewrite the `.last_error` in place with the scrubbed content — the
+    /// key check's last resort when the final [`Cache::try_forget`] fails:
+    /// the file already holds the provider's answer, which may name the
+    /// key. Opens the existing file for writing with truncate and never
+    /// creates one: a cache directory may be read-only for creation while
+    /// the file itself is still writable. A missing file is not a failure —
+    /// there is nothing to scrub — and so is content the scrub leaves
+    /// unchanged.
+    pub fn scrub_last_error(&self, scrub: impl Fn(&str) -> String) -> std::io::Result<()> {
+        let path = self.last_error_path();
+        let original = match fs::read_to_string(&path) {
+            Ok(original) => original,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let scrubbed = scrub(&original);
+        if scrubbed == original {
+            return Ok(());
+        }
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&path)?;
+        file.write_all(scrubbed.as_bytes())
     }
 
     /// Write the `.last_error` marker — first line `code`, everything after it
@@ -582,6 +617,70 @@ mod tests {
     }
 
     #[test]
+    fn fresh_payload_zero_ttl_never_serves_a_fresh_payload() {
+        let (_td, cache) = fixture();
+        cache.write_payload(b"previous reading").unwrap();
+        // Written this same millisecond: the age is zero, and `age < ttl`
+        // is false for a zero `ttl`, so the ordinary path cannot serve it.
+        assert!(cache.fresh_payload(Duration::ZERO).unwrap().is_none());
+        // ...and neither through the backoff branch, which would otherwise
+        // serve a payload inside MAX_STALE with the TTL "notwithstanding".
+        cache.note_rate_limit_at(SystemTime::now());
+        let error = cache.fresh_payload(Duration::ZERO).unwrap_err();
+        assert!(error.to_string().contains("rate limited"), "{error}");
+        // The ordinary callers keep their behavior: with a positive TTL the
+        // backoff still serves the fresh payload.
+        assert!(cache.fresh_payload(DEFAULT_TTL).unwrap().is_some());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn scrub_last_error_rewrites_the_file_in_place_in_a_read_only_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_td, cache) = fixture();
+        cache.write_last_error(0, "key is test-key-value");
+        // The bust this scrub backs up failed: the directory refuses
+        // removals.
+        let dir = cache.dir().to_path_buf();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+        cache.try_forget().unwrap_err();
+        // The last resort: the directory refuses new files, but the
+        // existing one is still writable in place.
+        cache
+            .scrub_last_error(|raw| raw.replace("test-key-value", "[key]"))
+            .unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        let raw = fs::read_to_string(cache.last_error_path()).unwrap();
+        assert!(
+            !raw.contains("test-key-value"),
+            "the key must be gone: {raw}"
+        );
+        assert!(raw.contains("[key]"), "{raw}");
+        assert!(raw.starts_with("0\n"), "the code line must survive: {raw}");
+    }
+
+    #[test]
+    fn scrub_last_error_of_a_missing_file_is_not_a_failure() {
+        let (_td, cache) = fixture();
+        cache.scrub_last_error(|raw| raw.to_string()).unwrap();
+        assert!(!cache.last_error_path().exists(), "no file may be created");
+    }
+
+    #[test]
+    fn scrub_last_error_untouched_content_leaves_the_file_alone() {
+        let (_td, cache) = fixture();
+        cache.write_last_error(0, "nothing to hide");
+        let before = cache.last_error_path();
+        let mtime_before = fs::metadata(&before).unwrap().modified().unwrap();
+        cache.scrub_last_error(|raw| raw.to_string()).unwrap();
+        let mtime_after = fs::metadata(&before).unwrap().modified().unwrap();
+        assert_eq!(
+            mtime_before, mtime_after,
+            "an unchanged file must not be rewritten"
+        );
+    }
+
+    #[test]
     fn maybe_payload_returns_none_when_missing() {
         let (_td, cache) = fixture();
         assert!(cache.maybe_payload().unwrap().is_none());
@@ -711,14 +810,20 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        // Under backoff the same payload is the answer.
+        // Under backoff the same payload is the answer for the ordinary
+        // callers: a positive TTL keeps its policy unchanged...
         assert_eq!(
             cache
-                .fresh_payload_at(Duration::ZERO, t0())
+                .fresh_payload_at(DEFAULT_TTL, t0())
                 .unwrap()
                 .as_deref(),
             Some(&b"last good"[..])
         );
+        // ...but a wire-only read (zero TTL) never serves a payload: its
+        // answer must be a reading made now, and the backoff still refuses
+        // the network.
+        let error = cache.fresh_payload_at(Duration::ZERO, t0()).unwrap_err();
+        assert!(error.to_string().contains("rate limited"), "{error}");
     }
 
     #[test]
