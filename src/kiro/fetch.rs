@@ -100,6 +100,20 @@ async fn fetch_snapshot_at(
     {
         return Ok(outcome);
     }
+    // #515: during a backoff `fresh_payload` returns bytes this refresh can
+    // refuse, such as a payload past its credit-cycle reset. The shared
+    // backoff still applies, as it does for the Anthropic API since #496:
+    // surface the countdown instead of contacting the server, or a refresh
+    // interval shorter than the backoff would re-request and re-arm it forever.
+    if let Some(remaining) = cache.backoff_remaining() {
+        return Err(AppError::Http {
+            status: 429,
+            body: format!(
+                "rate limited; next attempt in {}",
+                crate::cache::human_backoff(remaining)
+            ),
+        });
+    }
 
     apply_persisted_oauth(cache, &mut creds)?;
 
