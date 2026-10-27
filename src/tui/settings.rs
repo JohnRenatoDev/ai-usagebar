@@ -817,18 +817,65 @@ pub(crate) fn validate_key_value(vendor: &KeyVendor, value: &str) -> Result<()> 
     reject_invalid_key(vendor.secret_label, vendor.id.slug(), value)
 }
 
-/// Read the credential a vendor keeps inline in the config at `path`, if
-/// any: the value the tray's `set-api-key` check restores when the provider
-/// refuses the new one. A missing file reads as no key; an unparseable
-/// config is an error rather than a guess.
-pub(crate) fn read_inline_key(path: &Path, vendor: &KeyVendor) -> Result<Option<String>> {
+/// One credential field as found in the config: the value with the
+/// decoration `toml_edit` attached to it. Cloned out of the parsed
+/// document, so a restore puts it back byte for byte — comments and all.
+/// No `Debug`: the value is a secret, and a backtrace of the snapshot must
+/// not print it.
+pub(crate) struct KeyItemSnapshot {
+    key_decor: toml_edit::Decor,
+    value: toml_edit::Value,
+}
+
+/// The config state the `set-api-key` check must be able to give back when
+/// the provider refuses the new key: whether the file existed, whether the
+/// vendor's section did, and the `api_key` and `enabled` fields exactly as
+/// found. A restore touches only those two fields — everything else in the
+/// document is left as the document holds it at restore time.
+pub(crate) struct KeySnapshot {
+    pub file_existed: bool,
+    pub section_existed: bool,
+    pub key: Option<KeyItemSnapshot>,
+    pub enabled: Option<KeyItemSnapshot>,
+}
+
+/// Capture one credential field — its value and its key decoration — from
+/// the vendor's section, when it holds a value. A field that holds a table
+/// is not a credential: it captures as absent, and the restore removes it.
+fn capture_key_item(table: &dyn toml_edit::TableLike, name: &str) -> Option<KeyItemSnapshot> {
+    let (key, item) = table.get_key_value(name)?;
+    let value = item.as_value()?.clone();
+    Some(KeyItemSnapshot {
+        key_decor: key.leaf_decor().clone(),
+        value,
+    })
+}
+
+/// Snapshot the credential state the `set-api-key` check must be able to
+/// give back: read the config with `toml_edit` (comments intact) and clone
+/// the vendor's `api_key` and `enabled` fields out of it. A missing file
+/// is an empty document, so the snapshot simply records that nothing was
+/// there; an unparseable config is an error rather than a guess.
+pub(crate) fn snapshot_inline_key(path: &Path, vendor: &KeyVendor) -> Result<KeySnapshot> {
+    let file_existed = path.exists();
     let doc = read_config_document(path)?;
-    Ok(doc
+    match doc
         .get(vendor.section)
         .and_then(toml_edit::Item::as_table_like)
-        .and_then(|table| table.get(vendor.config_key))
-        .and_then(toml_edit::Item::as_str)
-        .map(str::to_owned))
+    {
+        Some(table) => Ok(KeySnapshot {
+            file_existed,
+            section_existed: true,
+            key: capture_key_item(table, vendor.config_key),
+            enabled: capture_key_item(table, "enabled"),
+        }),
+        None => Ok(KeySnapshot {
+            file_existed,
+            section_existed: false,
+            key: None,
+            enabled: None,
+        }),
+    }
 }
 
 /// Write one inline credential the way the overlay's save does: `toml_edit`,
@@ -844,27 +891,55 @@ pub(crate) fn write_inline_key(path: &Path, vendor: &KeyVendor, value: &str) -> 
     write_config_document(path, &doc)
 }
 
-/// Put the config back where the `set-api-key` check found it: write the
-/// previous value back, or remove the key when there was none. The vendor's
-/// `enabled` switch is left as the check's write left it — the restore
-/// covers the key, and no validation runs because the previous value
-/// already lived in the user's config.
-pub(crate) fn restore_inline_key(
+/// Give the config back the state [`snapshot_inline_key`] captured: each
+/// of the two fields the check's write touches is put back with its
+/// captured value and decoration, or removed when it was absent. A section
+/// the check created is removed when nothing else is left in it, and a
+/// file the check created is removed when the document is left empty. No
+/// other field in the file is touched, so edits made to it in the meantime
+/// survive the restore. No validation runs: the captured values already
+/// lived in the user's config.
+pub(crate) fn restore_inline_key_snapshot(
     path: &Path,
     vendor: &KeyVendor,
-    previous: Option<&str>,
+    snapshot: &KeySnapshot,
 ) -> Result<()> {
     let mut doc = read_config_document(path)?;
-    match previous {
-        Some(value) => set_string(&mut doc, vendor.section, vendor.config_key, value)?,
-        None => {
-            if let Some(table) = doc
-                .get_mut(vendor.section)
-                .and_then(toml_edit::Item::as_table_like_mut)
-            {
-                table.remove(vendor.config_key);
+    let table = doc
+        .entry(vendor.section)
+        .or_insert_with(toml_edit::table)
+        .as_table_mut()
+        .ok_or_else(|| {
+            AppError::Other(format!("config.toml: [{}] is not a table", vendor.section))
+        })?;
+    for (name, captured) in [
+        (vendor.config_key, &snapshot.key),
+        ("enabled", &snapshot.enabled),
+    ] {
+        match captured {
+            Some(item) => {
+                let key = toml_edit::Key::new(name).with_leaf_decor(item.key_decor.clone());
+                table.insert_formatted(&key, toml_edit::Item::Value(item.value.clone()));
+            }
+            None => {
+                table.remove(name);
             }
         }
+    }
+    // A section the check created must not survive the restore as an empty
+    // husk — but one that holds anything the check did not write does.
+    if !snapshot.section_existed
+        && doc
+            .get(vendor.section)
+            .and_then(toml_edit::Item::as_table_like)
+            .is_some_and(|table| table.is_empty())
+    {
+        doc.remove(vendor.section);
+    }
+    // Likewise a file the check created, when the document is left empty.
+    if !snapshot.file_existed && doc.as_table().is_empty() {
+        std::fs::remove_file(path)?;
+        return Ok(());
     }
     write_config_document(path, &doc)
 }
@@ -2539,11 +2614,10 @@ api_key_env = "OPENROUTER_WORK_API_KEY"
         // And everything else of the config survives.
         assert!(raw.contains("# keep me"), "{raw}");
         assert!(raw.contains(r#"primary = "zai""#), "{raw}");
-        // The file is back to a parseable config with the value readable.
-        assert_eq!(
-            read_inline_key(&path, vendor).unwrap(),
-            Some("test-key-value".into())
-        );
+        // The file is back to a parseable config with the value captured.
+        let snapshot = snapshot_inline_key(&path, vendor).unwrap();
+        assert!(snapshot.key.is_some());
+        assert!(snapshot.enabled.is_some());
     }
 
     #[test]
@@ -2579,36 +2653,73 @@ api_key_env = "OPENROUTER_WORK_API_KEY"
     }
 
     #[test]
-    fn inline_key_restore_puts_the_previous_value_back() {
+    fn inline_key_snapshot_restores_the_exact_previous_state() {
         let vendor = key_vendor_for_slug(VendorId::Zai.slug()).unwrap();
-        let original =
-            "[ui]\nprimary = \"zai\"\n[zai]\napi_key = \"old-key-value\"\nenabled = true\n";
+        // An old key with the vendor off, and a comment on the key's line:
+        // the restore must give all of it back, byte for byte.
+        let original = "[ui]\nprimary = \"zai\"\n[zai]\n# my old key\napi_key = \"old-key-value\"\nenabled = false\n";
         let (_dir, path) = temp_config(Some(original));
+        let snapshot = snapshot_inline_key(&path, vendor).unwrap();
+        assert!(snapshot.file_existed);
+        assert!(snapshot.section_existed);
         write_inline_key(&path, vendor, "test-key-value").unwrap();
         assert_ne!(std::fs::read_to_string(&path).unwrap(), original);
-        restore_inline_key(&path, vendor, Some("old-key-value")).unwrap();
-        // Byte-for-byte back where the check found the file.
+        restore_inline_key_snapshot(&path, vendor, &snapshot).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     }
 
     #[test]
-    fn inline_key_restore_removes_the_key_when_there_was_none() {
+    fn inline_key_snapshot_removes_the_key_when_there_was_none() {
         let vendor = key_vendor_for_slug(VendorId::Deepseek.slug()).unwrap();
-        let (_dir, path) = temp_config(Some("[ui]\nprimary = \"deepseek\"\n"));
+        let original = "[ui]\nprimary = \"deepseek\"\n";
+        let (_dir, path) = temp_config(Some(original));
+        let snapshot = snapshot_inline_key(&path, vendor).unwrap();
+        assert!(!snapshot.section_existed);
         write_inline_key(&path, vendor, "test-key-value").unwrap();
-        restore_inline_key(&path, vendor, None).unwrap();
+        restore_inline_key_snapshot(&path, vendor, &snapshot).unwrap();
         let raw = std::fs::read_to_string(&path).unwrap();
+        // The key is gone, the section the check created is gone, and
+        // everything else of the file is intact.
         assert!(!raw.contains("api_key"), "the key must be gone: {raw}");
+        assert!(
+            !raw.contains("[deepseek]"),
+            "the section must be gone: {raw}"
+        );
         assert!(raw.contains(r#"primary = "deepseek""#), "{raw}");
-        assert_eq!(read_inline_key(&path, vendor).unwrap(), None);
     }
 
     #[test]
-    fn inline_key_read_is_none_without_a_file() {
+    fn inline_key_snapshot_of_a_missing_file_removes_it_on_restore() {
         let vendor = key_vendor_for_slug(VendorId::Kimi.slug()).unwrap();
         let (dir, path) = temp_config(None);
         let _ = dir;
-        assert_eq!(read_inline_key(&path, vendor).unwrap(), None);
+        let snapshot = snapshot_inline_key(&path, vendor).unwrap();
+        assert!(!snapshot.file_existed);
+        assert!(!snapshot.section_existed);
+        assert!(snapshot.key.is_none());
+        assert!(snapshot.enabled.is_none());
+        write_inline_key(&path, vendor, "test-key-value").unwrap();
+        restore_inline_key_snapshot(&path, vendor, &snapshot).unwrap();
+        assert!(!path.exists(), "the file the check created must be gone");
+    }
+
+    #[test]
+    fn inline_key_snapshot_keeps_edits_made_elsewhere_in_the_meantime() {
+        let vendor = key_vendor_for_slug(VendorId::Zai.slug()).unwrap();
+        let original = "[ui]\nprimary = \"zai\"\n[zai]\napi_key = \"old-key-value\"\n";
+        let (_dir, path) = temp_config(Some(original));
+        let snapshot = snapshot_inline_key(&path, vendor).unwrap();
+        write_inline_key(&path, vendor, "test-key-value").unwrap();
+        // An edit the check did not make: a new field in the same section.
+        let mut doc = crate::config::read_config_document(&path).unwrap();
+        set_string(&mut doc, "zai", "api_key_env", "SOME_ENV_VAR").unwrap();
+        crate::config::write_config_document(&path, &doc).unwrap();
+        restore_inline_key_snapshot(&path, vendor, &snapshot).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        // The snapshot's state is back...
+        assert!(raw.contains(r#"api_key = "old-key-value""#), "{raw}");
+        // ...and the foreign edit survived, untouched by the snapshot.
+        assert!(raw.contains(r#"api_key_env = "SOME_ENV_VAR""#), "{raw}");
     }
 
     #[test]
