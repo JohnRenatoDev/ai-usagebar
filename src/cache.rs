@@ -264,6 +264,28 @@ impl Cache {
         self.clear_backoff();
     }
 
+    /// [`Cache::forget`] with the removals surfaced: the same files are
+    /// removed, and the first error that is not `NotFound` is returned. A
+    /// missing file is not a failure. The key check uses this so an
+    /// invalidation it could not prove (a read-only cache directory) cannot
+    /// be mistaken for one: a payload left in place would be served as a
+    /// reading made under the key just written.
+    pub fn try_forget(&self) -> std::io::Result<()> {
+        for path in [
+            self.payload_path(),
+            self.stale_path(),
+            self.last_error_path(),
+            self.retry_after_path(),
+        ] {
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
     /// Write the `.last_error` marker — first line `code`, everything after it
     /// `msg`. Best-effort, never errors (matches claudebar:478-486 which
     /// silently continues if the cache dir isn't writable).
@@ -519,6 +541,44 @@ mod tests {
         assert!(cache.read_last_error().is_none());
         assert!(cache.backoff_remaining().is_none());
         assert!(cache.dir().is_dir());
+    }
+
+    #[test]
+    fn try_forget_removes_the_same_files_and_ignores_absent_ones() {
+        let (_td, cache) = fixture();
+        cache.write_payload(b"previous login").unwrap();
+        cache.mark_stale();
+        cache.write_last_error(401, "expired");
+        cache.note_rate_limit_at(SystemTime::now());
+        // Same files as `forget`, and a missing file is not a failure.
+        cache.try_forget().unwrap();
+        assert!(cache.maybe_payload().unwrap().is_none());
+        assert!(!cache.is_stale());
+        assert!(cache.read_last_error().is_none());
+        assert!(cache.backoff_remaining().is_none());
+        // A second pass over the now-empty directory still succeeds.
+        cache.try_forget().unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn try_forget_surfaces_the_first_error_that_is_not_not_found() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_td, cache) = fixture();
+        cache.write_payload(b"previous login").unwrap();
+        cache.write_last_error(0, "still here");
+        // A read-only directory cannot remove its files: `forget` would
+        // swallow that and leave the old payload to be served, but
+        // `try_forget` must hand the failure back.
+        let dir = cache.dir().to_path_buf();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+        let error = cache.try_forget().unwrap_err();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            cache.payload_path().exists(),
+            "the removal must not claim success"
+        );
     }
 
     #[test]

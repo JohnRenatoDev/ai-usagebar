@@ -891,18 +891,23 @@ pub(crate) fn write_inline_key(path: &Path, vendor: &KeyVendor, value: &str) -> 
     write_config_document(path, &doc)
 }
 
-/// Give the config back the state [`snapshot_inline_key`] captured: each
-/// of the two fields the check's write touches is put back with its
-/// captured value and decoration, or removed when it was absent. A section
-/// the check created is removed when nothing else is left in it, and a
-/// file the check created is removed when the document is left empty. No
-/// other field in the file is touched, so edits made to it in the meantime
-/// survive the restore. No validation runs: the captured values already
-/// lived in the user's config.
+/// Give the config back the state [`snapshot_inline_key`] captured,
+/// compare-and-restore: the check wrote `candidate` as the key and `true`
+/// as the vendor's `enabled` switch, so each field is put back — with its
+/// captured value and decoration, or removed when it was absent — only
+/// while it still holds exactly what the check wrote. A later decision on
+/// the same field, made while the check waited for the provider, belongs
+/// to the user now and survives. No other field in the file is touched,
+/// so edits made to it in the meantime survive the restore. A section the
+/// check created is removed when nothing else is left in it, and a file
+/// the check created is removed when the document is left empty. No
+/// validation runs: the captured values already lived in the user's
+/// config.
 pub(crate) fn restore_inline_key_snapshot(
     path: &Path,
     vendor: &KeyVendor,
     snapshot: &KeySnapshot,
+    candidate: &str,
 ) -> Result<()> {
     let mut doc = read_config_document(path)?;
     let table = doc
@@ -912,19 +917,39 @@ pub(crate) fn restore_inline_key_snapshot(
         .ok_or_else(|| {
             AppError::Other(format!("config.toml: [{}] is not a table", vendor.section))
         })?;
-    for (name, captured) in [
-        (vendor.config_key, &snapshot.key),
-        ("enabled", &snapshot.enabled),
-    ] {
-        match captured {
-            Some(item) => {
-                let key = toml_edit::Key::new(name).with_leaf_decor(item.key_decor.clone());
-                table.insert_formatted(&key, toml_edit::Item::Value(item.value.clone()));
-            }
-            None => {
-                table.remove(name);
-            }
+    // Compare-and-restore: the check wrote `candidate` as the key and
+    // `true` as the vendor's `enabled` switch, so each field goes back —
+    // with its captured value and decoration, or out when it was absent —
+    // only while it still holds exactly what the check wrote. A later
+    // decision on the same field, made while the check waited for the
+    // provider (a key saved, the vendor switched off), belongs to the user
+    // now and survives.
+    let current_key = table
+        .get(vendor.config_key)
+        .and_then(toml_edit::Item::as_str);
+    match &snapshot.key {
+        Some(captured) if current_key == Some(candidate) => {
+            let key =
+                toml_edit::Key::new(vendor.config_key).with_leaf_decor(captured.key_decor.clone());
+            table.insert_formatted(&key, toml_edit::Item::Value(captured.value.clone()));
         }
+        None if current_key == Some(candidate) => {
+            table.remove(vendor.config_key);
+        }
+        // The field holds someone else's value: leave it.
+        _ => {}
+    }
+    let current_enabled = table.get("enabled").and_then(toml_edit::Item::as_bool);
+    match &snapshot.enabled {
+        Some(captured) if current_enabled == Some(true) => {
+            let key = toml_edit::Key::new("enabled").with_leaf_decor(captured.key_decor.clone());
+            table.insert_formatted(&key, toml_edit::Item::Value(captured.value.clone()));
+        }
+        None if current_enabled == Some(true) => {
+            table.remove("enabled");
+        }
+        // The user switched the vendor: leave their decision.
+        _ => {}
     }
     // A section the check created must not survive the restore as an empty
     // husk — but one that holds anything the check did not write does.
@@ -2664,8 +2689,28 @@ api_key_env = "OPENROUTER_WORK_API_KEY"
         assert!(snapshot.section_existed);
         write_inline_key(&path, vendor, "test-key-value").unwrap();
         assert_ne!(std::fs::read_to_string(&path).unwrap(), original);
-        restore_inline_key_snapshot(&path, vendor, &snapshot).unwrap();
+        restore_inline_key_snapshot(&path, vendor, &snapshot, "test-key-value").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn inline_key_snapshot_restore_keeps_a_later_user_decision() {
+        let vendor = key_vendor_for_slug(VendorId::Zai.slug()).unwrap();
+        let original = "[ui]\nprimary = \"zai\"\n[zai]\napi_key = \"old-key-value\"\n";
+        let (_dir, path) = temp_config(Some(original));
+        let snapshot = snapshot_inline_key(&path, vendor).unwrap();
+        write_inline_key(&path, vendor, "test-key-value").unwrap();
+        // While the check waits: the user saves another key and switches
+        // the vendor off, with the real writers.
+        write_inline_key(&path, vendor, "another-key-value").unwrap();
+        crate::config::set_vendor_enabled(&path, vendor.id.slug(), false).unwrap();
+        restore_inline_key_snapshot(&path, vendor, &snapshot, "test-key-value").unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        // Both fields hold the user's later decisions, not the snapshot.
+        assert!(raw.contains(r#"api_key = "another-key-value""#), "{raw}");
+        assert!(raw.contains("enabled = false"), "{raw}");
+        assert!(!raw.contains("test-key-value"), "{raw}");
+        assert!(!raw.contains("old-key-value"), "{raw}");
     }
 
     #[test]
@@ -2676,7 +2721,7 @@ api_key_env = "OPENROUTER_WORK_API_KEY"
         let snapshot = snapshot_inline_key(&path, vendor).unwrap();
         assert!(!snapshot.section_existed);
         write_inline_key(&path, vendor, "test-key-value").unwrap();
-        restore_inline_key_snapshot(&path, vendor, &snapshot).unwrap();
+        restore_inline_key_snapshot(&path, vendor, &snapshot, "test-key-value").unwrap();
         let raw = std::fs::read_to_string(&path).unwrap();
         // The key is gone, the section the check created is gone, and
         // everything else of the file is intact.
@@ -2699,7 +2744,7 @@ api_key_env = "OPENROUTER_WORK_API_KEY"
         assert!(snapshot.key.is_none());
         assert!(snapshot.enabled.is_none());
         write_inline_key(&path, vendor, "test-key-value").unwrap();
-        restore_inline_key_snapshot(&path, vendor, &snapshot).unwrap();
+        restore_inline_key_snapshot(&path, vendor, &snapshot, "test-key-value").unwrap();
         assert!(!path.exists(), "the file the check created must be gone");
     }
 
@@ -2714,7 +2759,7 @@ api_key_env = "OPENROUTER_WORK_API_KEY"
         let mut doc = crate::config::read_config_document(&path).unwrap();
         set_string(&mut doc, "zai", "api_key_env", "SOME_ENV_VAR").unwrap();
         crate::config::write_config_document(&path, &doc).unwrap();
-        restore_inline_key_snapshot(&path, vendor, &snapshot).unwrap();
+        restore_inline_key_snapshot(&path, vendor, &snapshot, "test-key-value").unwrap();
         let raw = std::fs::read_to_string(&path).unwrap();
         // The snapshot's state is back...
         assert!(raw.contains(r#"api_key = "old-key-value""#), "{raw}");

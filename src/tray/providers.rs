@@ -234,16 +234,18 @@ fn fetch_filtered_report(slug: &str) -> std::result::Result<String, String> {
 /// malformed request — a missing field, a non-string slug or key, a `seq`
 /// that is not a `u64`, a vendor outside `KEY_VENDORS`, or a key the
 /// overlay would refuse — is ignored: `Ok(None)`, no response, no write.
-/// A vendor whose environment variable is defined is refused before the
-/// write: the fetch would authenticate with the environment's key, not
-/// the one being checked. The error is the verdict the host publishes
-/// when the check is refused or the thread cannot even be started.
+/// The dialog only exists for a provider without an inline credential, so
+/// a config that already saves the key is refused before the write, as is
+/// a vendor whose environment variable is defined: the fetch would
+/// authenticate with the environment's key, not the one being checked. The
+/// error is the verdict the host publishes when the check is refused or
+/// the thread cannot even be started.
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 pub(crate) fn request_key_check_with(
     facts: &SharedFacts,
     value: &Value,
     fetch: impl FnOnce(&str) -> std::result::Result<String, String> + Send + 'static,
-    bust_cache: impl FnOnce(&str) + Send + 'static,
+    bust_cache: impl Fn(&str) -> std::result::Result<(), String> + Send + 'static,
     env_set: impl Fn(&str) -> bool + Send + 'static,
     on_catalog: impl Fn() + Send + 'static,
     notify: impl FnOnce() + Send + 'static,
@@ -267,6 +269,23 @@ pub(crate) fn request_key_check_with(
         state: KeyCheckState::Failed,
         error: "Could not resolve the config.toml path.".into(),
     })?;
+    // The dialog only exists for a provider without an inline credential:
+    // a key already saved in the config is replaced in the TUI settings,
+    // not checked here. Refusing it also closes the race in which a
+    // concurrent refresh under the old key would refill the cache between
+    // the bust and the fetch. A config that cannot be parsed skips the
+    // check — the write below fails with the real error.
+    let already_saved = crate::tui::settings::snapshot_inline_key(&path, vendor)
+        .ok()
+        .is_some_and(|snapshot| snapshot.key.is_some());
+    if already_saved {
+        return Err(KeyCheckFact {
+            id: slug,
+            seq,
+            state: KeyCheckState::Failed,
+            error: "A key is already saved in config.toml; replace it in the TUI settings.".into(),
+        });
+    }
     // The vendor's effective environment variable — an `api_key_env`
     // override included, as the catalog's `env` field uses it — takes
     // precedence over the inline value: with it defined, the fetch would
@@ -288,13 +307,18 @@ pub(crate) fn request_key_check_with(
             ),
         });
     }
+    // A late send must not replace a newer send's fact: publish `Checking`
+    // only when no fact, or an older one, is on screen.
     with_facts(facts, |f| {
-        f.key_check = Some(KeyCheckFact {
-            id: slug.clone(),
-            seq,
-            state: KeyCheckState::Checking,
-            error: String::new(),
-        });
+        let replaces = f.key_check.as_ref().is_none_or(|current| current.seq < seq);
+        if replaces {
+            f.key_check = Some(KeyCheckFact {
+                id: slug.clone(),
+                seq,
+                state: KeyCheckState::Checking,
+                error: String::new(),
+            });
+        }
     });
     let facts = Arc::clone(facts);
     let slug = slug.clone();
@@ -341,12 +365,15 @@ fn key_check_request(value: &Value) -> Option<(String, String, u64)> {
 /// every later key send silently unanswered.
 static KEY_CHECK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// The check's thread: snapshot the config's credential state, write the
-/// new key with the overlay's writer, drop the vendor's cache and fetch
-/// the provider alone, and — on a refusal — put the config back exactly
-/// where the snapshot found it. The key is stripped from the verdict's
-/// error and dropped before the restore runs, so nothing after the scrub
-/// may name it.
+/// The check's thread: under the single-flight lock, verify the send was
+/// not superseded, snapshot the config's credential state, write the new
+/// key with the overlay's writer, drop the vendor's cache — proving the
+/// removal — and fetch the provider alone. On a refusal, put the config
+/// back the state the snapshot found it, then drop the cache again so the
+/// provider's answer (which may name the key) and the backoff it armed do
+/// not outlive the check. The key is stripped from the verdict's error and
+/// dropped before the restore runs, so nothing after the scrub may name
+/// it.
 #[allow(clippy::too_many_arguments)] // the seams stay flat: tests name each one
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn run_key_check(
@@ -356,7 +383,7 @@ fn run_key_check(
     key: String,
     seq: u64,
     fetch: impl FnOnce(&str) -> std::result::Result<String, String>,
-    bust_cache: impl FnOnce(&str),
+    bust_cache: impl Fn(&str) -> std::result::Result<(), String>,
     on_catalog: impl Fn(),
     notify: impl FnOnce(),
 ) {
@@ -366,6 +393,16 @@ fn run_key_check(
     let _guard = KEY_CHECK_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // A newer send that landed while this thread waited owns the dialog
+    // and the config now: leave both alone — no write, no fetch, no fact.
+    let still_current = facts
+        .lock()
+        .ok()
+        .and_then(|guard| guard.key_check.as_ref().map(|fact| fact.seq == seq))
+        .unwrap_or(false);
+    if !still_current {
+        return;
+    }
     let snapshot = match crate::tui::settings::snapshot_inline_key(path, vendor) {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -397,17 +434,46 @@ fn run_key_check(
     }
     // The verdict must rest on a reading made under the key just written:
     // drop whatever the vendor's cache still holds from before the write.
-    (bust_cache)(slug);
+    // A bust the thread cannot prove is a bust that did not happen: the
+    // fetch is skipped, the config is restored, and the refusal says so.
+    if (bust_cache)(slug).is_err() {
+        let mut error =
+            "Could not clear the provider's cache, so the key was not checked.".to_string();
+        if crate::tui::settings::restore_inline_key_snapshot(path, vendor, &snapshot, &key).is_err()
+        {
+            error.push_str(" The new key stayed in config.toml.");
+        }
+        drop(key);
+        error = cut_key_check_error(&error);
+        drop(_guard);
+        finish_key_check(
+            facts,
+            slug,
+            seq,
+            KeyCheckState::Failed,
+            error,
+            on_catalog,
+            notify,
+        );
+        return;
+    }
     let (state, mut error) = key_check_result(slug, fetch(slug));
     // The key's last use: strip it out of the verdict before it is dropped.
     error = scrub_key(&error, &key);
-    drop(key);
-    // A refusal gives the config back exactly the state the snapshot took;
-    // a restore that fails itself says so, since the new key stayed.
+    // A refusal gives the config back exactly the state the snapshot took
+    // — only the fields that still hold what the check wrote; a restore
+    // that fails itself says so, since the new key stayed.
     if state == KeyCheckState::Failed
-        && crate::tui::settings::restore_inline_key_snapshot(path, vendor, &snapshot).is_err()
+        && crate::tui::settings::restore_inline_key_snapshot(path, vendor, &snapshot, &key).is_err()
     {
         error.push_str(" The new key stayed in config.toml.");
+    }
+    drop(key);
+    // A refused check must not leave the key in the persisted diagnostic
+    // the fetch wrote (the provider's answer may name it) or in the 429
+    // backoff the candidate key armed: bust the cache again, best effort.
+    if state == KeyCheckState::Failed {
+        let _ = (bust_cache)(slug);
     }
     error = cut_key_check_error(&error);
     // The snapshot — write — restore window is over; the publish and the
@@ -432,20 +498,22 @@ fn finish_key_check(
     on_catalog: impl Fn(),
     notify: impl FnOnce(),
 ) {
-    let newest = facts
-        .lock()
-        .map(|guard| guard.key_check.as_ref().is_some_and(|fact| fact.seq == seq))
-        .unwrap_or(false);
-    if newest {
-        with_facts(facts, |f| {
+    // Compare-and-set in one `with_facts` pass: a newer send that landed
+    // between a separate compare and a write would otherwise be
+    // clobbered by this thread's verdict.
+    with_facts(facts, |f| {
+        if f.key_check
+            .as_ref()
+            .is_some_and(|current| current.seq == seq)
+        {
             f.key_check = Some(KeyCheckFact {
                 id: slug.to_string(),
                 seq,
                 state,
                 error,
             });
-        });
-    }
+        }
+    });
     (on_catalog)();
     notify();
 }
@@ -524,13 +592,13 @@ pub(crate) fn scrub_key(error: &str, key: &str) -> String {
 
 /// The production cache-bust for the check's fetch: drop the vendor's
 /// cached payload and its sidecars with the credential-rotation primitive,
-/// so the fetch's cache gate has nothing to serve and the verdict rests on
-/// a reading made under the key just written. A cache left in place would
-/// pass a previous key's reading — or no reading at all — as the new
-/// key's, and the check would accept or refuse a key it never sent.
+/// surfacing a failure instead of assuming the removal. A payload left in
+/// place would be served as a reading made under the key just written, and
+/// the check must be able to tell the difference.
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
-fn bust_vendor_cache(slug: &str) {
-    let _ = crate::cache::Cache::for_vendor(slug).map(|cache| cache.forget());
+fn bust_vendor_cache(slug: &str) -> std::result::Result<(), String> {
+    let cache = crate::cache::Cache::for_vendor(slug).map_err(|error| error.user_message())?;
+    cache.try_forget().map_err(|error| error.to_string())
 }
 
 /// The verdict's error line, cut at 300 characters on a char boundary.
@@ -763,7 +831,7 @@ mod tests {
                     called.store(true, Ordering::Relaxed);
                     Ok::<_, String>(slug.to_string())
                 },
-                |_| {},
+                |_| Ok(()),
                 |_| false,
                 || {},
                 || {},
@@ -783,12 +851,14 @@ mod tests {
 
     #[test]
     #[cfg(any(windows, target_os = "macos"))]
-    fn key_check_failed_restores_the_previous_value_and_publishes() {
+    fn key_check_failed_restores_the_config_and_re_requests_the_catalog() {
         let guard = override_guard();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        let original =
-            "[ui]\nprimary = \"zai\"\n[zai]\napi_key = \"old-key-value\"\nenabled = true\n";
+        // The vendor is off, without an inline key: the dialog is allowed.
+        // The check's write turns it on, and the restore must turn it back
+        // off, byte for byte.
+        let original = "[ui]\nprimary = \"zai\"\n[zai]\nenabled = false\n";
         std::fs::write(&path, original).unwrap();
         crate::config::set_override_path(&path);
         let facts = default_facts();
@@ -803,7 +873,7 @@ mod tests {
                 assert_eq!(slug, "zai");
                 Ok(r#"{"entries":[{"id":"zai","status":"error","stale":false,"error":"HTTP 401: invalid key"}]}"#.into())
             },
-            |_| {},
+            |_| Ok(()),
             |_| false,
             move || {
                 counter.fetch_add(1, Ordering::Relaxed);
@@ -842,7 +912,7 @@ mod tests {
             &facts,
             &key_check_value("zai", "test-key-value", 3),
             |_| Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into()),
-            |_| {},
+            |_| Ok(()),
             |_| false,
             || {},
             || {},
@@ -879,7 +949,7 @@ mod tests {
             &facts,
             &key_check_value("zai", "test-key-value", 4),
             |_| Err("HTTP 429: rate limited".to_string()),
-            |_| {},
+            |_| Ok(()),
             |_| false,
             || {},
             || {},
@@ -922,7 +992,7 @@ mod tests {
                     .unwrap();
                 Err("HTTP 401: invalid key".to_string())
             },
-            |_| {},
+            |_| Ok(()),
             |_| false,
             || {},
             || {},
@@ -953,60 +1023,75 @@ mod tests {
         std::fs::write(&path, "[ui]\nprimary = \"zai\"\n").unwrap();
         crate::config::set_override_path(&path);
         let facts = default_facts();
-        // Send 1 blocks inside its fetch while send 2 lands and waits.
-        let (gate_tx, gate_rx) = std::sync::mpsc::channel::<()>();
+        // Both sends pass the pre-thread checks (neither worker has run
+        // yet, so neither sees an inline key) and publish their `Checking`
+        // facts; both workers queue on the lock this test holds.
+        let lock_guard = KEY_CHECK_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let handle = request_key_check_with(
             &facts,
             &key_check_value("zai", "first-key", 10),
-            move |_| {
-                gate_rx.recv().expect("send 2 must release send 1's fetch");
-                Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into())
-            },
-            |_| {},
+            |_| Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into()),
+            |_| Ok(()),
             |_| false,
             || {},
             || {},
         )
         .expect("spawn")
         .unwrap();
-        // Wait until send 1's `Checking` fact is in place...
-        for _ in 0..1000 {
-            if facts_snapshot(&facts)
-                .key_check
-                .is_some_and(|fact| fact.seq == 10 && fact.state == KeyCheckState::Checking)
-            {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        let fact = facts_snapshot(&facts)
-            .key_check
-            .expect("send 1 must publish Checking");
-        assert_eq!(fact.seq, 10);
-        // ...then send 2 replaces the fact. Its thread waits for the
-        // single-flight lock send 1 holds across the fetch.
         let handle2 = request_key_check_with(
             &facts,
             &key_check_value("zai", "second-key", 11),
             |_| Err("HTTP 401: invalid key".to_string()),
-            |_| {},
+            |_| Ok(()),
             |_| false,
             || {},
             || {},
         )
         .expect("spawn")
         .unwrap();
-        // Release send 1 before joining send 2: send 2 cannot finish until
-        // send 1's lock is down.
-        gate_tx.send(()).unwrap();
+        // Send 2's `Checking` replaced send 1's: the compare-and-publish
+        // refused the older one.
+        let fact = facts_snapshot(&facts)
+            .key_check
+            .expect("send 2 must publish Checking over send 1's");
+        assert_eq!(fact.seq, 11);
+        // A yet older send that lands after the newer one must not push
+        // the dialog backwards either: its `Checking` is refused outright.
+        let handle3 = request_key_check_with(
+            &facts,
+            &key_check_value("zai", "older-key", 9),
+            |_| unreachable!("the superseded send must not fetch"),
+            |_| Ok(()),
+            |_| false,
+            || {},
+            || {},
+        )
+        .expect("spawn")
+        .expect("a well-formed request still starts");
+        let fact = facts_snapshot(&facts)
+            .key_check
+            .expect("the newer send's Checking must survive");
+        assert_eq!(fact.seq, 11, "an older seq must not replace a newer fact");
+        drop(lock_guard);
+        // Whichever worker runs first, only the newer send's verdict may
+        // survive: the older ones see the superseded `seq` under the lock
+        // and exit before writing, fetching, or publishing.
         handle.join().unwrap();
         handle2.join().unwrap();
+        handle3
+            .join()
+            .expect("the superseded send's thread must end");
         let fact = facts_snapshot(&facts)
             .key_check
             .expect("the verdict must survive");
         assert_eq!(fact.seq, 11, "the newer send's verdict must win");
         assert_eq!(fact.state, KeyCheckState::Failed);
         assert_eq!(fact.error, "HTTP 401: invalid key");
+        // The file holds the newer send's restored state and nothing of
+        // the superseded one: its fetch refused and it found no key to
+        // restore, and send 1 never wrote its own.
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("first-key"), "{written}");
         drop(guard);
     }
 
@@ -1023,7 +1108,7 @@ mod tests {
             &facts,
             &key_check_value("zai", "test-key-value", 9),
             |_| Err("HTTP 401: rejected".to_string()),
-            |_| {},
+            |_| Ok(()),
             |_| false,
             || {},
             || {},
@@ -1059,7 +1144,7 @@ mod tests {
             &facts,
             &key_check_value("zai", "test-key-value", 14),
             |_| Err("key is test-key-value, try again".to_string()),
-            |_| {},
+            |_| Ok(()),
             |_| false,
             || {},
             || {},
@@ -1080,31 +1165,103 @@ mod tests {
 
     #[test]
     #[cfg(any(windows, target_os = "macos"))]
-    fn key_check_single_flight_second_send_finishes_after_the_first_restore() {
+    fn key_check_delayed_old_send_exits_before_writing_or_fetching() {
         let guard = override_guard();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "[ui]\nprimary = \"zai\"\n").unwrap();
         crate::config::set_override_path(&path);
         let facts = default_facts();
-        // Send 1 writes its key and blocks inside the fetch, holding the
-        // single-flight lock...
-        let (gate_tx, gate_rx) = std::sync::mpsc::channel::<()>();
-        let handle = request_key_check_with(
+        // Hold the single-flight lock so the first worker can only queue
+        // behind it: it has not written, so the second send's pre-thread
+        // check sees no inline key and is accepted.
+        let lock_guard = KEY_CHECK_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let fetch1_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called1 = std::sync::Arc::clone(&fetch1_called);
+        let handle1 = request_key_check_with(
             &facts,
-            &key_check_value("zai", "first-key", 100),
+            &key_check_value("zai", "first-key", 10),
             move |_| {
-                gate_rx.recv().expect("send 2 must release send 1's fetch");
-                Err("HTTP 401: invalid key".to_string())
+                called1.store(true, Ordering::Relaxed);
+                Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into())
             },
-            |slug| assert_eq!(slug, "zai"),
+            |_| Ok(()),
             |_| false,
             || {},
             || {},
         )
         .expect("spawn")
-        .expect("a well-formed request starts the check");
-        // ...until it has written: its key is in the file.
+        .expect("send 1 starts (no key in the config yet)");
+        let handle2 = request_key_check_with(
+            &facts,
+            &key_check_value("zai", "second-key", 11),
+            |_| Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into()),
+            |_| Ok(()),
+            |_| false,
+            || {},
+            || {},
+        )
+        .expect("spawn")
+        .expect("send 2 starts (send 1's worker has not written yet)");
+        // Send 2's `Checking` replaced send 1's while send 1 queued.
+        let fact = facts_snapshot(&facts)
+            .key_check
+            .expect("send 2 must publish Checking over send 1's");
+        assert_eq!(fact.seq, 11);
+        drop(lock_guard);
+        handle1
+            .join()
+            .expect("send 1's thread must end (no panic, no dead end)");
+        handle2.join().unwrap();
+        // Send 2's key is in the file; send 1's worker saw the superseded
+        // `seq` under the lock and left both alone.
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("second-key"), "{written}");
+        assert!(!written.contains("first-key"), "{written}");
+        assert!(
+            !fetch1_called.load(Ordering::Relaxed),
+            "a superseded send must not fetch"
+        );
+        let fact = facts_snapshot(&facts)
+            .key_check
+            .expect("the verdict must survive");
+        assert_eq!(
+            fact.seq, 11,
+            "no fact of the superseded send may be published"
+        );
+        assert_eq!(fact.state, KeyCheckState::Ok);
+        drop(guard);
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "macos"))]
+    fn key_check_second_send_while_first_is_in_flight_is_refused() {
+        let guard = override_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ui]\nprimary = \"zai\"\n").unwrap();
+        crate::config::set_override_path(&path);
+        let facts = default_facts();
+        // Send 1 blocks inside its fetch with its key in the file: the
+        // dialog's precondition — no saved inline key — no longer holds
+        // for anything that lands while it waits.
+        let (gate_tx, gate_rx) = std::sync::mpsc::channel::<()>();
+        let handle = request_key_check_with(
+            &facts,
+            &key_check_value("zai", "first-key", 100),
+            move |_| {
+                gate_rx
+                    .recv()
+                    .expect("the test must release send 1's fetch");
+                Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into())
+            },
+            |_| Ok(()),
+            |_| false,
+            || {},
+            || {},
+        )
+        .expect("spawn")
+        .expect("send 1 starts (no key in the config yet)");
         for _ in 0..1000 {
             if std::fs::read_to_string(&path)
                 .map(|raw| raw.contains("first-key"))
@@ -1120,45 +1277,36 @@ mod tests {
                 .contains("first-key"),
             "send 1 must have written before its fetch ran"
         );
-        // Send 2 lands while send 1's key is in the file. Its thread must
-        // wait for the lock — its fetch must not run over send 1's key.
-        let saw_first_key = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let saw = std::sync::Arc::clone(&saw_first_key);
-        let check_path = path.clone();
-        let handle2 = request_key_check_with(
+        let result = request_key_check_with(
             &facts,
             &key_check_value("zai", "second-key", 101),
-            move |_| {
-                let saw_it = std::fs::read_to_string(&check_path)
-                    .map(|raw| raw.contains("first-key"))
-                    .unwrap_or(false);
-                saw.store(saw_it, Ordering::Relaxed);
-                Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into())
-            },
-            |_| {},
+            |_| unreachable!("the refused send must not fetch"),
+            |_| Ok(()),
             |_| false,
             || {},
             || {},
-        )
-        .expect("spawn")
-        .unwrap();
-        // Release send 1: it refuses and restores the original. Only then
-        // does send 2 snapshot, write, and get accepted.
+        );
+        let fact = result.expect_err("an inline key in the file must refuse the second send");
+        assert_eq!(fact.seq, 101);
+        assert_eq!(
+            fact.error,
+            "A key is already saved in config.toml; replace it in the TUI settings."
+        );
+        // The refusal published no fact: the dialog is still on send 1.
+        let current = facts_snapshot(&facts)
+            .key_check
+            .expect("send 1's fact must survive the refusal");
+        assert_eq!(current.seq, 100);
+        assert_eq!(current.state, KeyCheckState::Checking);
         gate_tx.send(()).unwrap();
         handle.join().unwrap();
-        handle2.join().unwrap();
         let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("second-key"), "{written}");
-        assert!(!written.contains("first-key"), "{written}");
-        // Send 2's fetch ran after send 1's restore, over the original.
-        assert!(
-            !saw_first_key.load(Ordering::Relaxed),
-            "send 2 must not fetch while send 1's key is in the file"
-        );
+        assert!(written.contains("first-key"), "{written}");
+        assert!(!written.contains("second-key"), "{written}");
         let fact = facts_snapshot(&facts)
             .key_check
             .expect("the verdict must win");
-        assert_eq!(fact.seq, 101, "the newest send's verdict must win");
+        assert_eq!(fact.seq, 100);
         assert_eq!(fact.state, KeyCheckState::Ok);
         drop(guard);
     }
@@ -1206,7 +1354,9 @@ mod tests {
                 }
             },
             move |slug| {
-                crate::cache::Cache::at(bust_root.join(slug)).forget();
+                crate::cache::Cache::at(bust_root.join(slug))
+                    .try_forget()
+                    .map_err(|error| error.to_string())
             },
             |_| false,
             || {},
@@ -1233,6 +1383,230 @@ mod tests {
 
     #[test]
     #[cfg(any(windows, target_os = "macos"))]
+    fn key_check_inline_key_present_refuses_before_writing() {
+        let guard = override_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = "[ui]\nprimary = \"zai\"\n[zai]\napi_key = \"old-key-value\"\n";
+        std::fs::write(&path, original).unwrap();
+        crate::config::set_override_path(&path);
+        let facts = default_facts();
+        let env_consulted = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let consulted = std::sync::Arc::clone(&env_consulted);
+        let fetch_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called = std::sync::Arc::clone(&fetch_called);
+        let result = request_key_check_with(
+            &facts,
+            &key_check_value("zai", "test-key-value", 19),
+            move |_| {
+                called.store(true, Ordering::Relaxed);
+                Ok(String::new())
+            },
+            |_| Ok(()),
+            move |name| {
+                consulted
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(name.to_string());
+                false
+            },
+            || {},
+            || {},
+        );
+        // An inline key already in the config is replaced in the TUI
+        // settings, not checked here: the refusal is before the env check,
+        // the write, the fetch, and any fact.
+        let fact = result.expect_err("an existing inline key must refuse the check");
+        assert_eq!(fact.seq, 19);
+        assert_eq!(fact.state, KeyCheckState::Failed);
+        assert_eq!(
+            fact.error,
+            "A key is already saved in config.toml; replace it in the TUI settings."
+        );
+        assert!(
+            !fetch_called.load(Ordering::Relaxed),
+            "no fetch for a saved key"
+        );
+        assert!(facts_snapshot(&facts).key_check.is_none());
+        assert!(
+            env_consulted
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty(),
+            "the env check must not run for a saved key"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        drop(guard);
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "macos"))]
+    fn key_check_bust_failure_refuses_without_fetching() {
+        let guard = override_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ui]\nprimary = \"zai\"\n").unwrap();
+        crate::config::set_override_path(&path);
+        let facts = default_facts();
+        let fetch_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called = std::sync::Arc::clone(&fetch_called);
+        let handle = request_key_check_with(
+            &facts,
+            &key_check_value("zai", "test-key-value", 20),
+            move |_| {
+                called.store(true, Ordering::Relaxed);
+                Err("HTTP 401: invalid key".to_string())
+            },
+            |slug| {
+                assert_eq!(slug, "zai");
+                Err("read-only cache directory".to_string())
+            },
+            |_| false,
+            || {},
+            || {},
+        )
+        .expect("spawn")
+        .unwrap();
+        handle.join().unwrap();
+        // A bust the thread cannot prove is a bust that did not happen: no
+        // fetch under an unverified invalidation, the config is restored, and
+        // the refusal says so — without the system error in the message.
+        let fact = facts_snapshot(&facts)
+            .key_check
+            .expect("the refusal must publish its verdict");
+        assert_eq!(fact.seq, 20);
+        assert_eq!(fact.state, KeyCheckState::Failed);
+        assert_eq!(
+            fact.error,
+            "Could not clear the provider's cache, so the key was not checked."
+        );
+        assert!(
+            !fetch_called.load(Ordering::Relaxed),
+            "the fetch must not run"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[ui]\nprimary = \"zai\"\n"
+        );
+        drop(guard);
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "macos"))]
+    fn key_check_failed_verdict_clears_the_persisted_diagnostic() {
+        let guard = override_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ui]\nprimary = \"zai\"\n").unwrap();
+        crate::config::set_override_path(&path);
+        // The check's fetch runs under the candidate key: a real refusing
+        // fetch persists the provider's answer in the vendor's `.last_error`
+        // and arms the 429 backoff. The layout mirrors `Cache::for_vendor`.
+        let cache_root = dir.path().join("cache");
+        let cache_dir = cache_root.join("zai");
+        crate::cache::Cache::at(cache_dir.clone())
+            .ensure_dir()
+            .unwrap();
+        let facts = default_facts();
+        let error_cache = cache_dir.clone();
+        let handle = request_key_check_with(
+            &facts,
+            &key_check_value("zai", "test-key-value", 21),
+            move |_| {
+                // What the real fetch's writer leaves behind: the provider's
+                // answer (naming the key), persisted at code 0, and the
+                // backoff the candidate key armed.
+                crate::cache::Cache::at(error_cache.clone())
+                    .write_last_error(0, "key is test-key-value");
+                crate::cache::Cache::at(error_cache)
+                    .note_rate_limit_at(std::time::SystemTime::now());
+                Err("key is test-key-value".to_string())
+            },
+            move |slug| {
+                crate::cache::Cache::at(cache_root.join(slug))
+                    .try_forget()
+                    .map_err(|error| error.to_string())
+            },
+            |_| false,
+            || {},
+            || {},
+        )
+        .expect("spawn")
+        .unwrap();
+        handle.join().unwrap();
+        let fact = facts_snapshot(&facts)
+            .key_check
+            .expect("the verdict must be published");
+        assert_eq!(fact.state, KeyCheckState::Failed);
+        assert_eq!(fact.error, "key is [key]");
+        // The persisted diagnostic (which names the key) and the backoff are
+        // gone: the failed verdict busted the cache again, best effort, so
+        // nothing the candidate key armed outlives the check.
+        for entry in std::fs::read_dir(&cache_dir).unwrap() {
+            let entry = entry.unwrap();
+            if entry.path().is_file() {
+                let raw = std::fs::read_to_string(entry.path()).unwrap_or_default();
+                assert!(
+                    !raw.contains("test-key-value"),
+                    "{}: {}",
+                    entry.file_name().to_string_lossy(),
+                    raw
+                );
+            }
+        }
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[ui]\nprimary = \"zai\"\n"
+        );
+        drop(guard);
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "macos"))]
+    fn key_check_failed_keeps_a_user_disable_made_during_the_check() {
+        let guard = override_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // The provider is on and has no inline key: the dialog is allowed.
+        std::fs::write(&path, "[ui]\nprimary = \"zai\"\n[zai]\nenabled = true\n").unwrap();
+        crate::config::set_override_path(&path);
+        let facts = default_facts();
+        let disable_path = path.clone();
+        let handle = request_key_check_with(
+            &facts,
+            &key_check_value("zai", "test-key-value", 22),
+            move |_| {
+                // The user turns the provider off while the check waits for
+                // the provider: a later decision on a field the check wrote,
+                // made with the real writer.
+                crate::config::set_vendor_enabled(&disable_path, "zai", false).unwrap();
+                Err("HTTP 401: invalid key".to_string())
+            },
+            |_| Ok(()),
+            |_| false,
+            || {},
+            || {},
+        )
+        .expect("spawn")
+        .unwrap();
+        handle.join().unwrap();
+        // The candidate key is gone, but the user's disable survives the
+        // rollback: the compare-and-restore only undoes what the check
+        // itself wrote.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("test-key-value"), "{raw}");
+        assert!(!raw.contains("api_key"), "{raw}");
+        assert!(raw.contains("enabled = false"), "{raw}");
+        let fact = facts_snapshot(&facts)
+            .key_check
+            .expect("the verdict must be published");
+        assert_eq!(fact.state, KeyCheckState::Failed);
+        assert_eq!(fact.error, "HTTP 401: invalid key");
+        drop(guard);
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "macos"))]
     fn key_check_env_var_precedence_refuses_before_writing() {
         let guard = override_guard();
         let dir = tempfile::tempdir().unwrap();
@@ -1251,7 +1625,7 @@ mod tests {
                 called.store(true, Ordering::Relaxed);
                 Ok(r#"{"entries":[{"id":"zai","status":"ready","stale":false}]}"#.into())
             },
-            |_| {},
+            |_| Ok(()),
             move |name| {
                 consulted_env
                     .lock()
@@ -1287,7 +1661,7 @@ mod tests {
             &facts,
             &key_check_value("zai", "test-key-value", 15),
             |_| Ok(String::new()),
-            |_| {},
+            |_| Ok(()),
             move |name| {
                 consulted_env
                     .lock()
@@ -1307,35 +1681,6 @@ mod tests {
             *consulted.lock().unwrap(),
             vec!["CUSTOM_ZAI_KEY".to_string()]
         );
-        drop(guard);
-    }
-
-    #[test]
-    #[cfg(any(windows, target_os = "macos"))]
-    fn key_check_failed_restores_the_enabled_switch_too() {
-        let guard = override_guard();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        // The vendor is off with an old key: the check's write turns it on,
-        // and the restore must turn it back off, byte for byte.
-        let original =
-            "[ui]\nprimary = \"zai\"\n[zai]\napi_key = \"old-key-value\"\nenabled = false\n";
-        std::fs::write(&path, original).unwrap();
-        crate::config::set_override_path(&path);
-        let facts = default_facts();
-        let handle = request_key_check_with(
-            &facts,
-            &key_check_value("zai", "test-key-value", 16),
-            |_| Err("HTTP 401: invalid key".to_string()),
-            |_| {},
-            |_| false,
-            || {},
-            || {},
-        )
-        .expect("spawn")
-        .unwrap();
-        handle.join().unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         drop(guard);
     }
 
