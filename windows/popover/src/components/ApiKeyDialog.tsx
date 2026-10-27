@@ -30,6 +30,8 @@ interface ApiKeyDialogProps {
   keyCheck: KeyCheck | null;
   nowMs: number;
   onClose: () => void;
+  /** Where focus returns once the dialog closes: the control that opened it. */
+  returnFocus?: HTMLElement | null;
 }
 
 /**
@@ -45,7 +47,7 @@ export function ApiKeyDialog({ provider, ...rest }: ApiKeyDialogProps) {
   return provider ? <OpenApiKeyDialog provider={provider} {...rest} /> : null;
 }
 
-function OpenApiKeyDialog({ provider, keyCheck, nowMs, onClose }: ApiKeyDialogProps & { provider: KeyDialogProvider }) {
+function OpenApiKeyDialog({ provider, keyCheck, nowMs, onClose, returnFocus }: ApiKeyDialogProps & { provider: KeyDialogProvider }) {
   const { language } = useI18n();
   const [key, setKey] = useState("");
   const [pending, setPending] = useState<{ seq: number | null; sentAtMs: number }>({ seq: null, sentAtMs: 0 });
@@ -72,7 +74,15 @@ function OpenApiKeyDialog({ provider, keyCheck, nowMs, onClose }: ApiKeyDialogPr
         if (!open) onClose();
       }}
     >
-      <DialogContent>
+      <DialogContent
+        onCloseAutoFocus={(event) => {
+          // The dialog is opened without a Radix trigger, so Radix would drop
+          // focus on the body; hand it back to the key icon that opened it.
+          if (!returnFocus || !returnFocus.isConnected) return;
+          event.preventDefault();
+          returnFocus.focus();
+        }}
+      >
         <ApiKeyDialogView
           checking={phase === "checking"}
           error={phase === "failed" && keyCheck ? keyCheck.error : ""}
