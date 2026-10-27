@@ -10,6 +10,7 @@ use reqwest::Client;
 use crate::cache::DEFAULT_TTL;
 use crate::config::{Config, CustomProviderConfig};
 use crate::error::{AppError, Result};
+use crate::outcome::fetch_api_keyed;
 use crate::theme::Theme;
 use crate::tui::settings::SettingsRow;
 use crate::vendor::{VendorId, VendorOutcome};
@@ -672,52 +673,8 @@ fn api_key_and_cache(
     Ok((api_key, cache))
 }
 
-/// The one fetch wrap for every key-based vendor — the ones whose key came
-/// from [`api_key_and_cache`] and the four that resolve their key and build
-/// their own cache (`AnthropicApi`, `Kimi`, `OpenCodeGo`, `Ollama`): one
-/// point, not one per vendor. A provider's answer can quote the key in the
-/// failure it reports (Z.AI returns the reason in `msg` on an HTTP 200 with
-/// `success: false`), and when there is no figure on screen the error is the
-/// report's whole output. The cache side is already redacted at
-/// `write_last_error`; this strips the key from the error that bubbles up
-/// instead. An empty secret is a no-op for the variant whose credential
-/// value it does not hold (Kimi's OAuth login).
-pub(crate) async fn fetch_api_keyed<Fut>(fetch: Fut, key: &str) -> Result<VendorOutcome>
-where
-    Fut: std::future::Future<Output = Result<VendorOutcome>>,
-{
-    fetch
-        .await
-        .map_err(|error| redact_api_key_error(error, key))
-}
-
-/// Remove the key from the free text an error carries, preserving the
-/// variant: a `Transport` error must stay transient, and `Http` keeps its
-/// status. The key rides in the answer the provider sent — `Schema`, the
-/// `Http` body, `Transport`, `Credentials`, `Other`, and the source behind
-/// `WithPlan` — so only those are rewritten; local I/O and parse errors
-/// carry paths and offsets, not a provider's answer, and pass through.
-fn redact_api_key_error(error: AppError, key: &str) -> AppError {
-    match error {
-        AppError::Schema(message) => AppError::Schema(crate::display::redact_secret(&message, key)),
-        AppError::Http { status, body } => AppError::Http {
-            status,
-            body: crate::display::redact_secret(&body, key),
-        },
-        AppError::Transport(message) => {
-            AppError::Transport(crate::display::redact_secret(&message, key))
-        }
-        AppError::Credentials(message) => {
-            AppError::Credentials(crate::display::redact_secret(&message, key))
-        }
-        AppError::Other(message) => AppError::Other(crate::display::redact_secret(&message, key)),
-        AppError::WithPlan { plan, source } => AppError::WithPlan {
-            plan,
-            source: Box::new(redact_api_key_error(*source, key)),
-        },
-        other => other,
-    }
-}
+// The key-based vendors' fetch wrap is `crate::outcome::fetch_api_keyed`,
+// shared with the widget/CLI; the cache side is attached by `api_key_and_cache`.
 
 async fn build_outcome(
     client: &Client,
@@ -2217,87 +2174,5 @@ mod tests {
             refresh_stagger(&tabs, step),
             vec![Duration::ZERO, Duration::ZERO, step]
         );
-    }
-
-    /// The report's whole output when a fetch fails is the error, and a
-    /// provider's answer can quote the key the fetch was sent with (Z.AI
-    /// returns the reason in `msg` on an HTTP 200). The single wrap point
-    /// `build_outcome` uses strips the key before the error bubbles up…
-    #[tokio::test]
-    async fn fetch_api_keyed_redacts_the_key_from_the_error_a_fetch_returns() {
-        let key = "test-key-value";
-        let err = fetch_api_keyed(
-            async {
-                Err::<VendorOutcome, _>(AppError::Schema(format!(
-                    "zai: API reported failure (code 401, success false): bad key {key}"
-                )))
-            },
-            key,
-        )
-        .await
-        .unwrap_err();
-        let rendered = err.user_message();
-        assert!(!rendered.contains(key), "{rendered}");
-        assert!(rendered.contains("[key]"), "{rendered}");
-        // The variant survives the wrap: a schema mismatch stays one.
-        assert!(matches!(err, AppError::Schema(_)), "{err:?}");
-    }
-
-    /// …and an error without the key passes through unchanged, with its
-    /// variant (and its transience) intact.
-    #[tokio::test]
-    async fn fetch_api_keyed_leaves_an_error_without_the_key_alone() {
-        let key = "test-key-value";
-        let err = fetch_api_keyed(
-            async { Err::<VendorOutcome, _>(AppError::Transport("dns failed".into())) },
-            key,
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(err.user_message(), "network transport error: dns failed");
-        assert!(err.is_transient(), "the variant must survive the wrap");
-    }
-
-    /// The redaction rewrites only the free text a provider sent, per
-    /// variant: the `Http` status and the `WithPlan` label survive, the key
-    /// does not, and an `Io` error with no provider text passes through.
-    #[test]
-    fn redact_api_key_error_covers_the_variants_that_carry_provider_text() {
-        let key = "test-key-value";
-
-        let http = redact_api_key_error(
-            AppError::Http {
-                status: 500,
-                body: format!("boom {key}"),
-            },
-            key,
-        );
-        assert!(
-            matches!(http, AppError::Http { status: 500, .. }),
-            "{http:?}"
-        );
-        assert!(http.user_message().contains("[key]"), "{http:?}");
-        assert!(!http.user_message().contains(key), "{http:?}");
-
-        let wrapped = redact_api_key_error(
-            AppError::Schema(format!("bad {key}")).with_plan("GLM Coding Pro"),
-            key,
-        );
-        assert!(
-            matches!(wrapped, AppError::WithPlan { ref plan, .. }
-                if plan == "GLM Coding Pro"),
-            "{wrapped:?}"
-        );
-        assert!(!wrapped.user_message().contains(key), "{wrapped:?}");
-
-        let io = redact_api_key_error(
-            AppError::Io {
-                path: std::path::PathBuf::from("/tmp/ai-usagebar"),
-                source: std::io::Error::other("disk full"),
-            },
-            key,
-        );
-        assert!(matches!(io, AppError::Io { .. }), "{io:?}");
-        assert!(io.user_message().contains("disk full"), "{io:?}");
     }
 }

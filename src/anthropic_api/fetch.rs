@@ -907,7 +907,7 @@ mod tests {
         let endpoints = Endpoints {
             cost_report: format!("{}/v1/organizations/cost_report", server.url()),
         };
-        let err = crate::tui::app::fetch_api_keyed(
+        let err = crate::outcome::fetch_api_keyed(
             async {
                 fetch_snapshot_at(
                     &client,
@@ -919,7 +919,7 @@ mod tests {
                     at(2026, 7, 19),
                 )
                 .await
-                .map(Into::into)
+                .map(crate::vendor::VendorOutcome::from)
             },
             key,
         )

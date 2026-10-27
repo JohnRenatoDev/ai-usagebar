@@ -267,7 +267,39 @@ impl Cache {
 
     /// Atomically write a new payload. Uses `tempfile + persist` (POSIX
     /// rename), matching claudebar's `mktemp + mv` invariant.
+    ///
+    /// A cache attached to a key via [`Cache::redacting`] redacts the
+    /// payload too: a provider's *successful* answer can quote the key the
+    /// fetch was sent with (Z.AI carries `msg` inside an HTTP 200), and the
+    /// payload is the second sink. When the secret is built only of
+    /// characters that cannot change inside a JSON string, every exact
+    /// occurrence in the bytes becomes `[key]`. When it is not — a quote,
+    /// a backslash, a space — an occurrence can straddle JSON structure and
+    /// replacing it would corrupt the payload, so the payload is not
+    /// persisted at all: the fetch still returns its in-memory value, only
+    /// the cache keeps no payload of this answer. The partial-echo heuristic
+    /// does not apply here: a payload is data, and replacing its whole text
+    /// would destroy it. Caches without an attached secret are untouched.
     pub fn write_payload(&self, bytes: &[u8]) -> Result<()> {
+        let owned;
+        let bytes = match &self.redacting {
+            Some(secret)
+                if !secret.is_empty() && find_bytes(bytes, secret.as_bytes()).is_some() =>
+            {
+                if payload_secret_is_json_safe(secret) {
+                    owned = replace_all_bytes(bytes, secret.as_bytes(), b"[key]");
+                    &owned
+                } else {
+                    // The secret has a character that can change inside a
+                    // JSON string, so its occurrence may straddle JSON
+                    // structure: replacing it would corrupt the payload, so
+                    // nothing is persisted. The success side effects are
+                    // skipped too — the cache is left exactly as it was.
+                    return Ok(());
+                }
+            }
+            _ => bytes,
+        };
         self.ensure_dir()?;
         let mut tmp = tempfile::Builder::new()
             .prefix(".usage.")
@@ -517,6 +549,42 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     tmp.persist(path)
         .map_err(|e| AppError::io_at(path, e.error))?;
     Ok(())
+}
+
+/// Whether [`Cache::write_payload`] may redact the attached secret at the
+/// byte level: the payload is the raw JSON bytes the provider sent, and a
+/// replacement is exact and structure-safe only when the secret is built
+/// from characters that cannot change inside a JSON string — no quote that
+/// closes the string, no backslash that escapes, no control that must be
+/// escaped, and no non-ASCII whose UTF-8 bytes a byte-level scan could
+/// straddle.
+fn payload_secret_is_json_safe(secret: &str) -> bool {
+    secret
+        .chars()
+        .all(|c| matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' | '~' | '+' | '/' | '=' | '-'))
+}
+
+/// Replace every occurrence of `needle` in `bytes` with `replacement`, at
+/// the byte level. The needle is ASCII whenever
+/// [`payload_secret_is_json_safe`] accepts it, so an exact occurrence is
+/// well-defined over the payload bytes whatever their UTF-8 state.
+fn replace_all_bytes(bytes: &[u8], needle: &[u8], replacement: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut rest = bytes;
+    while let Some(pos) = find_bytes(rest, needle) {
+        out.extend_from_slice(&rest[..pos]);
+        out.extend_from_slice(replacement);
+        rest = &rest[pos + needle.len()..];
+    }
+    out.extend_from_slice(rest);
+    out
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 pub(crate) fn xdg_cache_dir() -> Result<PathBuf> {
@@ -1171,6 +1239,75 @@ mod tests {
         let (code, msg) = cache.write_last_error(401, "msg test-key-value");
         assert_eq!(code, 401);
         assert_eq!(msg, AUTH_FAILURE_MESSAGE);
+    }
+
+    /// A provider's *successful* answer can quote the key it was sent with
+    /// (Z.AI carries `msg` inside an HTTP 200): the cache attached to that
+    /// key redacts the payload at the first point of writing, at the byte
+    /// level — every exact occurrence is replaced, the JSON survives, and
+    /// the partial-echo heuristic does not reach the payload (it would
+    /// destroy data).
+    #[test]
+    fn write_payload_redacts_the_attached_secret() {
+        let (_td, cache) = fixture();
+        let cache = cache.redacting("test-key-value");
+
+        cache
+            .write_payload(br#"{"msg":"ok test-key-value"}"#)
+            .unwrap();
+        let on_disk = fs::read(cache.payload_path()).unwrap();
+        assert_eq!(on_disk, br#"{"msg":"ok [key]"}"#);
+
+        // Every exact occurrence is replaced, not only the first.
+        let (_td, cache) = fixture();
+        let cache = cache.redacting("test-key-value");
+        cache
+            .write_payload(br#"{"a":"test-key-value","b":"test-key-value"}"#)
+            .unwrap();
+        let on_disk = fs::read(cache.payload_path()).unwrap();
+        assert_eq!(on_disk, br#"{"a":"[key]","b":"[key]"}"#);
+
+        // No attached secret: the bytes are persisted as they arrived.
+        let (_td, cache) = fixture();
+        let raw = br#"{"msg":"ok test-key-value"}"#;
+        cache.write_payload(raw).unwrap();
+        assert_eq!(fs::read(cache.payload_path()).unwrap(), raw);
+    }
+
+    /// A secret with a character that can change inside a JSON string (here
+    /// the quote): its occurrence may straddle JSON structure, so redacting
+    /// it would corrupt the payload. Such a payload is not persisted at all
+    /// — the fetch still returns its in-memory value, only the cache keeps
+    /// no payload of that answer — and the rest of the cache is left
+    /// exactly as it was: an older payload is not clobbered, and the
+    /// success side effects do not run for an answer the cache refused.
+    #[test]
+    fn write_payload_skips_a_payload_that_quotes_an_unsafe_secret() {
+        let secret = "a\"b";
+
+        // A cold cache stays cold: no payload file is written.
+        let (_td, cache) = fixture();
+        let cache = cache.redacting(secret);
+        cache.write_payload(br#"{"msg":"ok a"b"}"#).unwrap();
+        assert!(
+            cache.maybe_payload().unwrap().is_none(),
+            "a payload quoting an unsafe secret must not be persisted"
+        );
+        assert!(!cache.payload_path().exists());
+
+        // An existing payload survives untouched, and no side effect ran.
+        let (_td, cache) = fixture();
+        let cache = cache.redacting(secret);
+        cache.write_payload(br#"{"msg":"last good"}"#).unwrap();
+        cache.mark_stale();
+        cache.write_last_error(500, "an older failure");
+        cache.write_payload(br#"{"msg":"ok a"b"}"#).unwrap();
+        assert_eq!(
+            fs::read(cache.payload_path()).unwrap(),
+            br#"{"msg":"last good"}"#
+        );
+        assert!(cache.is_stale());
+        assert!(cache.read_last_error().is_some());
     }
 
     /// The regression this guards: vendors write the raw HTTP body, which is
