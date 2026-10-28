@@ -1351,6 +1351,8 @@ mod tests {
                         expires_at: Some(at(25, 0, 0)),
                     }],
                 },
+                cloud_credits: None,
+                usage_credits: None,
             }),
             stale: false,
             last_error: None,
