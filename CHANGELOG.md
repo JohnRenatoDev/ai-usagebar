@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Fixed
+
+- **SuperGrok tooltip product rows use the Grok mark.** Product slice breakdown
+  rows in the Waybar tooltip displayed the Claude icon glyph (`󰚩`) instead of
+  the provider's mark (`󰇷`).
+
 ## [1.45.0] — 2026-10-27
 
 ### Added
