@@ -5,6 +5,7 @@ import type { RowLists } from "@/components/dnd";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import type { Layout, Screen } from "@/lib/types";
 import { LanguageProvider } from "@/lib/i18n";
+import { cardImagePng, createCopyRegistry, findCardElement, type CopyRegistry } from "@/lib/cardImage";
 import { m } from "@/paraglide/messages.js";
 import { cn } from "@/lib/utils";
 import { About } from "@/screens/About";
@@ -45,6 +46,9 @@ type Direction = "back" | "forward";
 /** Screens ordered as the OpenUsage pager lays them out: dashboard ← customize/provider → settings. */
 const SCREEN_DEPTH: Record<Screen, number> = { dashboard: 0, customize: 1, provider: 2, settings: 3, about: 4 };
 
+/** How long the footer's copy-image notice stays up before it fades on its own. */
+const COPY_NOTICE_MS = 2500;
+
 function resolveStorage() {
   try {
     const ls = window.localStorage;
@@ -80,6 +84,15 @@ export default function App() {
   const [rowMenuOpen, setRowMenuOpen] = useState(false);
   const [resetArmed, setResetArmed] = useState(false);
   const [starError, setStarError] = useState("");
+  // The pending card image copies, keyed by the id sent with each command (contract v2):
+  // the host answers window.__AIUB_IMAGE_COPIED__(id, ok) for the id it received, so the
+  // association lives in the id, not in the order the IPCs arrived. A copy settles
+  // exactly once — success, failure, timeout or pre-send failure — and its id leaves the
+  // pending set, so a late answer for it is ignored.
+  const [copyNotice, setCopyNotice] = useState<{ failed: boolean; text: string } | null>(null);
+  const copyRegistryRef = useRef<CopyRegistry | null>(null);
+  if (copyRegistryRef.current === null) copyRegistryRef.current = createCopyRegistry();
+  const copyNoticeTimerRef = useRef(0);
   const [popoverVisible, setPopoverVisible] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -230,12 +243,14 @@ export default function App() {
       setPopoverVisible(visible);
       if (visible) return;
       // Closing the popover resets navigation: back to the dashboard, scrolled to the top,
-      // menus closed (OpenUsage "Closing").
+      // menus closed (OpenUsage "Closing"), the copy notice gone.
       setOptionsOpen(false);
       setRowMenuOpen(false);
       setUpdateDialogOpen(false);
       setResetArmed(false);
       setScreen("dashboard");
+      setCopyNotice(null);
+      if (copyNoticeTimerRef.current) window.clearTimeout(copyNoticeTimerRef.current);
       if (scrollRef.current) scrollRef.current.scrollTop = 0;
     };
     window.__AIUB_LOCKCLICKS__ = (ms) => {
@@ -250,12 +265,18 @@ export default function App() {
     // The tray host calls this for the native menu items that open a popover
     // screen (Customize / Settings / About / Check for Updates).
     window.__AIUB_MENU_ACTION__ = (action) => menuActionRef.current(String(action));
+    // The tray host's answer for one copy-image command: __AIUB_IMAGE_COPIED__(id, ok)
+    // with the id the host received (null when it had none to match). Only a still-pending
+    // id is applied; unknown, expired and null ids are ignored.
+    window.__AIUB_IMAGE_COPIED__ = (id, ok) => copyRegistryRef.current?.answer(id, ok === true);
     sendCommand("ready");
     return () => {
       delete window.__AIUB_APPLY__;
       delete window.__AIUB_LOCKCLICKS__;
       delete window.__AIUB_VISIBLE__;
       delete window.__AIUB_MENU_ACTION__;
+      delete window.__AIUB_IMAGE_COPIED__;
+      if (copyNoticeTimerRef.current) window.clearTimeout(copyNoticeTimerRef.current);
     };
   }, []);
 
@@ -372,6 +393,50 @@ export default function App() {
     go("provider");
   }
 
+  // Copy one provider's card as an image: reserve the copy's id, rasterize the card in the
+  // page (self-contained, so the canvas stays untainted), hand the base64 and the id to
+  // the host over IPC, and let the host write the clipboard natively and answer for the id
+  // it received. The id keeps the association: a slow raster that outlives its timeout may
+  // dispatch after a newer copy, and a lost answer cannot settle another copy. Any failure
+  // before the host is asked (the card gone, a raster error — a SecurityError among
+  // others, the send itself throwing) settles the id with a failure, and the host never
+  // hears a command that was not sent.
+  function copyCardAsImage(cardId: string) {
+    const registry = copyRegistryRef.current;
+    // The double-click lock is held from the click until the copy settles (success,
+    // failure, timeout or pre-send failure): after a timeout, a new copy is allowed.
+    if (!registry || registry.isBusy()) return;
+    const copy = registry.begin((ok) => showCopyNotice(ok));
+    void (async () => {
+      try {
+        // The id is never interpolated into a selector (it may carry a double quote);
+        // a missing card is a pre-send failure, not an unhandled throw.
+        const section = findCardElement(shellRef.current, cardId);
+        if (!section) throw new Error("the card is not on screen");
+        const png = await cardImagePng(section);
+        sendCommand("copy-image", { png, id: copy.id });
+      } catch {
+        // Settling with false removes the id from the pending set: nothing keeps waiting
+        // for an answer to a command the host never received.
+        copy.settle(false);
+      }
+    })();
+  }
+
+  /** The footer's short copy-image notice: success in the footer's tone, failure in the meter's red. */
+  function showCopyNotice(ok: boolean) {
+    if (copyNoticeTimerRef.current) window.clearTimeout(copyNoticeTimerRef.current);
+    copyNoticeTimerRef.current = window.setTimeout(() => {
+      copyNoticeTimerRef.current = 0;
+      setCopyNotice(null);
+    }, COPY_NOTICE_MS);
+    setCopyNotice(
+      ok
+        ? { failed: false, text: m.copied_to_clipboard({}, { locale: layout.language }) }
+        : { failed: true, text: m.copy_image_failed({}, { locale: layout.language }) },
+    );
+  }
+
   function reorderRows(lists: RowLists) {
     if (!currentCard) return;
     const prevOff = prefsForCard(currentCard, layout).off || {};
@@ -386,6 +451,10 @@ export default function App() {
   function onRowAction(id: string, key: string, action: RowAction) {
     const card = cards.find((item) => item.id === id);
     if (!card) return;
+    if (action === "copy-image") {
+      copyCardAsImage(id);
+      return;
+    }
     if (action === "customize") {
       openProvider(id, "dashboard");
       return;
@@ -455,6 +524,7 @@ export default function App() {
                 nowMs={nowMs}
                 payload={payload}
                 onCustomizeProvider={(id) => openProvider(id, "dashboard")}
+                onCopyImage={copyCardAsImage}
                 onDismissHint={() => commit({ ...layout, hintDismissed: true })}
                 onOpenCustomize={() => go("customize")}
                 onOpenSettings={() => go("settings")}
@@ -479,6 +549,7 @@ export default function App() {
               payload={payload}
               visible={visible}
               onCustomizeProvider={(id) => openProvider(id, "dashboard")}
+              onCopyImage={copyCardAsImage}
               onDismissHint={() => commit({ ...layout, hintDismissed: true })}
               onOpenCustomize={() => go("customize")}
               onReorder={(ids) => commit({ ...layout, cardOrder: mergeVisibleOrder(layout.cardOrder, ids) })}
@@ -564,6 +635,7 @@ export default function App() {
         </div>
       </div>
       <Footer
+        notice={copyNotice}
         nowMs={nowMs}
         optionsOpen={optionsOpen}
         payload={payload}

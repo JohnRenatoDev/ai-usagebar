@@ -58,6 +58,9 @@
 /** @typedef {{}} Click_To_Record_A_ShortcutInputs */
 /** @typedef {{}} CloseInputs */
 /** @typedef {{}} Connection_Retry_HintInputs */
+/** @typedef {{}} Copied_To_ClipboardInputs */
+/** @typedef {{}} Copy_As_ImageInputs */
+/** @typedef {{}} Copy_Image_FailedInputs */
 /** @typedef {{}} Couldn_T_Load_UsageInputs */
 /** @typedef {{}} Couldn_T_Read_Local_FilesInputs */
 /** @typedef {{}} Couldn_T_Read_Usage_DataInputs */
@@ -513,6 +516,18 @@ export const close = /** @type {(inputs: CloseInputs) => LocalizedString} */ () 
 
 export const connection_retry_hint = /** @type {(inputs: Connection_Retry_HintInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`연결을 확인한 뒤 새로 고치세요.`)
+};
+
+export const copied_to_clipboard = /** @type {(inputs: Copied_To_ClipboardInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`클립보드에 복사됨`)
+};
+
+export const copy_as_image = /** @type {(inputs: Copy_As_ImageInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`이미지로 복사`)
+};
+
+export const copy_image_failed = /** @type {(inputs: Copy_Image_FailedInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`이미지를 복사할 수 없음`)
 };
 
 export const couldn_t_load_usage = /** @type {(inputs: Couldn_T_Load_UsageInputs) => LocalizedString} */ () => {

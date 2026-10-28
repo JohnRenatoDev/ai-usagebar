@@ -48,6 +48,11 @@ mod placement;
 // like `placement`; the Windows host calls most of them, the macOS host only `macos_verdict`.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod blur;
+// The `copy-image` IPC's validation: the page posts the card's PNG as base64 and the host
+// puts it on the system clipboard. Pure decisions over the received JSON, compiled everywhere
+// like `blur` so its tests run on every CI job; the tray hosts call it.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+mod clipboard_image;
 // Where the Windows popover's WebView2 profile lives, and the one-time adoption of the old one.
 // Paths and file copies, compiled everywhere like `placement`; only the Windows host calls it.
 mod profile;

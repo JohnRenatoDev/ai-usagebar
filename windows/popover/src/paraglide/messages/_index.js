@@ -60,6 +60,9 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{}} Click_To_Record_A_ShortcutInputs */
 /** @typedef {{}} CloseInputs */
 /** @typedef {{}} Connection_Retry_HintInputs */
+/** @typedef {{}} Copied_To_ClipboardInputs */
+/** @typedef {{}} Copy_As_ImageInputs */
+/** @typedef {{}} Copy_Image_FailedInputs */
 /** @typedef {{}} Couldn_T_Load_UsageInputs */
 /** @typedef {{}} Couldn_T_Read_Local_FilesInputs */
 /** @typedef {{}} Couldn_T_Read_Usage_DataInputs */
@@ -1223,6 +1226,54 @@ export const connection_retry_hint = /** @type {((inputs?: Connection_Retry_Hint
 	if (locale === "ko") return __ko.connection_retry_hint(inputs)
 	if (locale === "es") return __es.connection_retry_hint(inputs)
 	return __en.connection_retry_hint(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Copied to clipboard" |
+*
+* @param {Copied_To_ClipboardInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const copied_to_clipboard = /** @type {((inputs?: Copied_To_ClipboardInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Copied_To_ClipboardInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.copied_to_clipboard(inputs)
+	if (locale === "ko") return __ko.copied_to_clipboard(inputs)
+	if (locale === "es") return __es.copied_to_clipboard(inputs)
+	return __en.copied_to_clipboard(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Copy as image" |
+*
+* @param {Copy_As_ImageInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const copy_as_image = /** @type {((inputs?: Copy_As_ImageInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Copy_As_ImageInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.copy_as_image(inputs)
+	if (locale === "ko") return __ko.copy_as_image(inputs)
+	if (locale === "es") return __es.copy_as_image(inputs)
+	return __en.copy_as_image(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Could not copy the image" |
+*
+* @param {Copy_Image_FailedInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const copy_image_failed = /** @type {((inputs?: Copy_Image_FailedInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Copy_Image_FailedInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.copy_image_failed(inputs)
+	if (locale === "ko") return __ko.copy_image_failed(inputs)
+	if (locale === "es") return __es.copy_image_failed(inputs)
+	return __en.copy_image_failed(inputs)
 });
 /**
 * | output |

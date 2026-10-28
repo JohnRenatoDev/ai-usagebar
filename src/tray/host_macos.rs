@@ -18,9 +18,9 @@ use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSColor,
     NSCompositingOperation, NSEvent, NSEventMask, NSFont, NSFontAttributeName,
     NSFontWeightSemibold, NSForegroundColorAttributeName, NSGlassEffectView,
-    NSGlassEffectViewStyle, NSImage, NSImageScaling, NSScreen, NSStringDrawing, NSView,
-    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
-    NSWindow, NSWindowOrderingMode,
+    NSGlassEffectViewStyle, NSImage, NSImageScaling, NSPasteboard, NSPasteboardTypePNG, NSScreen,
+    NSStringDrawing, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode,
 };
 use objc2_foundation::{
     MainThreadMarker, NSAttributedStringKey, NSData, NSDictionary, NSPoint, NSRect, NSSize,
@@ -804,6 +804,27 @@ fn push_to_webview(state: &TrayState) {
     let _ = webview.evaluate_script(&script);
 }
 
+/// The `copy-image` answer: the page installs `__AIUB_IMAGE_COPIED__` on load, so with no
+/// webview there is nothing to evaluate it in. The script is built by
+/// `clipboard_image::copied_reply_script` with the request's id, so the page matches the
+/// reply to its own request instead of its position in a queue.
+fn reply_image_copied(state: &TrayState, id: Option<&str>, copied: bool) {
+    if let Some(webview) = state.webview.as_ref() {
+        let _ = webview.evaluate_script(&super::clipboard_image::copied_reply_script(id, copied));
+    }
+}
+
+/// Puts the validated PNG on the system pasteboard. The pattern is OpenUsage's
+/// `ShareCardRenderer.copyToPasteboard`: clear the general pasteboard, then set the PNG
+/// type. Returns whether `setData:` succeeded — the host only answers `true` when it does.
+fn copy_png_to_clipboard(bytes: &[u8]) -> bool {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+    let data = NSData::with_bytes(bytes);
+    // SAFETY: AppKit exports the PNG pasteboard type name for the lifetime of the process.
+    unsafe { pasteboard.setData_forType(Some(&data), NSPasteboardTypePNG) }
+}
+
 fn popover_payload(state: &TrayState) -> String {
     let mut payload = state.payload.clone();
     payload["menu_bar_look"] = json!(state.menu_bar_look.picker_value());
@@ -1167,6 +1188,18 @@ fn handle_ipc(state: &mut TrayState, body: &str, control_flow: &mut ControlFlow)
         }
         "snooze-update" => {
             let _ = state.worker.send(WorkerCmd::SnoozeUpdate);
+        }
+        "copy-image" => {
+            let id = super::clipboard_image::copy_request_id(&value);
+            // No valid id: no `png_from_ipc`, no clipboard — the reply is `null, false`.
+            let copied = match id {
+                Some(_) => match super::clipboard_image::png_from_ipc(&value) {
+                    Ok(bytes) => copy_png_to_clipboard(&bytes),
+                    Err(_reason) => false,
+                },
+                None => false,
+            };
+            reply_image_copied(state, id, copied);
         }
         _ => {}
     }

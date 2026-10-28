@@ -19,6 +19,11 @@
   --surface: #ffffff;
   --card: #f2f2f2;
   --card-border: transparent;
+  /* Card image export ("copy as image"): the PNG is opaque even where the app is not. The
+     classic surfaces above already are; these are the theme's opaque stand-ins for the
+     Native materials (glass/acrylic). cardImage.ts reads them off the root element. */
+  --export-surface: #ffffff;
+  --export-card: #f2f2f2;
   --fill-quaternary: rgba(0, 0, 0, 0.05);
   --fill-tertiary: rgba(0, 0, 0, 0.09);
   --separator: rgba(0, 0, 0, 0.1);
@@ -177,6 +182,8 @@
   color-scheme: dark;
   --surface: #1e1e1e;
   --card: #292929;
+  --export-surface: #1e1e1e;
+  --export-card: #292929;
   --fill-quaternary: rgba(255, 255, 255, 0.05);
   --fill-tertiary: rgba(255, 255, 255, 0.1);
   --separator: rgba(255, 255, 255, 0.1);
@@ -1189,6 +1196,28 @@ body:has(.native-panel[data-os="windows"]) {
 
 .header-action.is-failed {
   color: var(--red);
+}
+
+/* Card image export: cardImage.ts rasterizes a detached clone marked data-exporting. This
+   scope states the export policy — the PNG shows the card, not the screen: no header
+   shortcuts (one of them is the copy trigger itself), no reorder grip, no focus ring, and
+   the card's fill is opaque even for the translucent Native materials. The clone is out of
+   the document, so the module applies the same decisions inline; these rules are where the
+   policy lives. */
+[data-exporting] .header-action,
+[data-exporting] .grip {
+  display: none;
+}
+
+[data-exporting]:focus-visible,
+[data-exporting] *:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+[data-exporting] .card-surface,
+[data-exporting] .lifted-surface {
+  background-color: var(--export-card) !important;
 }
 
 .desktop-account-control {
