@@ -7,6 +7,7 @@ import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 import "I18n.js" as I18n
+import "Notice.js" as Notice
 
 // Native Omarchy Quattro popup. BarWidget.qml owns the bar slot and injects
 // its button as this panel's anchor; collection stays in the Rust binary.
@@ -69,6 +70,10 @@ Panel {
   readonly property bool showAntigravityGemini: Model.booleanSetting(setting("showAntigravityGemini", true), true)
   readonly property bool showAntigravityClaudeGpt: Model.booleanSetting(setting("showAntigravityClaudeGpt", true), true)
   readonly property bool brandIcons: Model.booleanSetting(setting("brandIcons", true), true)
+  // Local builds: the executables the plugin runs. No settings control on
+  // purpose; set them with `omarchy bar set` (see omarchy/README.md).
+  readonly property string reportBinary: String(setting("reportBinary", "ai-usagebar"))
+  readonly property string tuiBinary: String(setting("tuiBinary", "ai-usagebar-tui"))
   readonly property string showAs: Model.normalizeShowAs(setting("showAs", "used"))
   readonly property var hiddenMetrics: Model.normalizeHiddenMetrics(setting("hiddenMetrics", {}))
   readonly property var visibleEntries: Model.filteredEntries(entries, configuredProvider)
@@ -567,12 +572,12 @@ Panel {
     if (hostWidget && typeof hostWidget.launchDashboard === "function")
       hostWidget.launchDashboard()
     else if (bar)
-      bar.run("omarchy-launch-floating-terminal-with-presentation ai-usagebar-tui")
+      bar.run("omarchy-launch-floating-terminal-with-presentation " + Util.shellQuote(root.tuiBinary))
   }
 
   function openNousLogin() {
     if (bar && typeof bar.run === "function")
-      bar.run("omarchy-launch-floating-terminal-with-presentation ai-usagebar auth nous login")
+      bar.run("omarchy-launch-floating-terminal-with-presentation " + Util.shellQuote(root.reportBinary) + " auth nous login")
   }
 
   function openCopilotLogin() {
@@ -596,13 +601,28 @@ Panel {
     return ""
   }
 
-  function statusIsUrgent() {
-    return filterMiss || (entry && entry.error !== "") || loadError !== ""
+  // Structured form of statusMessage() for NoticeCard: same precedence, plus
+  // a category for the title and a copyable fix when the text names one.
+  function statusNotice() {
+    if (filterMiss) return Notice.build(statusMessage(), "error", "filter")
+    if (entry && entry.error !== "") return Notice.build(entry.error, "error")
+    if (loadError !== "") return Notice.build(loadError, "error",
+      entries.length > 0 ? "refresh" : (lastExitCode === 127 ? "missing" : ""))
+    if (entry && entry.stale) return Notice.build(root.tr("status.cached"), "info", "cached")
+    return null
+  }
+
+  function copyToClipboard(text) {
+    if (bar && typeof bar.run === "function")
+      bar.run("printf %s " + Util.shellQuote(String(text)) + " | wl-copy")
   }
 
   function heroMeta() {
     if (!entry) return loading ? root.tr("hero.loading") : root.tr("hero.usage_report")
-    if (entry.error !== "") return root.tr("hero.provider_unavailable")
+    if (entry.error !== "") {
+      var why = Notice.build(entry.error, "error")
+      return why ? root.tr("notice." + why.category) : root.tr("hero.provider_unavailable")
+    }
     var text = entry.plan || root.tr("hero.usage_limits")
     if (entry.stale) text += " · " + root.tr("tip.cached")
     return Model.autoTextSafe(text)
@@ -944,7 +964,7 @@ Panel {
     running: false
     // /usr/bin/env always starts on Omarchy and reports a missing ai-usagebar
     // as exit 127. Keep the command as structured argv: no shell is needed.
-    command: ["/usr/bin/env", "ai-usagebar", "usage", "--json"]
+    command: ["/usr/bin/env", root.reportBinary, "usage", "--json"]
 
     stdout: StdioCollector {
       waitForEnd: true
@@ -1048,8 +1068,10 @@ Panel {
             // Long settings copy must not live in the hero detail pill — that
             // control is a single-line chip and overflows in RU/pt-BR. The
             // sentence renders as a wrapped caption under the hero instead.
+            // An error has no figure: the badge beside refresh names it instead
+            // of an untranslated "Error" pill.
             detail: root.settingsOpen ? ""
-              : (root.entry && root.summary.text !== "Ready" && root.summary.text !== root.tr("ready")
+              : (root.entry && root.entry.error === "" && root.summary.text !== "Ready" && root.summary.text !== root.tr("ready")
                 ? Model.autoTextSafe(root.panelHeadline(root.shapedEntry)) : "")
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -1073,6 +1095,53 @@ Panel {
             trailingControl: Component {
               Row {
                 spacing: Style.space(4)
+
+                // Compact error badge beside refresh/settings: the category's
+                // icon and a one-word label in the urgent colour. The full
+                // notice sits below the tabs.
+                BorderSurface {
+                  id: errorBadge
+                  readonly property var notice: root.statusNotice()
+                  visible: !root.settingsOpen && notice !== null && notice.kind === "error"
+                  anchors.verticalCenter: parent.verticalCenter
+                  implicitWidth: badgeRow.implicitWidth + Style.space(14)
+                  implicitHeight: Style.spacing.controlHeight
+                  radius: Style.cornerRadius
+                  color: root.alpha(root.urgent, badgeHover.hovered ? 0.2 : 0.12)
+                  borderSpec: Border.flat(root.alpha(root.urgent, 0.55), 1)
+                  Accessible.role: Accessible.Button
+                  Accessible.name: notice ? root.tr("notice." + notice.category) : ""
+
+                  Row {
+                    id: badgeRow
+                    anchors.centerIn: parent
+                    spacing: Style.space(5)
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      textFormat: Text.PlainText
+                      text: Notice.glyph(errorBadge.notice)
+                      color: root.urgent
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                    }
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      textFormat: Text.PlainText
+                      text: errorBadge.notice ? root.tr("notice.short." + errorBadge.notice.category) : ""
+                      color: root.urgent
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                    }
+                  }
+
+                  HoverHandler { id: badgeHover; cursorShape: Qt.PointingHandCursor }
+                  TapHandler { onTapped: if (panelFlick) panelFlick.contentY = 0 }
+                  PanelToolTip {
+                    visible: badgeHover.hovered
+                    text: errorBadge.notice ? root.tr("notice." + errorBadge.notice.category) : ""
+                  }
+                }
 
                 PanelActionButton {
                   visible: !root.settingsOpen
@@ -1113,6 +1182,7 @@ Panel {
             foreground: root.foreground
             urgent: root.urgent
             fontFamily: root.fontFamily
+            binaryPath: root.reportBinary
             showValue: root.showValue
             showProvider: root.showProvider
             showAll: root.showAll
@@ -1208,29 +1278,20 @@ Panel {
             }
           }
 
-          BorderSurface {
-            readonly property string message: root.statusMessage()
-            visible: !root.settingsOpen && message !== ""
+          NoticeCard {
+            readonly property var current: root.statusNotice()
+            visible: !root.settingsOpen && current !== null
             width: parent.width
-            implicitHeight: statusText.implicitHeight + Style.spacing.xl * 2
-            color: root.alpha(root.statusIsUrgent() ? root.urgent : root.foreground, 0.09)
-            borderSpec: Border.flat(root.alpha(root.statusIsUrgent() ? root.urgent : root.foreground, 0.35), 1)
-            radius: Style.cornerRadius
-
-            Text {
-              id: statusText
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              anchors.leftMargin: Style.space(12)
-              anchors.rightMargin: Style.space(12)
-              text: parent.message
-              textFormat: Text.PlainText
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-            }
+            notice: current
+            title: current ? root.tr("notice." + current.category) : ""
+            copyText: root.tr("notice.copy")
+            copiedText: root.tr("notice.copied")
+            retryText: root.tr("notice.retry")
+            foreground: root.foreground
+            urgentColor: root.urgent
+            fontFamily: root.fontFamily
+            onCopyRequested: function(command) { root.copyToClipboard(command) }
+            onRetryRequested: root.refresh()
           }
 
           Column {

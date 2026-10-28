@@ -25,6 +25,8 @@ Column {
   property string barWindow: "auto"
   property string showAs: "used"
   property bool brandIcons: true
+  // The executable for `settings show`/`settings apply` (Panel.reportBinary).
+  property string binaryPath: "ai-usagebar"
   property var barProviderChoices: []
   property var metricEntries: []
   property string openMetricEntry: ""
@@ -253,7 +255,7 @@ Column {
   Process {
     id: stateProcess
     running: false
-    command: ["ai-usagebar", "settings", "show"]
+    command: [root.binaryPath, "settings", "show"]
 
     stdout: StdioCollector {
       waitForEnd: true
@@ -272,7 +274,7 @@ Column {
   Process {
     id: applyProcess
     running: false
-    command: ["ai-usagebar", "settings", "apply"]
+    command: [root.binaryPath, "settings", "apply"]
     stdinEnabled: true
 
     onStarted: {

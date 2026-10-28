@@ -442,8 +442,12 @@ assert.match(panelSource, /return withCreditGrants\(pools, item\)/);
 assert.match(panelSource, /function panelHeadline\(item\) \{[\s\S]*?providerDualHeadline\(item\)/);
 
 const settingsViewSource = fs.readFileSync(new URL('./SettingsView.qml', import.meta.url), 'utf8');
-assert.match(settingsViewSource, /command:\s*\["ai-usagebar",\s*"settings",\s*"show"\]/);
-assert.match(settingsViewSource, /command:\s*\["ai-usagebar",\s*"settings",\s*"apply"\]/);
+// The executable is the reportBinary override (default ai-usagebar), still
+// structured argv with no shell.
+assert.match(settingsViewSource, /property string binaryPath: "ai-usagebar"/);
+assert.match(settingsViewSource, /command:\s*\[root\.binaryPath,\s*"settings",\s*"show"\]/);
+assert.match(settingsViewSource, /command:\s*\[root\.binaryPath,\s*"settings",\s*"apply"\]/);
+assert.match(panelSource, /binaryPath: root\.reportBinary/);
 assert.match(settingsViewSource, /stdinEnabled:\s*true/);
 assert.match(settingsViewSource, /write\(root\.pendingPayload\s*\+\s*"\\n"\)/);
 assert.match(settingsViewSource, /password:\s*true/);
@@ -520,7 +524,7 @@ assert.match(
 );
 assert.match(settingsViewSource, /root\.tr\("credentials\.paste"/);
 assert.match(panelSource, /function\s+openNousLogin\s*\(/);
-assert.match(panelSource, /ai-usagebar auth nous login/);
+assert.match(panelSource, /Util\.shellQuote\(root\.reportBinary\) \+ " auth nous login"/);
 assert.match(panelSource, /onNousLoginRequested/);
 assert.match(panelSource, /function\s+openCopilotLogin\s*\(/);
 assert.match(panelSource, /gh auth login --web/);
@@ -1041,7 +1045,17 @@ assert.equal(model.launchErrorMessage(0, ''), 'The usage command failed without 
 // The usage command must stay behind a helper that can emit exit 127 when the
 // binary is absent, without opening a shell-injection boundary.
 assert.match(panelSource,
-  /command:\s*\["\/usr\/bin\/env",\s*"ai-usagebar",\s*"usage",\s*"--json"\]/);
+  /command:\s*\["\/usr\/bin\/env",\s*root\.reportBinary,\s*"usage",\s*"--json"\]/);
+// reportBinary/tuiBinary default to the binaries on PATH and reach a shell
+// only through Util.shellQuote.
+assert.match(panelSource, /setting\("reportBinary", "ai-usagebar"\)/);
+assert.match(panelSource, /setting\("tuiBinary", "ai-usagebar-tui"\)/);
+assert.match(panelSource, /Util\.shellQuote\(root\.tuiBinary\)/);
+assert.match(fs.readFileSync(new URL('./BarWidget.qml', import.meta.url), 'utf8'),
+  /Util\.shellQuote\(root\.panelItem \? root\.panelItem\.tuiBinary : "ai-usagebar-tui"\)/);
+assert.equal(manifest.barWidget.defaults.reportBinary, 'ai-usagebar');
+assert.equal(manifest.barWidget.defaults.tuiBinary, 'ai-usagebar-tui');
+
 assert.doesNotMatch(panelSource, /command:\s*\["(?:\/usr\/bin\/)?(?:ba)?sh"/);
 assert.match(panelSource, /onExited:\s*function\(exitCode\)/);
 assert.match(panelSource, /Model\.launchErrorMessage\(/);
@@ -2288,5 +2302,18 @@ assert.equal(model.cursorPoolOf(null), '');
   assert.match(panelSource, /target:\s*Commons\.Color/);
   assert.doesNotMatch(panelSource, /target:\s*Color\s*$/m);
 }
+
+// Errors render as a structured NoticeCard: the fix is only ever copied
+// (wl-copy through Util.shellQuote), and the card itself runs nothing.
+assert.match(panelSource, /NoticeCard \{\s*readonly property var current: root\.statusNotice\(\)/);
+assert.match(panelSource, /bar\.run\("printf %s " \+ Util\.shellQuote\(String\(text\)\) \+ " \| wl-copy"\)/);
+assert.doesNotMatch(fs.readFileSync(new URL('./NoticeCard.qml', import.meta.url), 'utf8'), /bar\.run|execDetached|Process/);
+// An error shows the translated badge, never the untranslated "Error" pill.
+assert.match(panelSource, /root\.entry && root\.entry\.error === "" && root\.summary\.text !== "Ready"/);
+assert.match(panelSource, /root\.tr\("notice\.short\." \+ errorBadge\.notice\.category\)/);
+// Generic window names follow the interface language; English keeps them.
+assert.equal(i18n.displayLabel('pt-BR', 'Weekly (7d)'), i18n.t('pt-BR', 'metrics.window_weekly'));
+assert.equal(i18n.displayLabel('es', 'Session (5h)'), i18n.t('es', 'metrics.window_session'));
+assert.equal(i18n.displayLabel('en', 'Weekly (7d)'), 'Weekly (7d)');
 
 console.log('Omarchy model tests passed');

@@ -76,7 +76,7 @@ BarWidget {
   }
 
   function launchDashboard() {
-    if (root.bar) root.bar.run("omarchy-launch-floating-terminal-with-presentation ai-usagebar-tui")
+    if (root.bar) root.bar.run("omarchy-launch-floating-terminal-with-presentation " + Util.shellQuote(root.panelItem ? root.panelItem.tuiBinary : "ai-usagebar-tui"))
     root.close()
   }
 
