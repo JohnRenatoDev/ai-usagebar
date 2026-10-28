@@ -92,6 +92,21 @@ pub(crate) struct SectionProjection {
     /// Positive prepaid cap in USD cents. `None` when Cursor reported spend
     /// without a cap — the row stays a plain amount.
     pub limit_cents: Option<i64>,
+    /// Amount the metric's window refills by when it reopens (Synthetic's
+    /// weekly credit tick, e.g. `"2%"`). Present only for refill-style
+    /// windows, so a frontend's countdown reads "Regenerates X in …"
+    /// instead of "Resets in …".
+    pub regen: Option<String>,
+    /// The metric's percentage with its decimal precision preserved, for
+    /// frontends that print a figure ("70.5%"). Only vendors whose API
+    /// reports a fraction set this; the integer `Section::Metric::pct`
+    /// remains what meters and severity colours use.
+    pub percent_precise: Option<f64>,
+    /// How a frontend should read the percentage. Refill-style windows
+    /// (Synthetic's weekly credits) read as a fuel gauge — `"left"`, what
+    /// remains — while fixed windows keep the default "used" reading and
+    /// omit the field.
+    pub reading: Option<&'static str>,
 }
 
 struct SectionBuilder(Vec<SectionProjection>);
@@ -107,6 +122,9 @@ impl SectionBuilder {
             headline: MetricHeadline::Percent,
             used_cents: None,
             limit_cents: None,
+            regen: None,
+            percent_precise: None,
+            reading: None,
         }
     }
 
@@ -140,6 +158,39 @@ impl SectionBuilder {
         let mut row = Self::projection(section);
         row.reset_at = reset_at;
         self.0.push(row);
+    }
+
+    /// Mark the most recently pushed metric as a refilling window: `amount`
+    /// is what the vendor restores when it reopens (Synthetic's weekly
+    /// credit tick), so the footnote and every report-driven countdown read
+    /// "Regenerates {amount} in …" instead of "Resets in …". The report
+    /// also tags the metric `reading: "left"`: a budget that regenerates
+    /// reads as a fuel gauge — what remains — whatever the global reading.
+    fn regen_last_metric(&mut self, amount: String) {
+        let Some(last) = self.0.last_mut() else {
+            return;
+        };
+        last.regen = Some(amount.clone());
+        last.reading = Some("left");
+        if let Section::Metric { footnote, .. } = &mut last.section
+            && let Some(rest) = footnote.strip_prefix("Resets in ")
+        {
+            *footnote = format!("Regenerates {amount} in {rest}");
+        }
+    }
+
+    /// Give the most recently pushed metric a decimal-precise percentage
+    /// (Synthetic's weekly budget), so report-driven frontends can print
+    /// "70.5%" instead of the meter's rounded integer. The printed value
+    /// label gains the same precision; the meter keeps the integer.
+    fn precise_last_metric(&mut self, pct: f64) {
+        let Some(last) = self.0.last_mut() else {
+            return;
+        };
+        last.percent_precise = Some(pct);
+        if let Section::Metric { value_label, .. } = &mut last.section {
+            *value_label = format_precise_pct(pct);
+        }
     }
 
     /// A metric whose vendor chose which of its two numbers goes on the bar.
@@ -369,10 +420,9 @@ pub fn compact_cells(snapshot: &VendorSnapshot) -> (String, Vec<(String, PaceSev
         }
         VendorSnapshot::Kilo(s) => (String::new(), vec![usd_cell(s.balance)]),
         VendorSnapshot::Novita(s) => (String::new(), vec![usd_cell(s.available)]),
-        VendorSnapshot::Synthetic(s) => (
-            String::new(),
-            vec![pct("subscription", s.subscription.utilization_pct)],
-        ),
+        VendorSnapshot::Synthetic(s) => {
+            (String::new(), vec![pct("week", s.weekly.utilization_pct)])
+        }
         VendorSnapshot::Lyceum(s) => (
             String::new(),
             vec![(usd(s.available_credits), PaceSeverity::Low)],
@@ -587,7 +637,7 @@ pub fn headline_pct(snapshot: &VendorSnapshot) -> Option<i32> {
             .flatten()
             .map(|window| window.utilization_pct)
             .max(),
-        VendorSnapshot::Synthetic(s) => Some(s.subscription.utilization_pct),
+        VendorSnapshot::Synthetic(s) => Some(s.weekly.utilization_pct),
         VendorSnapshot::OpenCodeGo(s) => [
             s.rolling
                 .as_ref()
@@ -926,6 +976,58 @@ fn anthropic_sections(
             None,
         );
     }
+    if let Some(c) = &s.cloud_credits {
+        v.push(Section::Spacer);
+        // Same shape as Cursor's included credits: the remaining dollars are
+        // the headline the tray, GNOME and KDE draw (a prepaid balance, not
+        // a quota), the bar meters the used share, and the caption carries
+        // the spend and the expiry. The parse gate guarantees a positive
+        // limit, so `cursor_credit_meter` has no zero denominator to guard.
+        // The meter clamps the remaining to the limit for its bar and its
+        // spend; the headline is the balance the response reported, so a
+        // remaining above the limit is shown as it is, not cut down to it.
+        let (pct, _, mut footnote) =
+            crate::format::cursor_credit_meter(c.remaining.0, c.limit.0, c.expires_at, now);
+        let value = crate::usage::fmt_minor(c.remaining.0, 2, Some("USD"));
+        if c.locked {
+            // Appended to the caption the meter already built — it never
+            // comes back empty, so the separator never dangles.
+            footnote.push_str(" · locked");
+        }
+        // The second argument of push_metric stays None: this is an expiry,
+        // not a reset instant the account can bank.
+        v.push_metric_with_headline(
+            Section::Metric {
+                label: "Cloud session credits".into(),
+                pct,
+                severity: severity_for(i32::from(pct)),
+                value_label: value,
+                footnote,
+            },
+            None,
+            MetricHeadline::Value,
+        );
+    }
+    if let Some(u) = &s.usage_credits {
+        v.push(Section::Spacer);
+        let mut body = vec![format!(
+            "balance: {}",
+            crate::usage::fmt_minor(u.balance.0, u.decimal_places, u.currency.as_deref())
+        )];
+        // `None` means "not reported": the row is absent, never an invented
+        // "off".
+        if let Some(auto_reload) = u.auto_reload {
+            body.push(if auto_reload {
+                "auto-reload: on".into()
+            } else {
+                "auto-reload: off".into()
+            });
+        }
+        v.push(Section::Block {
+            label: "Usage credits".into(),
+            body,
+        });
+    }
     push_reset_credits(&mut v, &s.reset_credits, now);
     v
 }
@@ -987,18 +1089,7 @@ fn openai_sections(
     }
     if let Some(c) = &s.credits {
         v.push(Section::Spacer);
-        let balance = if c.unlimited {
-            "unlimited".into()
-        } else {
-            c.balance.clone()
-        };
-        let mut body = vec![format!("balance: {}", balance)];
-        if let Some((lo, hi)) = c.approx_local_messages {
-            body.push(format!("≈ {lo}-{hi} local messages"));
-        }
-        if let Some((lo, hi)) = c.approx_cloud_messages {
-            body.push(format!("≈ {lo}-{hi} cloud messages"));
-        }
+        let body = vec![crate::openai::vendor::credit_balance_label(c)];
         v.push(Section::Block {
             label: "Credits".into(),
             body,
@@ -1725,21 +1816,44 @@ fn synthetic_sections(
     tolerance: u32,
 ) -> SectionBuilder {
     let mut sections = SectionBuilder::new(vec![Section::Title {
-        left: "Synthetic".into(),
+        left: s.plan.clone().unwrap_or_else(|| "Synthetic".to_string()),
         right: None,
     }]);
     push_window(
         &mut sections,
-        "Subscription quota",
-        &s.subscription,
+        "Weekly credits",
+        &s.weekly,
         now,
         tolerance,
         false,
     );
-    sections.push(Section::Text {
-        label: "Requests".into(),
-        value: format!("{} / {}", s.requests, s.limit),
-    });
+    // The weekly budget refills by this much at the countdown moment rather
+    // than resetting wholesale, so the countdown line carries the amount.
+    let regen_amount = match &s.credits {
+        Some(credits) if credits.next_regen > 0.0 => {
+            Some(format!("{} credits", credits_number(credits.next_regen)))
+        }
+        _ => s
+            .next_regen_percent
+            .filter(|p| *p > 0.0)
+            .map(|p| format!("{}%", credits_number(p))),
+    };
+    if let Some(amount) = regen_amount {
+        sections.regen_last_metric(amount);
+    }
+    // Keep the API's decimal precision for printed figures ("70.5%"); the
+    // meter itself stays on the rounded integer.
+    sections.precise_last_metric(s.utilization_precise);
+    if let Some(credits) = &s.credits {
+        sections.push(Section::Text {
+            label: "Credits".into(),
+            value: format!(
+                "{} / {}",
+                credits_number(credits.used),
+                credits_number(credits.max)
+            ),
+        });
+    }
     sections
 }
 
@@ -2005,6 +2119,15 @@ fn usd_str(cost: &str) -> String {
     cost.parse::<f64>()
         .map(usd)
         .unwrap_or_else(|_| cost.to_string())
+}
+
+/// Whole numbers print bare; fractions keep two decimals (Synthetic credits).
+fn credits_number(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.2}")
+    }
 }
 
 fn push_reset_credits(
@@ -2432,6 +2555,16 @@ fn push_droid_window(
     );
 }
 
+/// One decimal when it matters ("70.5%"), none when it does not ("70%").
+fn format_precise_pct(pct: f64) -> String {
+    let rounded = (pct * 10.0).round() / 10.0;
+    if rounded == rounded.trunc() {
+        format!("{rounded:.0}%")
+    } else {
+        format!("{rounded}%")
+    }
+}
+
 fn push_window(
     sections: &mut SectionBuilder,
     label: &str,
@@ -2678,8 +2811,9 @@ fn render_block(f: &mut Frame, area: Rect, bubble: &BubbleTheme, label: &str, bo
 mod tests {
     use super::*;
     use crate::usage::{
-        AnthropicSnapshot, Cents, ExtraUsage, KimiSnapshot, OpenAiCredits, OpenAiSnapshot,
-        OpenAiSource, OpenRouterSnapshot, ResetCredit, ResetCredits, UsageWindow, ZaiSnapshot,
+        AnthropicSnapshot, Cents, CloudCredits, ExtraUsage, KimiSnapshot, OpenAiCredits,
+        OpenAiSnapshot, OpenAiSource, OpenRouterSnapshot, ResetCredit, ResetCredits, UsageCredits,
+        UsageWindow, ZaiSnapshot,
     };
     use chrono::TimeZone;
 
@@ -3059,6 +3193,8 @@ mod tests {
                 status: crate::usage::ExtraUsageStatus::Active,
             }),
             reset_credits: Default::default(),
+            cloud_credits: None,
+            usage_credits: None,
         };
         let sections = sections_for(&ready(VendorSnapshot::Anthropic(snap)), now(), 5);
         // Title (carries "Updated …" inline now) + 4 metrics (3 windows +
@@ -3104,6 +3240,8 @@ mod tests {
                 status: crate::usage::ExtraUsageStatus::OutOfCredits,
             }),
             reset_credits: Default::default(),
+            cloud_credits: None,
+            usage_credits: None,
         };
         let sections = sections_for(&ready(VendorSnapshot::Anthropic(snap)), now(), 5);
         let extra = sections
@@ -3148,6 +3286,8 @@ mod tests {
             scoped: vec![],
             extra: None,
             reset_credits: Default::default(),
+            cloud_credits: None,
+            usage_credits: None,
         };
         let sections = sections_for(&ready(VendorSnapshot::Anthropic(snap)), now(), 5);
         let metric_count = sections
@@ -3155,6 +3295,317 @@ mod tests {
             .filter(|s| matches!(s, Section::Metric { .. }))
             .count();
         assert_eq!(metric_count, 2);
+    }
+
+    fn claude_snapshot_with_credits(
+        cloud: Option<CloudCredits>,
+        usage: Option<UsageCredits>,
+    ) -> VendorSnapshot {
+        VendorSnapshot::Anthropic(AnthropicSnapshot {
+            plan: "Max 5x".into(),
+            session: UsageWindow {
+                utilization_pct: 12,
+                resets_at: Some(now() + chrono::Duration::hours(2)),
+                window_duration: chrono::Duration::hours(5),
+            },
+            weekly: UsageWindow {
+                utilization_pct: 34,
+                resets_at: None,
+                window_duration: chrono::Duration::days(7),
+            },
+            sonnet: None,
+            scoped: vec![],
+            extra: None,
+            reset_credits: Default::default(),
+            cloud_credits: cloud,
+            usage_credits: usage,
+        })
+    }
+
+    #[test]
+    fn anthropic_cloud_session_credits_render_as_a_metric() {
+        // The real 2026-10-26 payload shape: $250 of $250 left — 0% used.
+        // Built exactly like Cursor's included credits: the remaining dollars
+        // are the headline the tray, GNOME and KDE draw, the bar meters the
+        // used share, and the caption carries the spend and the expiry.
+        let snap = claude_snapshot_with_credits(
+            Some(CloudCredits {
+                limit: Cents(25000),
+                remaining: Cents(25000),
+                expires_at: Some("2026-11-05T07:59:00Z".parse().unwrap()),
+                locked: false,
+            }),
+            None,
+        );
+        let tab = ready(snap);
+        let sections = sections_for(&tab, now(), 5);
+        let metric = sections
+            .iter()
+            .find_map(|s| match s {
+                Section::Metric {
+                    label,
+                    pct,
+                    severity,
+                    value_label,
+                    footnote,
+                    ..
+                } if label == "Cloud session credits" => {
+                    Some((*pct, *severity, value_label.clone(), footnote.clone()))
+                }
+                _ => None,
+            })
+            .expect("a cloud session credits metric under the Claude account");
+        assert_eq!(metric.0, 0);
+        assert_eq!(metric.1, severity_for(0));
+        // The value is the money figure itself, not a percentage readout.
+        assert_eq!(metric.2, "$250.00");
+        // The caption reads like the included credits: spend first, then the
+        // expiry. The date is local-timezone output, so the shape is pinned,
+        // not the zone.
+        assert!(
+            metric
+                .3
+                .starts_with("$0.00 of $250.00 used (0%) · expires "),
+            "{:?}",
+            metric.3
+        );
+        assert!(!metric.3.contains("locked"), "{:?}", metric.3);
+        // The report projection names the value as the headline — that is
+        // what the popover model keys its headlineLabel on — and there is
+        // no reset instant behind the expiry.
+        let with_meta = sections_with_metadata_for(&tab, now(), 5);
+        let projected = with_meta
+            .iter()
+            .find(|p| {
+                matches!(&p.section, Section::Metric { label, .. } if label == "Cloud session credits")
+            })
+            .expect("the metric in the projection");
+        assert_eq!(projected.headline, MetricHeadline::Value);
+        assert!(projected.reset_at.is_none());
+    }
+
+    #[test]
+    fn anthropic_cloud_credits_headline_the_reported_balance_above_the_limit() {
+        // The bar clamps to nothing used; the money stays what was reported.
+        let snap = claude_snapshot_with_credits(
+            Some(CloudCredits {
+                limit: Cents(100),
+                remaining: Cents(200),
+                expires_at: None,
+                locked: false,
+            }),
+            None,
+        );
+        let sections = sections_for(&ready(snap), now(), 5);
+        let (pct, value) = sections
+            .iter()
+            .find_map(|s| match s {
+                Section::Metric {
+                    label,
+                    pct,
+                    value_label,
+                    ..
+                } if label == "Cloud session credits" => Some((*pct, value_label.clone())),
+                _ => None,
+            })
+            .expect("a cloud session credits metric");
+        assert_eq!(pct, 0);
+        assert_eq!(value, "$2.00");
+    }
+
+    #[test]
+    fn anthropic_cloud_credits_meter_the_used_share() {
+        // 100 of 250 spent: the meter shows the used share, 40%.
+        let snap = claude_snapshot_with_credits(
+            Some(CloudCredits {
+                limit: Cents(25000),
+                remaining: Cents(15000),
+                expires_at: None,
+                locked: false,
+            }),
+            None,
+        );
+        let sections = sections_for(&ready(snap), now(), 5);
+        let metric = sections
+            .iter()
+            .find_map(|s| match s {
+                Section::Metric {
+                    label,
+                    pct,
+                    severity,
+                    value_label,
+                    ..
+                } if label == "Cloud session credits" => {
+                    Some((*pct, *severity, value_label.clone()))
+                }
+                _ => None,
+            })
+            .expect("a cloud session credits metric");
+        assert_eq!(metric.0, 40);
+        assert_eq!(metric.1, severity_for(40));
+        // Remaining dollars on the row; the used share and spend in the bar
+        // and caption, exactly as the included credits read.
+        assert_eq!(metric.2, "$150.00");
+        let footnote = sections
+            .iter()
+            .find_map(|s| match s {
+                Section::Metric {
+                    label, footnote, ..
+                } if label == "Cloud session credits" => Some(footnote.clone()),
+                _ => None,
+            })
+            .expect("the footnote");
+        // No expiry was reported, so the caption stops at the spend.
+        assert_eq!(footnote, "$100.00 of $250.00 used (40%)");
+    }
+
+    #[test]
+    fn anthropic_locked_cloud_credits_without_an_expiry_says_locked() {
+        // No expires_at → the lock stands alone, with no leading separator.
+        let snap = claude_snapshot_with_credits(
+            Some(CloudCredits {
+                limit: Cents(25000),
+                remaining: Cents(25000),
+                expires_at: None,
+                locked: true,
+            }),
+            None,
+        );
+        let sections = sections_for(&ready(snap), now(), 5);
+        let footnote = sections
+            .iter()
+            .find_map(|s| match s {
+                Section::Metric {
+                    label, footnote, ..
+                } if label == "Cloud session credits" => Some(footnote.clone()),
+                _ => None,
+            })
+            .expect("a cloud session credits metric");
+        // No expiry clause, so the lock appends straight onto the spend
+        // caption with its own separator — never an empty or dangling one.
+        assert_eq!(footnote, "$0.00 of $250.00 used (0%) · locked");
+    }
+
+    #[test]
+    fn anthropic_cloud_and_usage_credits_sit_between_extra_usage_and_resets() {
+        let credits = ResetCredits {
+            available: 1,
+            credits: vec![ResetCredit {
+                title: Some("Opus launch reset".into()),
+                expires_at: Some(now() + chrono::Duration::days(20)),
+            }],
+        };
+        let mut snap = claude_snapshot_with_credits(
+            Some(CloudCredits {
+                limit: Cents(25000),
+                remaining: Cents(25000),
+                expires_at: Some(now() + chrono::Duration::days(10)),
+                locked: false,
+            }),
+            Some(UsageCredits {
+                balance: Cents(1500),
+                decimal_places: 2,
+                currency: Some("USD".into()),
+                auto_reload: Some(true),
+            }),
+        );
+        if let VendorSnapshot::Anthropic(a) = &mut snap {
+            a.extra = Some(ExtraUsage {
+                limit: Some(Cents(5000)),
+                spent: Cents(250),
+                currency: None,
+                decimal_places: Some(2),
+                status: crate::usage::ExtraUsageStatus::Active,
+            });
+            a.reset_credits = credits;
+        }
+        let sections = sections_for(&ready(snap), now(), 5);
+        let index_of = |probe: &str| {
+            sections
+                .iter()
+                .position(|s| {
+                    matches!(
+                        s,
+                        Section::Metric { label, .. }
+                            | Section::Block { label, .. } if label == probe
+                    )
+                })
+                .unwrap_or_else(|| panic!("missing section {probe}"))
+        };
+        let extra = index_of("Extra usage");
+        let cloud = index_of("Cloud session credits");
+        let usage = index_of("Usage credits");
+        let resets = index_of("Reset credits");
+        assert!(
+            extra < cloud && cloud < usage && usage < resets,
+            "order must be Extra usage < Cloud < Usage credits < Reset credits: {extra} < {cloud} < {usage} < {resets}"
+        );
+    }
+
+    #[test]
+    fn anthropic_usage_credits_render_as_a_block_with_the_balance_and_flag() {
+        for (auto_reload, expected) in [
+            (Some(true), vec!["balance: $15.00", "auto-reload: on"]),
+            (Some(false), vec!["balance: $15.00", "auto-reload: off"]),
+            (None, vec!["balance: $15.00"]),
+        ] {
+            let snap = claude_snapshot_with_credits(
+                None,
+                Some(UsageCredits {
+                    balance: Cents(1500),
+                    decimal_places: 2,
+                    currency: Some("USD".into()),
+                    auto_reload,
+                }),
+            );
+            let sections = sections_for(&ready(snap), now(), 5);
+            let body = sections
+                .iter()
+                .find_map(|s| match s {
+                    Section::Block { label, body } if label == "Usage credits" => {
+                        Some(body.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("usage credits block, auto_reload {auto_reload:?}"));
+            assert_eq!(body, expected, "auto_reload {auto_reload:?}");
+        }
+
+        // A reported zero balance renders at the currency's own scale —
+        // not as a $0.00 claim for a zero-exponent currency.
+        let snap = claude_snapshot_with_credits(
+            None,
+            Some(UsageCredits {
+                balance: Cents(0),
+                decimal_places: 0,
+                currency: Some("KRW".into()),
+                auto_reload: None,
+            }),
+        );
+        let sections = sections_for(&ready(snap), now(), 5);
+        let body = sections
+            .iter()
+            .find_map(|s| match s {
+                Section::Block { label, body } if label == "Usage credits" => Some(body.clone()),
+                _ => None,
+            })
+            .expect("a reported balance renders even at zero");
+        assert_eq!(body, vec!["balance: 0 KRW"]);
+    }
+
+    #[test]
+    fn anthropic_omits_credit_sections_when_the_response_brought_none() {
+        let snap = claude_snapshot_with_credits(None, None);
+        let sections = sections_for(&ready(snap), now(), 5);
+        assert!(!sections.iter().any(|s| matches!(
+            s,
+            Section::Metric { label, .. }
+                if label == "Cloud session credits"
+        )));
+        assert!(!sections.iter().any(|s| matches!(
+            s,
+            Section::Block { label, .. } if label == "Usage credits"
+        )));
     }
 
     #[test]
@@ -3392,7 +3843,7 @@ mod tests {
             additional_limits: Vec::new(),
             unavailable_models: Vec::new(),
             credits: Some(OpenAiCredits {
-                balance: "$5.00".into(),
+                balance: "62500".into(),
                 has_credits: true,
                 unlimited: false,
                 approx_local_messages: Some((100, 200)),
@@ -3402,10 +3853,82 @@ mod tests {
             source: OpenAiSource::CodexOauth,
         };
         let sections = sections_for(&ready(VendorSnapshot::Openai(snap)), now(), 5);
+        let body = sections.iter().find_map(|s| match s {
+            Section::Block { label, body } if label == "Credits" => Some(body.clone()),
+            _ => None,
+        });
+        // The balance is a count of Codex credits, not dollars: a bare number
+        // followed by `credits`, the same line the Waybar tooltip renders. The
+        // block holds only that line — the estimated message counts (reported
+        // by both ranges here) are no longer listed under it.
+        assert_eq!(body, Some(vec!["62,500".to_string()]));
+    }
+
+    #[test]
+    fn openai_credits_block_omits_message_estimate_lines_when_both_ranges_are_reported() {
+        let snap = OpenAiSnapshot {
+            plan: "ChatGPT Plus".into(),
+            session: None,
+            weekly: None,
+            code_review: None,
+            additional_limits: Vec::new(),
+            unavailable_models: Vec::new(),
+            credits: Some(OpenAiCredits {
+                balance: "62500".into(),
+                has_credits: true,
+                unlimited: false,
+                approx_local_messages: Some((100, 200)),
+                approx_cloud_messages: Some((30, 50)),
+            }),
+            reset_credits: None,
+            source: OpenAiSource::CodexOauth,
+        };
+        let sections = sections_for(&ready(VendorSnapshot::Openai(snap)), now(), 5);
+        let body = sections
+            .iter()
+            .find_map(|s| match s {
+                Section::Block { label, body } if label == "Credits" => Some(body.clone()),
+                _ => None,
+            })
+            .expect("the Credits block is rendered");
+        // With both ranges reported, no line of the block may carry a message
+        // estimate; the balance line still does.
+        assert!(body.iter().any(|line| line.contains("62,500")));
         assert!(
-            sections
+            !body
                 .iter()
-                .any(|s| matches!(s, Section::Block { label, .. } if label == "Credits"))
+                .any(|line| line.contains("local messages") || line.contains("cloud messages"))
+        );
+    }
+
+    #[test]
+    fn openai_non_numeric_balance_is_shown_without_a_unit() {
+        let snap = OpenAiSnapshot {
+            plan: "ChatGPT Plus".into(),
+            session: None,
+            weekly: None,
+            code_review: None,
+            additional_limits: Vec::new(),
+            unavailable_models: Vec::new(),
+            credits: Some(OpenAiCredits {
+                balance: "$5.00".into(),
+                has_credits: true,
+                unlimited: false,
+                approx_local_messages: None,
+                approx_cloud_messages: None,
+            }),
+            reset_credits: None,
+            source: OpenAiSource::CodexOauth,
+        };
+        let sections = sections_for(&ready(VendorSnapshot::Openai(snap)), now(), 5);
+        let body = sections.iter().find_map(|s| match s {
+            Section::Block { label, body } if label == "Credits" => Some(body.clone()),
+            _ => None,
+        });
+        // Vendor text that is not a number keeps its own text: no `credits`.
+        assert_eq!(
+            body.as_ref().and_then(|b| b.first()),
+            Some(&"$5.00".to_string())
         );
     }
 
@@ -3530,6 +4053,8 @@ mod tests {
             scoped: Vec::new(),
             extra: None,
             reset_credits: credits,
+            cloud_credits: None,
+            usage_credits: None,
         };
 
         for snapshot in [

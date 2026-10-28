@@ -127,7 +127,7 @@ pub const KEY_VENDORS: &[KeyVendor] = &[
         section: VendorId::Synthetic.config_section(),
         config_key: "api_key",
         secret_label: "API key",
-        note: "subscription request quota",
+        note: "weekly credit quota",
     },
     KeyVendor {
         id: VendorId::Moonshot,
@@ -712,7 +712,7 @@ pub fn save_to_path(state: &SettingsState, path: &Path) -> Result<()> {
         // neither reads nor supports would be misleading and unsafe.
         if let Some(table) = doc
             .get_mut("copilot")
-            .and_then(toml_edit::Item::as_table_mut)
+            .and_then(toml_edit::Item::as_table_like_mut)
         {
             table.remove("token");
             table.remove("token_env");
@@ -1070,7 +1070,7 @@ fn set_string(doc: &mut DocumentMut, section: &str, key: &str, new_value: &str) 
     let table = doc
         .entry(section)
         .or_insert_with(toml_edit::table)
-        .as_table_mut()
+        .as_table_like_mut()
         .ok_or_else(|| AppError::Other(format!("config.toml: [{section}] is not a table")))?;
 
     if let Some(item) = table.get_mut(key)
@@ -3095,6 +3095,47 @@ api_key_env = "OPENROUTER_WORK_API_KEY"
         assert_eq!(reloaded.zai.plan_tier.as_deref(), Some("pro"));
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(!raw.contains("remove-me"));
+        assert!(raw.contains("zai = {"));
+        assert!(raw.contains("# keep me"));
+    }
+
+    #[test]
+    fn save_updates_a_key_and_enables_a_toml_inline_table() {
+        let (_dir, path) = temp_config(Some(
+            "zai = { enabled = false, api_key = \"old-secret\", plan_tier = \"pro\" } # keep me\n\
+             [ui]\nprimary = \"anthropic\"\n",
+        ));
+        let cfg = Config::load_from(&path).unwrap();
+        let mut state = SettingsState::from_config_with(&cfg, |_| false);
+        let input = &mut state.keys[key_index(VendorId::Zai)];
+        input.buf = "new-secret".into();
+        input.dirty = true;
+
+        save_to_path(&state, &path).unwrap();
+
+        let reloaded = Config::load_from(&path).unwrap();
+        assert_eq!(reloaded.zai.api_key.as_deref(), Some("new-secret"));
+        assert!(reloaded.zai.enabled);
+        assert_eq!(reloaded.zai.plan_tier.as_deref(), Some("pro"));
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("old-secret"));
+        assert!(raw.contains("new-secret"));
+        assert!(raw.contains("zai = {"));
+        assert!(raw.contains("# keep me"));
+    }
+
+    #[test]
+    fn enable_vendor_at_enables_a_toml_inline_table() {
+        let (_dir, path) = temp_config(Some(
+            "zai = { enabled = false, plan_tier = \"pro\" } # keep me\n\
+             [ui]\nprimary = \"anthropic\"\n",
+        ));
+        enable_vendor_at(&path, VendorId::Zai).unwrap();
+
+        let reloaded = Config::load_from(&path).unwrap();
+        assert!(reloaded.zai.enabled);
+        assert_eq!(reloaded.zai.plan_tier.as_deref(), Some("pro"));
+        let raw = std::fs::read_to_string(&path).unwrap();
         assert!(raw.contains("zai = {"));
         assert!(raw.contains("# keep me"));
     }

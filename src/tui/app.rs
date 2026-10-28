@@ -914,9 +914,16 @@ async fn build_outcome(
             let endpoints = crate::synthetic::fetch::Endpoints::default();
             let outcome = fetch_api_keyed(
                 async {
-                    crate::synthetic::fetch_snapshot(client, &api_key, &cache, &endpoints, ttl)
-                        .await
-                        .map(Into::into)
+                    crate::synthetic::fetch_snapshot(
+                        client,
+                        &api_key,
+                        &cache,
+                        &endpoints,
+                        ttl,
+                        config.synthetic.plan_tier.as_deref(),
+                    )
+                    .await
+                    .map(Into::into)
                 },
                 &api_key,
             )

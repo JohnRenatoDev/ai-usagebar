@@ -727,7 +727,15 @@ async fn synthetic_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let endpoints = synthetic::fetch::Endpoints::default();
     let outcome = match fetch_api_keyed(
         async {
-            synthetic::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL).await
+            synthetic::fetch_snapshot(
+                &client,
+                &api_key,
+                &cache,
+                &endpoints,
+                DEFAULT_TTL,
+                config.synthetic.plan_tier.as_deref(),
+            )
+            .await
         },
         &api_key,
     )
@@ -1491,6 +1499,8 @@ mod tests {
                 scoped: vec![],
                 extra: None,
                 reset_credits: Default::default(),
+                cloud_credits: None,
+                usage_credits: None,
             },
             stale: false,
             last_error: None,

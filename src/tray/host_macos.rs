@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -15,11 +16,11 @@ use objc2::{AnyThread, Message};
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
     NSApplication, NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSColor,
-    NSCompositingOperation, NSEvent, NSFont, NSFontAttributeName, NSFontWeightSemibold,
-    NSForegroundColorAttributeName, NSGlassEffectView, NSGlassEffectViewStyle, NSImage,
-    NSImageScaling, NSScreen, NSStringDrawing, NSView, NSVisualEffectBlendingMode,
-    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
-    NSWindowOrderingMode,
+    NSCompositingOperation, NSEvent, NSEventMask, NSFont, NSFontAttributeName,
+    NSFontWeightSemibold, NSForegroundColorAttributeName, NSGlassEffectView,
+    NSGlassEffectViewStyle, NSImage, NSImageScaling, NSPasteboard, NSPasteboardTypePNG, NSScreen,
+    NSStringDrawing, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode,
 };
 use objc2_foundation::{
     MainThreadMarker, NSAttributedStringKey, NSData, NSDictionary, NSPoint, NSRect, NSSize,
@@ -78,6 +79,8 @@ enum UserEvent {
     Ipc(String),
     Report(Value),
     FocusPopover,
+    /// A mouse press in another app while the popover is open.
+    ClickOutside,
     Hotkey,
     Facts,
     /// An update is ready: start the verified exe and quit, or, with `None`, just quit because
@@ -157,7 +160,8 @@ struct TrayState {
     payload: Value,
     js_ready: bool,
     popover_open: bool,
-    blur_guard_until: Option<Instant>,
+    /// The global mouse-down monitor, installed while the popover is open.
+    outside_clicks: Option<Retained<AnyObject>>,
     /// Cocoa (points, y-up) location of the last click / shortcut, used to
     /// keep the popover on that screen instead of tao's primary-display space.
     last_anchor: Option<(f64, f64)>,
@@ -285,7 +289,7 @@ fn run_loop() -> Result<(), String> {
         payload: empty,
         js_ready: false,
         popover_open: false,
-        blur_guard_until: None,
+        outside_clicks: None,
         last_anchor: None,
         popover_height: WINDOW_HEIGHT,
         theme,
@@ -326,15 +330,21 @@ fn run_loop() -> Result<(), String> {
             }
             Event::UserEvent(UserEvent::FocusPopover) => {
                 if state.popover_open {
-                    guard_blur(&mut state);
                     state.window.set_focus();
+                }
+            }
+            Event::UserEvent(UserEvent::ClickOutside) => {
+                if state.popover_open {
+                    hide_popover(&mut state);
                 }
             }
             Event::WindowEvent {
                 event: WindowEvent::Focused(false),
                 ..
             } => {
-                if !blur_guarded(&state) && state.popover_open {
+                if state.popover_open
+                    && super::blur::macos_verdict(mouse_button_down()) == super::blur::Verdict::Hide
+                {
                     hide_popover(&mut state);
                 }
             }
@@ -390,8 +400,7 @@ fn spawn_worker(
                     match rx.recv_timeout(wait) {
                         Ok(WorkerCmd::Refresh) | Err(mpsc::RecvTimeoutError::Timeout) => break,
                         Ok(WorkerCmd::Providers) => {
-                            if let Some(providers) = super::providers::take_due() {
-                                with_facts(&facts, |f| f.providers = providers);
+                            if super::providers::refresh_due(&facts) {
                                 let _ = proxy.send_event(UserEvent::Facts);
                             }
                         }
@@ -558,12 +567,9 @@ fn switch_with(tray: &std::path::Path, vendor: &str, label: &str) -> String {
 
 async fn push_report(proxy: &EventLoopProxy<UserEvent>, facts: &SharedFacts) {
     refresh_account_facts(facts);
+    super::providers::refresh_due(facts);
     let mut snapshot = facts_snapshot(facts);
     snapshot.startup_enabled = startup::is_enabled();
-    if let Some(providers) = super::providers::take_due() {
-        with_facts(facts, |f| f.providers.clone_from(&providers));
-        snapshot.providers = providers;
-    }
     let now = now_ms();
     let payload = match crate::report::collect_json().await {
         Ok(json) => wrap_report(&json, &snapshot, now, None),
@@ -798,6 +804,27 @@ fn push_to_webview(state: &TrayState) {
     let json = popover_payload(state);
     let script = format!("window.__AIUB_APPLY__ && window.__AIUB_APPLY__({json})");
     let _ = webview.evaluate_script(&script);
+}
+
+/// The `copy-image` answer: the page installs `__AIUB_IMAGE_COPIED__` on load, so with no
+/// webview there is nothing to evaluate it in. The script is built by
+/// `clipboard_image::copied_reply_script` with the request's id, so the page matches the
+/// reply to its own request instead of its position in a queue.
+fn reply_image_copied(state: &TrayState, id: Option<&str>, copied: bool) {
+    if let Some(webview) = state.webview.as_ref() {
+        let _ = webview.evaluate_script(&super::clipboard_image::copied_reply_script(id, copied));
+    }
+}
+
+/// Puts the validated PNG on the system pasteboard. The pattern is OpenUsage's
+/// `ShareCardRenderer.copyToPasteboard`: clear the general pasteboard, then set the PNG
+/// type. Returns whether `setData:` succeeded — the host only answers `true` when it does.
+fn copy_png_to_clipboard(bytes: &[u8]) -> bool {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+    let data = NSData::with_bytes(bytes);
+    // SAFETY: AppKit exports the PNG pasteboard type name for the lifetime of the process.
+    unsafe { pasteboard.setData_forType(Some(&data), NSPasteboardTypePNG) }
 }
 
 fn popover_payload(state: &TrayState) -> String {
@@ -1063,11 +1090,7 @@ fn handle_ipc(state: &mut TrayState, body: &str, control_flow: &mut ControlFlow)
             let _ = state.worker.send(WorkerCmd::Refresh);
         }
         "set-provider-enabled" => {
-            let error = super::providers::set_enabled(&value)
-                .err()
-                .unwrap_or_default();
-            super::providers::request();
-            with_facts(&state.facts, |f| f.providers_error = error);
+            super::providers::set_enabled(&value, &state.facts);
             apply_facts(state);
             let _ = state.worker.send(WorkerCmd::Refresh);
         }
@@ -1182,6 +1205,18 @@ fn handle_ipc(state: &mut TrayState, body: &str, control_flow: &mut ControlFlow)
         }
         "snooze-update" => {
             let _ = state.worker.send(WorkerCmd::SnoozeUpdate);
+        }
+        "copy-image" => {
+            let id = super::clipboard_image::copy_request_id(&value);
+            // No valid id: no `png_from_ipc`, no clipboard — the reply is `null, false`.
+            let copied = match id {
+                Some(_) => match super::clipboard_image::png_from_ipc(&value) {
+                    Ok(bytes) => copy_png_to_clipboard(&bytes),
+                    Err(_reason) => false,
+                },
+                None => false,
+            };
+            reply_image_copied(state, id, copied);
         }
         _ => {}
     }
@@ -1323,9 +1358,9 @@ fn show_popover(state: &mut TrayState) {
         state.last_anchor = Some(cocoa_mouse());
     }
     position_popover(state);
-    guard_blur(state);
     state.window.set_visible(true);
     state.popover_open = true;
+    watch_outside_clicks(state);
     if let Some(webview) = state.webview.as_ref() {
         let _ = webview.evaluate_script(&format!(
             "window.__AIUB_LOCKCLICKS__ && window.__AIUB_LOCKCLICKS__({CLICK_LOCK_MS})"
@@ -1342,21 +1377,10 @@ fn show_popover(state: &mut TrayState) {
     });
 }
 
-fn blur_guarded(state: &TrayState) -> bool {
-    state
-        .blur_guard_until
-        .is_some_and(|until| Instant::now() < until)
-}
-
-const BLUR_GUARD: Duration = Duration::from_millis(400);
-
-fn guard_blur(state: &mut TrayState) {
-    state.blur_guard_until = Some(Instant::now() + BLUR_GUARD);
-}
-
 fn hide_popover(state: &mut TrayState) {
     state.window.set_visible(false);
     state.popover_open = false;
+    stop_watching_outside_clicks(state);
     // Closing lands the next open on the dashboard, so a screen choice still
     // waiting for `ready` is dropped too.
     state.pending_menu_action = None;
@@ -1364,6 +1388,36 @@ fn hide_popover(state: &mut TrayState) {
         let _ =
             webview.evaluate_script("window.__AIUB_VISIBLE__ && window.__AIUB_VISIBLE__(false)");
     }
+}
+
+/// Close on a click in another app. A focus loss alone does not say whether the user clicked
+/// elsewhere or an app brought itself forward, and once the popover has lost focus macOS sends
+/// no second loss for the click that should close it. A global monitor only receives events
+/// meant for other processes, so a click on the popover, the status item or one of our menus
+/// never arrives here.
+fn watch_outside_clicks(state: &mut TrayState) {
+    if state.outside_clicks.is_some() {
+        return;
+    }
+    let proxy = state.proxy.clone();
+    let block = RcBlock::new(move |_event: NonNull<NSEvent>| {
+        let _ = proxy.send_event(UserEvent::ClickOutside);
+    });
+    let mask =
+        NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown | NSEventMask::OtherMouseDown;
+    state.outside_clicks = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(mask, &block);
+}
+
+fn stop_watching_outside_clicks(state: &mut TrayState) {
+    if let Some(monitor) = state.outside_clicks.take() {
+        // SAFETY: `monitor` is the object `addGlobalMonitorForEventsMatchingMask:handler:`
+        // returned, which is exactly what `removeMonitor:` takes.
+        unsafe { NSEvent::removeMonitor(&monitor) };
+    }
+}
+
+fn mouse_button_down() -> bool {
+    NSEvent::pressedMouseButtons() != 0
 }
 
 fn toggle_popover_from_keyboard(state: &mut TrayState) {

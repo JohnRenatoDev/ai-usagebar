@@ -12,37 +12,7 @@
   reads "No API key" opens the same dialog instead of pointing at the TUI,
   and "No providers enabled" opens Customize.
 
-### Changed
-
-- **The tray lists providers once, and accounts live in tabs.** Customize
-  and Settings → Providers showed the dashboard's cards (a switch that
-  only hid a card) above an All providers list (a switch that turned the
-  provider off in `config.toml`). They are one list now: each provider has
-  one switch, which turns it on or off in `config.toml`; providers that
-  are on come first, in the dashboard's order, and drag to reorder. Cards
-  hidden with the old switch show again; turn the provider off instead.
-  The accounts of a provider no longer list under the row: every row is
-  uniform — name, a subtitle ("Default, work · 6 metrics" with several
-  accounts), a discreet "+" that adds an account, the switch, the
-  chevron — and the dashboard groups a provider's accounts into one card,
-  its tabs under the header (the native style's provider tabs are per
-  provider too), with the choice remembered per provider; the provider
-  detail carries the same selector at the top. An enabled provider that
-  still needs its credential shows its hint in the tooltip of an alert icon
-  beside the name instead of as text under it, and its sign-in action is an
-  icon in the "+" column, so the name is no longer cut.
-
 ### Fixed
-
-- **Cursor still reads the IDE session after 3.27.12's opaque token.** That
-  release replaced the `cursorAuth/accessToken` JWT with an opaque `curs…`
-  string, so the provider's claim decoding failed and reported "session token
-  could not be decoded" for a signed-in IDE (#503). The account identity now
-  comes from `cursorAuth/cachedScopedProfile`'s `authId` — the same
-  `issuer|userId` value the JWT's `sub` used to carry — and the session cookie
-  is built exactly as before from that id and the token, whatever its format.
-  A JWT is still preferred when present, and an opaque token with no cached
-  profile keeps the original sign-in error.
 
 - **Saving `config.toml` from the tray, the TUI, and the CLI waits for the
   other instead of overwriting it.** Their saves are read-modify-writes of
@@ -84,6 +54,151 @@
   `http`/`https` URL outside it is handed to the default browser (the same
   path as the `open-url` command) and denied in place, and anything else —
   `file://`, `javascript:`, a new window from `window.open` — is refused.
+
+## [1.45.0] — 2026-10-27
+
+### Added
+
+- **Claude shows its cloud session credits and usage-credit balance.**
+  The usage response carries the credit Claude Code's cloud sessions draw
+  from and, when usage credits hold a prepaid balance, that balance and
+  whether auto-reload is on. The tray, the TUI, `usage --json` and the
+  Waybar tooltip now list them under the account, e.g. `Cloud session
+  credits — $250.00, $0.00 of $250.00 used, expires Nov 5`. A balance
+  the response does not report is not shown, never as `$0`.
+
+- **Copy a provider's card as an image.** The tray popover's card header
+  has a copy button, and its right-click menu a Copy as Image
+  item: either puts a PNG of that card on the clipboard, drawn on an
+  opaque background in the current theme with a margin around the card,
+  without the drag handle or header buttons, and the footer says when it is
+  copied.
+
+### Changed
+
+- **The tray lists providers once, and accounts live in tabs.** Customize
+  and Settings → Providers showed the dashboard's cards (a switch that
+  only hid a card) above an All providers list (a switch that turned the
+  provider off in `config.toml`). They are one list now: each provider has
+  one switch, which turns it on or off in `config.toml`; providers that
+  are on come first, in the dashboard's order, and drag to reorder. Cards
+  hidden with the old switch show again; turn the provider off instead.
+  The accounts of a provider no longer list under the row: every row is
+  uniform — name, a subtitle ("Default, work · 6 metrics" with several
+  accounts), a discreet "+" that adds an account, the switch, the
+  chevron — and the dashboard groups a provider's accounts into one card,
+  its tabs under the header (the native style's provider tabs are per
+  provider too), with the choice remembered per provider; the provider
+  detail carries the same selector at the top. An enabled provider that
+  still needs its credential shows its hint in the tooltip of an alert icon
+  beside the name instead of as text under it, and its sign-in action is an
+  icon in the "+" column, so the name is no longer cut.
+
+### Fixed
+
+- **The generic `{icon}` placeholder works for all built-in providers.** OpenCode
+  Go, Command Code, Cline, and Nous Research omitted `"icon"` from their
+  placeholder maps, so cross-provider format strings like `--format "{icon} {session_pct}%"`
+  rendered the literal string `{icon}` on the bar (#520). Each provider now outputs
+  its designated bar icon.
+
+- **`~` now works in `[opencode-go] auth_paths` and `[droid] cli_path`.**
+  Every other path setting expands a leading `~` when the config loads, but
+  these two kept it literally. Configuring `auth_paths` with a `~` path
+  prevented OpenCode Go from detecting or reading credentials in home, and
+  `cli_path = "~/.local/bin/droid"` caused Droid token renewal spawns to fail
+  with NotFound.
+
+- **SuperGrok {icon} placeholder outputs the Grok bar icon.** The placeholder
+  previously expanded to the Claude icon (`󰚩`) instead of Grok's mark (`󰇷`),
+  having inherited the constant from the Claude renderer. It now returns
+  `VendorId::Supergrok.bar_icon()` directly (#513).
+
+- **Codex credits read as credits, not dollars.** The usage response's
+  credit balance is a count of Codex credits, but the tooltip, the TUI and
+  the tray showed it as `$62500.00`. It now shows `62,500` under Credits,
+  and `{oai_credit_balance}` carries the bare number. The estimated local
+  and cloud message counts are no longer listed under it; the
+  `{oai_local_msgs}` and `{oai_cloud_msgs}` placeholders still carry them.
+  **Custom `--format` strings reading the dollar form must be updated.**
+
+- **A provider's switch in the tray moves when it is clicked.** Turning a
+  provider on or off in Customize or Settings → Providers wrote
+  `config.toml` at once, but the switch stayed put until the next report —
+  every enabled provider fetched again — which took seconds. It moves now,
+  and a catalog read that started before the click can no longer put it
+  back.
+
+- **The macOS popover stays open when another app brings itself forward.**
+  It closed on any loss of focus, so an app that activated itself — a Teams
+  call or message, a system alert — closed it while it was being read or
+  clicked, while a quick click outside right after opening did not close it
+  at all. It now closes at once on any click outside it, which a global
+  mouse-down monitor sees; an app that activates itself, or a keyboard
+  switch, leaves it open until the next click elsewhere.
+
+- **Updating and enabling sections configured as TOML inline tables succeeds.**
+  Setting a non-empty API key, toggling an inline-table provider in TUI
+  settings, updating scalar preferences, or running first-run vendor detection
+  previously failed with `config.toml: [<section>] is not a table`. The writer
+  helpers now operate over `TableLike`, preserving the inline table format,
+  surrounding comments, and existing fields (#511).
+
+- **Synthetic usage after the weekly-only quota change.** Synthetic retired
+  the five-hour request window and made the regenerating weekly credit budget
+  the sole plan metric; the old `subscription.requests` counter is still
+  echoed by `/v2/quotas` but is no longer tracked, so the bar sat at 0%
+  forever. The provider now reads `planWeeklyLimit` (percentage-only
+  subscription plans) or `weeklyTokenLimit` (credit-denominated usage-based
+  plans) from the same endpoint, following the precedence Synthetic's own
+  Octofriend uses: the plan object wins and the token variant contributes its
+  credit figures when both appear. The bar shows the weekly percentage and a
+  countdown to the next ~2% regeneration tick, the tooltip and TUI add credit
+  spend (`used / max`) and next-regen amounts when the plan reports them, and
+  `{synthetic_requests}`/`{synthetic_limit}` now expand to those credit
+  figures — empty on percentage-only plans — while `{weekly_pct}` and
+  `{weekly_reset}` are populated for the first time. The stale pre-change
+  cache fails the new parser and is refetched automatically. The panel's
+  countdown for the weekly window now reads
+  "Regenerates 2% in 3h 4m · 12:30" (locale-aware) instead of
+  "Resets in …": the metric carries a new `regen` field naming the refill
+  amount, the standalone "Next regen" row is gone, and the TUI footnote uses
+  the same wording. Printed percentages keep the API's decimal precision —
+  the report metric carries `percent_precise` and the panel, hero, and bar
+  read "70.5%" rather than collapsing the figure to a whole number. The
+  refilling budget also reports `reading: "left"`, so the panel and bar read
+  Synthetic as what remains (a fuel gauge) whatever the global reading
+  setting; every other provider keeps following that setting. The entry can
+  carry a plan label via `[synthetic] plan_tier` (go/standard/big — the
+  quotas API has no tier identifier), naming the panel hero, report, and
+  `{plan}` like the other providers' plans do.
+- **Cursor still reads the IDE session after 3.27.12's opaque token.** That
+  release replaced the `cursorAuth/accessToken` JWT with an opaque `curs…`
+  string, so the provider's claim decoding failed and reported "session token
+  could not be decoded" for a signed-in IDE (#503). The account identity now
+  comes from `cursorAuth/cachedScopedProfile`'s `authId` — the same
+  `issuer|userId` value the JWT's `sub` used to carry — and the session cookie
+  is built exactly as before from that id and the token, whatever its format.
+  A JWT is still preferred when present, and an opaque token with no cached
+  profile keeps the original sign-in error.
+- **An active HTTP 429 backoff survives a Cursor or Kiro cycle reset.**
+  Both providers correctly refuse a cached payload that is past its billing
+  or credit-cycle reset, but the refusal made every refresh fall through to a
+  live request even while the shared five-minute backoff was armed, so each
+  429 re-armed a backoff that the next refresh bypassed again. As for the
+  Anthropic API (#496), a refused payload during an active backoff now
+  surfaces the shared countdown without contacting the server (#515).
+
+- **The Omarchy panel follows the theme again on Qt 6.12.** Qt 6.12 added a
+  QtQuick type named `Color`, and it takes precedence over the `qs.Commons`
+  singleton of that name wherever a bare `Color` is written. Every bare read
+  then resolved to the new type instead: `Color.foreground` was undefined and
+  the panel painted black, `Color.currentThemePath` was undefined so the
+  theme's `colors.toml` never loaded and the severity colours stayed at their
+  defaults, and the watcher that reloads the theme on a theme switch was bound
+  to a type without the signals it listens for, so it never fired. The
+  affected files now qualify the singleton as `Commons.Color`, the same form
+  the settings view already used.
 
 ## [1.44.0] — 2026-10-25
 
@@ -4938,7 +5053,8 @@ vendors. Highlights:
 - Live API smoke test suite (`make smoke`) that exercises the real
   undocumented endpoints to detect schema drift before users do.
 
-[Unreleased]: https://github.com/akitaonrails/ai-usagebar/compare/v1.44.0...HEAD
+[Unreleased]: https://github.com/akitaonrails/ai-usagebar/compare/v1.45.0...HEAD
+[1.45.0]: https://github.com/akitaonrails/ai-usagebar/compare/v1.44.0...v1.45.0
 [1.44.0]: https://github.com/akitaonrails/ai-usagebar/compare/v1.43.0...v1.44.0
 [1.43.0]: https://github.com/akitaonrails/ai-usagebar/compare/v1.42.0...v1.43.0
 [1.42.0]: https://github.com/akitaonrails/ai-usagebar/compare/v1.41.0...v1.42.0

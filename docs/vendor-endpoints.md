@@ -7,7 +7,7 @@ defensive and includes opt-in live tests for catching response changes.
 
 | Vendor | Endpoint | What you see | Native desktop selector (v0.13) |
 |---|---|---|---|
-| **Claude** | `api.anthropic.com/api/oauth/usage` (undocumented) | Session (5h), Weekly (7d), model-scoped weekly (e.g. Fable), Extra usage $ | Yes |
+| **Claude** | `api.anthropic.com/api/oauth/usage` (undocumented) | Session (5h), Weekly (7d), model-scoped weekly (e.g. Fable), Extra usage $, cloud session credits + usage-credit balance when the account reports them | Yes |
 | **Codex** | `chatgpt.com/backend-api/wham/usage`, plus `…/wham/rate-limit-reset-credits` when any are banked (undocumented; both used by the official `codex` CLI) | Codex 5h and/or weekly, Code-review weekly, named extra limits with their own windows, models currently at capacity, Credits, banked reset credits + expiry | Yes |
 | **Cline** | `api.cline.bot` `/api/v1/users/me/plan` (plan name, billing period) + `/api/v1/users/me/plan/usage-limits` (undocumented; the same calls the web dashboard makes) | ClinePass's three limits — 5 hours, weekly, monthly — as the percentage Cline reports, with the reset time of each open window | No — widget/TUI only |
 | **GitHub Copilot** | `api.github.com/copilot_internal/user` (private; used by VS Code) | Premium requests, Chat, and Completions quota %, counts when supplied, plan, reset | Yes |
@@ -20,7 +20,7 @@ defensive and includes opt-in live tests for catching response changes.
 | **Kilo** | `api.kilo.ai/api/profile/balance` (undocumented; extension-internal) | Remaining credit balance ($) | No — widget/TUI only |
 | **Lyceum** | `api.lyceum.technology/api/v2/external/billing/credits` (documented) | Available USD balance and amount used; no percentage quota or reset window | No — widget/TUI only |
 | **Novita** | `api.novita.ai/openapi/v1/billing/balance/detail` (documented) | Remaining credit balance ($) | No — widget/TUI only |
-| **Synthetic** | `api.synthetic.new/v2/quotas` (documented) | Subscription requests used / limit and renewal | No — widget/TUI only |
+| **Synthetic** | `api.synthetic.new/v2/quotas` (documented) | Weekly regenerating credit budget: percent remaining + next regen tick | No — widget/TUI only |
 | **Moonshot** | `api.moonshot.ai\|.cn/v1/users/me/balance` (documented) | Account balance ($ on `.ai`, ¥ on `.cn`) | No — widget/TUI only |
 | **Grok (xAI)** | `management-api.x.ai/v1/billing/teams/{team}/prepaid/balance` (Management API; documented) | Prepaid credit balance ($) | No — widget/TUI only |
 | **SuperGrok** | `cli-chat-proxy.grok.com/v1/billing?format=credits` with the Grok CLI login's key — the call the official CLI makes for `/usage` — falling back to its `x.ai/billing` ACP extension; `grok.com` `ConsumerUiSvc/GetRemainingResets` for banked resets | Current weekly/monthly included-credit %, per-product slices (`GrokBuild` / `GrokChat` / `GrokImagine` / …), additional usage (`onDemandUsed` / `onDemandCap`) when non-zero, prepaid top-up balance, reset, banked resets + expiry. Not the docs.x.ai Management API. | No — widget/TUI only |

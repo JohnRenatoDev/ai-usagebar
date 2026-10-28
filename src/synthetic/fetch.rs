@@ -32,13 +32,14 @@ pub async fn fetch_snapshot(
     cache: &Cache,
     endpoints: &Endpoints,
     cache_ttl: Duration,
+    plan_tier: Option<&str>,
 ) -> Result<FetchOutcome> {
     cache.ensure_dir()?;
     let _lock = acquire_lock_async(&cache.lock_path(), LOCK_TIMEOUT).await?;
     let parse_cache = |bytes: &[u8]| -> Result<SyntheticSnapshot> {
         let response: Response = serde_json::from_slice(bytes)
             .map_err(|_| AppError::Schema("Synthetic quota cache is invalid".into()))?;
-        response.snapshot()
+        Ok(named(response.snapshot()?, plan_tier))
     };
 
     if let Some(bytes) = cache.fresh_payload(cache_ttl)?
@@ -50,7 +51,7 @@ pub async fn fetch_snapshot(
     match request(client, api_key, endpoints).await {
         Ok((response, snapshot)) => {
             cache.write_payload(&serde_json::to_vec(&response)?)?;
-            Ok(crate::outcome::Outcome::fresh(snapshot))
+            Ok(crate::outcome::Outcome::fresh(named(snapshot, plan_tier)))
         }
         Err(error) if error.is_transient() => {
             crate::outcome::fallback(cache, None, error, parse_cache)
@@ -64,6 +65,14 @@ pub async fn fetch_snapshot(
             let diagnostic = cache.write_last_error(code, &error.to_string());
             crate::outcome::fallback(cache, Some(diagnostic), error, parse_cache)
         }
+    }
+}
+
+/// Attach the configured plan tier label to a parsed wire snapshot.
+fn named(snapshot: SyntheticSnapshot, plan_tier: Option<&str>) -> SyntheticSnapshot {
+    SyntheticSnapshot {
+        plan: plan_tier.map(str::to_string),
+        ..snapshot
     }
 }
 
@@ -104,6 +113,8 @@ mod tests {
         (dir, cache)
     }
 
+    const PLAN_BODY: &str = r#"{"planWeeklyLimit":{"nextRegenAt":"2026-11-01T00:00:00Z","percentRemaining":80,"nextRegenPercent":2}}"#;
+
     #[tokio::test]
     async fn sends_bearer_key_and_parses_documented_shape() {
         let mut server = mockito::Server::new_async().await;
@@ -111,9 +122,7 @@ mod tests {
             .mock("GET", "/v2/quotas")
             .match_header("authorization", "Bearer syn-test")
             .with_status(200)
-            .with_body(
-                r#"{"subscription":{"limit":135,"requests":27,"renewsAt":"2026-11-01T00:00:00Z"}}"#,
-            )
+            .with_body(PLAN_BODY)
             .create_async()
             .await;
         let (_dir, cache) = cache();
@@ -125,17 +134,44 @@ mod tests {
                 quotas: format!("{}/v2/quotas", server.url()),
             },
             Duration::ZERO,
+            None,
         )
         .await
         .unwrap();
-        assert_eq!(outcome.snapshot.subscription.utilization_pct, 20);
+        assert_eq!(outcome.snapshot.weekly.utilization_pct, 20);
+        assert_eq!(outcome.snapshot.plan, None);
         assert!(!outcome.stale);
     }
 
+    #[tokio::test]
+    async fn carries_the_configured_plan_tier_label() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/v2/quotas")
+            .with_status(200)
+            .with_body(PLAN_BODY)
+            .create_async()
+            .await;
+        let (_dir, cache) = cache();
+        let outcome = fetch_snapshot(
+            &reqwest::Client::new(),
+            "syn-test",
+            &cache,
+            &Endpoints {
+                quotas: format!("{}/v2/quotas", server.url()),
+            },
+            Duration::ZERO,
+            Some("Standard"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.snapshot.plan.as_deref(), Some("Standard"));
+    }
+
     const INVALID_QUOTAS: [&str; 3] = [
-        r#"{"subscription":{"limit":0,"requests":0,"renewsAt":"2026-11-01T00:00:00Z"}}"#,
-        r#"{"subscription":{"limit":135,"requests":-1,"renewsAt":"2026-11-01T00:00:00Z"}}"#,
-        r#"{"subscription":{"limit":135,"requests":27,"renewsAt":"not-a-time"}}"#,
+        r#"{"planWeeklyLimit":{"nextRegenAt":"2026-11-01T00:00:00Z","percentRemaining":-1,"nextRegenPercent":2}}"#,
+        r#"{"planWeeklyLimit":{"nextRegenAt":"2026-11-01T00:00:00Z","percentRemaining":80,"nextRegenPercent":-2}}"#,
+        r#"{"planWeeklyLimit":{"nextRegenAt":"not-a-time","percentRemaining":80,"nextRegenPercent":2}}"#,
     ];
 
     #[tokio::test]
@@ -149,7 +185,7 @@ mod tests {
                 .create_async()
                 .await;
             let (_dir, cache) = cache();
-            let good = br#"{"subscription":{"limit":135,"requests":27,"renewsAt":"2026-11-01T00:00:00Z"}}"#;
+            let good = PLAN_BODY.as_bytes();
             cache.write_payload(good).unwrap();
 
             let outcome = fetch_snapshot(
@@ -160,11 +196,12 @@ mod tests {
                     quotas: format!("{}/v2/quotas", server.url()),
                 },
                 Duration::ZERO,
+                None,
             )
             .await
             .expect("invalid wire values should fall back to the good cache");
 
-            assert_eq!(outcome.snapshot.subscription.utilization_pct, 20);
+            assert_eq!(outcome.snapshot.weekly.utilization_pct, 20);
             assert!(outcome.stale);
             assert!(!outcome.off_the_wire());
             let (code, message) = outcome.last_error.expect("schema diagnostic");
@@ -195,6 +232,7 @@ mod tests {
                 quotas: format!("{}/v2/quotas", server.url()),
             },
             Duration::ZERO,
+            None,
         )
         .await
         .unwrap_err();
@@ -218,7 +256,7 @@ mod tests {
         let (_dir, cache) = cache();
         cache
             .write_payload(
-                br#"{"subscription":{"limit":10,"requests":1,"renewsAt":"2026-11-01T00:00:00Z"}}"#,
+                br#"{"planWeeklyLimit":{"nextRegenAt":"2026-11-01T00:00:00Z","percentRemaining":90,"nextRegenPercent":2}}"#,
             )
             .unwrap();
         let outcome = fetch_snapshot(
@@ -229,6 +267,7 @@ mod tests {
                 quotas: format!("{}/v2/quotas", server.url()),
             },
             Duration::ZERO,
+            None,
         )
         .await
         .unwrap();

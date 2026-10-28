@@ -41,6 +41,7 @@ pub fn build_placeholders(
         .map(crate::format::usd)
         .unwrap_or_else(|| NEUTRAL_UNAVAILABLE.into());
     let mut values = HashMap::new();
+    values.insert("icon", VendorId::NousResearch.bar_icon().into());
     values.insert("vendor", DISPLAY_NAME.into());
     values.insert("vendor_short", VENDOR_SHORT.into());
     values.insert("plan", plan.clone());
@@ -208,6 +209,7 @@ mod tests {
         let values = build_placeholders(&snap, now);
         assert_eq!(DISPLAY_NAME, "Nous Research");
         assert_eq!(VENDOR_SHORT, "nrs");
+        assert_eq!(values["icon"], "nrs");
         assert_eq!(values["vendor"], "Nous Research");
         assert_eq!(values["vendor_short"], "nrs");
         assert_eq!(values["plan"], "Pro");

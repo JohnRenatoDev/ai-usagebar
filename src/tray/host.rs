@@ -18,19 +18,24 @@ use tray_icon::{
     Icon, MouseButton, MouseButtonState, Rect, TrayIcon, TrayIconBuilder, TrayIconEvent,
 };
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND,
+    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, GlobalFree, HANDLE, HGLOBAL, HWND,
 };
 use windows_sys::Win32::Graphics::Dwm::{
     DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_WINDOW_CORNER_PREFERENCE,
     DWMWCP_ROUND, DwmSetWindowAttribute,
 };
 use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO};
+use windows_sys::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+};
+use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows_sys::Win32::System::Threading::{CreateMutexW, GetCurrentProcessId};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindowRect,
     GetWindowTextW, GetWindowThreadProcessId, SM_CXSMICON, WindowFromPoint,
 };
+use windows_sys::w;
 use wry::http::{Request, Response, StatusCode, header::CONTENT_TYPE};
 use wry::{NewWindowResponse, WebContext, WebView, WebViewBuilder};
 
@@ -477,8 +482,7 @@ fn spawn_worker(
                     match rx.recv_timeout(wait) {
                         Ok(WorkerCmd::Refresh) | Err(mpsc::RecvTimeoutError::Timeout) => break,
                         Ok(WorkerCmd::Providers) => {
-                            if let Some(providers) = super::providers::take_due() {
-                                with_facts(&facts, |f| f.providers = providers);
+                            if super::providers::refresh_due(&facts) {
                                 let _ = proxy.send_event(UserEvent::Facts);
                             }
                         }
@@ -525,13 +529,10 @@ fn host_facts(config: &Config) -> HostFacts {
 }
 
 async fn push_report(proxy: &EventLoopProxy<UserEvent>, facts: &SharedFacts) {
+    super::providers::refresh_due(facts);
     let mut snapshot = facts_snapshot(facts);
     snapshot.accent = super::accent::read_accent();
     snapshot.startup_enabled = startup::is_enabled();
-    if let Some(providers) = super::providers::take_due() {
-        with_facts(facts, |f| f.providers.clone_from(&providers));
-        snapshot.providers = providers;
-    }
     let now = now_ms();
     let payload = match crate::report::collect_json().await {
         Ok(json) => wrap_report(&json, &snapshot, now, None),
@@ -727,6 +728,67 @@ fn push_to_webview(state: &TrayState) {
     let _ = webview.evaluate_script(&script);
 }
 
+/// The `copy-image` answer: the page installs `__AIUB_IMAGE_COPIED__` on load, so with no
+/// webview there is nothing to evaluate it in. The script is built by
+/// `clipboard_image::copied_reply_script` with the request's id, so the page matches the
+/// reply to its own request instead of its position in a queue.
+fn reply_image_copied(state: &TrayState, id: Option<&str>, copied: bool) {
+    if let Some(webview) = state.webview.as_ref() {
+        let _ = webview.evaluate_script(&super::clipboard_image::copied_reply_script(id, copied));
+    }
+}
+
+/// Puts the validated PNG on the system clipboard as the registered `"PNG"` format. This slice
+/// registers only that format — `CF_DIB`/`CF_DIBV5` are deliberately absent. Any failure frees
+/// the `HGLOBAL` that did not reach the clipboard, closes it, and answers `false` to the page.
+fn copy_png_to_clipboard(window: &Window, bytes: &[u8]) -> bool {
+    let hwnd = window.hwnd() as HWND;
+    // SAFETY: `hwnd` is the live popover window; the clipboard APIs only need a window
+    // handle as their owner.
+    if unsafe { OpenClipboard(hwnd) } == 0 {
+        // Someone else holds the clipboard; nothing was allocated, nothing to clean up.
+        return false;
+    }
+
+    // From here, every failure falls through with the `HGLOBAL` still ours; only a successful
+    // `SetClipboardData` hands it to the system. The shared `CloseClipboard` at the end is
+    // reached on every path.
+    let mut hglobal: HGLOBAL = std::ptr::null_mut();
+    let mut delivered = false;
+    unsafe {
+        if EmptyClipboard() != 0 {
+            let format = RegisterClipboardFormatW(w!("PNG"));
+            // A format of 0 means the registration failed; `SetClipboardData` would reject it.
+            if format != 0 {
+                hglobal = GlobalAlloc(GMEM_MOVEABLE, bytes.len());
+                let start = if hglobal.is_null() {
+                    std::ptr::null_mut()
+                } else {
+                    GlobalLock(hglobal)
+                };
+                if !start.is_null() {
+                    // SAFETY: `start` is the writable, locked view of `hglobal`, sized exactly
+                    // for `bytes`; `bytes` outlives the copy.
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), start.cast(), bytes.len());
+                    GlobalUnlock(hglobal);
+                    delivered = !SetClipboardData(format, hglobal).is_null();
+                }
+            }
+        }
+    }
+    if !delivered && !hglobal.is_null() {
+        // SAFETY: `hglobal` came from `GlobalAlloc` above and `SetClipboardData` never took it.
+        unsafe {
+            GlobalFree(hglobal);
+        }
+    }
+    // SAFETY: the clipboard was opened above and is still owned by this thread.
+    unsafe {
+        CloseClipboard();
+    }
+    delivered
+}
+
 fn handle_tray(state: &mut TrayState, event: TrayIconEvent) {
     match event {
         TrayIconEvent::Click {
@@ -819,11 +881,7 @@ fn handle_ipc(state: &mut TrayState, body: &str, control_flow: &mut ControlFlow)
             let _ = state.worker.send(WorkerCmd::Refresh);
         }
         "set-provider-enabled" => {
-            let error = super::providers::set_enabled(&value)
-                .err()
-                .unwrap_or_default();
-            super::providers::request();
-            with_facts(&state.facts, |f| f.providers_error = error);
+            super::providers::set_enabled(&value, &state.facts);
             apply_facts(state);
             let _ = state.worker.send(WorkerCmd::Refresh);
         }
@@ -885,6 +943,18 @@ fn handle_ipc(state: &mut TrayState, body: &str, control_flow: &mut ControlFlow)
         }
         "snooze-update" => {
             let _ = state.worker.send(WorkerCmd::SnoozeUpdate);
+        }
+        "copy-image" => {
+            let id = super::clipboard_image::copy_request_id(&value);
+            // No valid id: no `png_from_ipc`, no clipboard — the reply is `null, false`.
+            let copied = match id {
+                Some(_) => match super::clipboard_image::png_from_ipc(&value) {
+                    Ok(bytes) => copy_png_to_clipboard(&state.window, &bytes),
+                    Err(_reason) => false,
+                },
+                None => false,
+            };
+            reply_image_copied(state, id, copied);
         }
         _ => {}
     }

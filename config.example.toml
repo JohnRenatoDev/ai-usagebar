@@ -400,11 +400,14 @@ api_key_env = "NOVITA_API_KEY"     # checked first; if set + non-empty, used
 # headline = "amount"              # "amount" | "percent"
 
 [synthetic]
-# Disabled by default. Reads the documented subscription request quota from
-# https://api.synthetic.new/v2/quotas.
+# Disabled by default. Reads the regenerating weekly credit budget (the sole
+# plan metric) from https://api.synthetic.new/v2/quotas.
 enabled = false
 api_key_env = "SYNTHETIC_API_KEY"
 # api_key = "..."                  # fallback; chmod 600 the file if used
+# Optional display-only plan label — the quotas API carries no tier
+# identifier, so set it to one of: Go / Standard / Big.
+# plan_tier = "Standard"
 
 [lyceum]
 # Disabled by default; this reads only the credits endpoint, not inference.

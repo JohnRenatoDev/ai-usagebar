@@ -86,6 +86,45 @@ pub struct AnthropicSnapshot {
     /// Codex's rate-limit reset credits and SuperGrok's remaining resets.
     /// Empty when the account has no grant or the endpoint withheld the block.
     pub reset_credits: ResetCredits,
+    /// Claude Code's cloud session credits, from the `iguana_necktie` block:
+    /// the dollar limit its cloud sessions draw from, what is left, when it
+    /// expires, and whether the grant is locked. `None` unless the response
+    /// reports a usable limit.
+    pub cloud_credits: Option<CloudCredits>,
+    /// The prepaid usage-credit balance, from `spend.balance`. `None` unless
+    /// the response reports a balance we can express — a balance the
+    /// response does not report is never shown, never as $0.
+    pub usage_credits: Option<UsageCredits>,
+}
+
+/// Cloud session credits (the usage response's `iguana_necktie` block).
+/// Both amounts are whole cents in USD — the wire is dollars, converted at
+/// the parse boundary so the snapshot, which derives `Eq`, stays integer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloudCredits {
+    pub limit: Cents,
+    pub remaining: Cents,
+    /// `resets_at` as RFC 3339. `None` when the wire omitted it or it does
+    /// not parse.
+    pub expires_at: Option<DateTime<Utc>>,
+    /// `locked_reason` was a non-empty string: the grant exists but cannot
+    /// currently be drawn on.
+    pub locked: bool,
+}
+
+/// The prepaid usage-credit balance (the usage response's `spend.balance`).
+/// The filled-in shape of `balance` has never been observed on the wire, so
+/// the parse interprets it after the fact and only then lifts it here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageCredits {
+    /// Balance in minor units of `currency`, at the scale of
+    /// `decimal_places`.
+    pub balance: Cents,
+    pub decimal_places: u32,
+    pub currency: Option<String>,
+    /// Whether the balance auto-reloads, when the response says so —
+    /// `None` means "not reported", not "off".
+    pub auto_reload: Option<bool>,
 }
 
 /// A usage window scoped to a specific model, labeled by the API
@@ -679,16 +718,39 @@ pub struct NovitaSnapshot {
 
 impl Eq for NovitaSnapshot {}
 
-/// Synthetic subscription quota from the documented `/v2/quotas`
-/// `subscription` object.
+/// Synthetic's sole limit from `/v2/quotas`: the regenerating weekly credit
+/// budget (`planWeeklyLimit`, percentage-only) or its credit-denominated
+/// variant (`weeklyTokenLimit`). The legacy five-hour `subscription` counter
+/// stopped being tracked when the weekly window became the only metric.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SyntheticSnapshot {
-    pub subscription: UsageWindow,
-    pub requests: f64,
-    pub limit: f64,
+    /// Configured plan tier label (go/standard/big) — the quotas API has no
+    /// tier identifier, so this is display-only config.
+    pub plan: Option<String>,
+    pub weekly: UsageWindow,
+    /// Credit spend figures when the plan reports a credit budget.
+    pub credits: Option<WeeklyCredits>,
+    /// Percentage points restored at the next regeneration tick.
+    pub next_regen_percent: Option<f64>,
+    /// The used share with the API's decimal precision preserved (the
+    /// integer `weekly.utilization_pct` is what meters and severity colors
+    /// use); frontends that print a figure read this so "70.5" does not
+    /// collapse to "70".
+    pub utilization_precise: f64,
 }
 
 impl Eq for SyntheticSnapshot {}
+
+/// Credit figures for Synthetic's weekly token budget.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeeklyCredits {
+    pub used: f64,
+    pub max: f64,
+    /// Credits restored at the next regeneration tick.
+    pub next_regen: f64,
+}
+
+impl Eq for WeeklyCredits {}
 
 /// Lyceum's platform credit balance is denominated in USD, not a percentage quota.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -990,11 +1052,14 @@ pub enum OpenAiSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiCredits {
-    /// Credit balance, formatted dollars ("$0.00", "$5.00", etc.) — kept as
-    /// a string because OpenAI returns it that way.
+    /// Credit balance as a bare count of Codex credits ("62500", "12.5"),
+    /// not dollars. A value the vendor sends that is not a number is kept as
+    /// it came, so this stays a string.
     pub balance: String,
     pub has_credits: bool,
     pub unlimited: bool,
+    /// OpenAI's estimate of how many messages the balance buys. Only the
+    /// `{oai_local_msgs}`/`{oai_cloud_msgs}` placeholders carry them now.
     pub approx_local_messages: Option<(i64, i64)>,
     pub approx_cloud_messages: Option<(i64, i64)>,
 }
@@ -1273,6 +1338,8 @@ mod tests {
                 status: ExtraUsageStatus::Active,
             }),
             reset_credits: Default::default(),
+            cloud_credits: None,
+            usage_credits: None,
         }
     }
 

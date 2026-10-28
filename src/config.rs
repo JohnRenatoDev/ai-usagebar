@@ -677,7 +677,7 @@ pub(crate) fn set_bool(
     let table = doc
         .entry(section)
         .or_insert_with(toml_edit::table)
-        .as_table_mut()
+        .as_table_like_mut()
         .ok_or_else(|| AppError::Other(format!("config.toml: [{section}] is not a table")))?;
 
     if let Some(item) = table.get_mut(key)
@@ -712,7 +712,7 @@ pub(crate) fn set_value(
     let table = doc
         .entry(section)
         .or_insert_with(toml_edit::table)
-        .as_table_mut()
+        .as_table_like_mut()
         .ok_or_else(|| AppError::Other(format!("config.toml: [{section}] is not a table")))?;
 
     let Some(mut new_value) = new_value else {
@@ -1766,6 +1766,9 @@ pub struct SyntheticConfig {
     pub enabled: bool,
     pub api_key_env: String,
     pub api_key: Option<String>,
+    /// Optional plan tier label (go/standard/big) — display-only. The
+    /// quotas API carries no tier identifier, so the label is manual.
+    pub plan_tier: Option<String>,
 }
 
 impl Default for SyntheticConfig {
@@ -1774,6 +1777,7 @@ impl Default for SyntheticConfig {
             enabled: false,
             api_key_env: "SYNTHETIC_API_KEY".into(),
             api_key: None,
+            plan_tier: None,
         }
     }
 }
@@ -2583,6 +2587,12 @@ impl Config {
                 *path = expand_tilde(path);
             }
         }
+        if let Some(paths) = &mut self.opencode_go.auth_paths {
+            for path in paths {
+                *path = expand_tilde(path);
+            }
+        }
+        expand_tilde_opt(&mut self.droid.cli_path);
     }
 
     /// Explicitly enumerate every inline credential field. Adding a new
@@ -5602,6 +5612,29 @@ api_key = "synthetic-account"
     }
 
     #[test]
+    fn opencode_go_and_droid_paths_are_tilde_expanded() {
+        let file = write_toml(
+            r#"
+            [opencode-go]
+            auth_paths = ["~/.local/share/opencode/opencode.db", "/etc/opencode/auth.json"]
+
+            [droid]
+            cli_path = "~/.local/bin/droid"
+            "#,
+        );
+        let config = Config::load_from(file.path()).unwrap();
+        let home = crate::cache::home_dir().unwrap();
+        assert_eq!(
+            config.opencode_go.auth_paths,
+            Some(vec![
+                home.join(".local/share/opencode/opencode.db"),
+                PathBuf::from("/etc/opencode/auth.json"),
+            ])
+        );
+        assert_eq!(config.droid.cli_path, Some(home.join(".local/bin/droid")));
+    }
+
+    #[test]
     fn kiro_db_path_is_tilde_expanded() {
         let f = write_toml(
             r#"
@@ -6606,6 +6639,14 @@ enabled = true
     }
 
     #[test]
+    fn set_value_updates_fields_in_a_toml_inline_table() {
+        let mut doc: toml_edit::DocumentMut =
+            "tray = { shortcut = \"Ctrl+U\" } # mine\n".parse().unwrap();
+        set_value(&mut doc, "tray", "shortcut", Some("Alt+U".into())).unwrap();
+        assert_eq!(doc.to_string(), "tray = { shortcut = \"Alt+U\" } # mine\n");
+    }
+
+    #[test]
     fn enable_vendors_in_creates_a_missing_config() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("sub").join("config.toml");
@@ -6707,6 +6748,20 @@ api_key = \"k\"
 
         assert_eq!(written, vec![VendorId::Grok]);
         assert!(Config::load_from(&path).unwrap().is_enabled(VendorId::Grok));
+    }
+
+    #[test]
+    fn enable_vendors_in_enables_a_toml_inline_table() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "grok = { api_key = \"k\" }\n").unwrap();
+
+        let written = enable_vendors_in(&path, &[VendorId::Grok]).unwrap();
+
+        assert_eq!(written, vec![VendorId::Grok]);
+        assert!(Config::load_from(&path).unwrap().is_enabled(VendorId::Grok));
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("grok = {"));
     }
 
     #[test]

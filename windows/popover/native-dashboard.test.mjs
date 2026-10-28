@@ -66,6 +66,17 @@ try {
     const withoutGoal = sectionMarkup({ ...emptyLayout(), popoverStyle, usageGoal: false });
     assert.doesNotMatch(withoutGoal, /usage-goal-meter|Meta agora/);
   }
+  // The copy-as-image action sits in the header at rest, not only on hover.
+  const withCopy = renderToStaticMarkup(React.createElement(TooltipProvider, {},
+    React.createElement(LanguageProvider, { language: 'en' },
+      React.createElement(ProviderSection, {
+        account: null, card, layout: emptyLayout(), nowMs,
+        onCopyImage() {}, onCustomize() {}, onRowAction() {}, onRowMenuOpenChange() {},
+        onSwitchAccount() {}, onToggleCollapse() {}, onToggleShowAs() {},
+      }))));
+  const copyButton = withCopy.match(/<button[^>]*aria-label="Copy as image"[^>]*>/);
+  assert.ok(copyButton, 'the header renders the copy action');
+  assert.doesNotMatch(copyButton[0], /opacity-0/);
   // An inactive Claude Desktop account with a trusted CLI configured gets a
   // Prepare button beside the switch star; both usage windows survive every
   // prepare state.

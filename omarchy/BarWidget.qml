@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -471,8 +472,8 @@ BarWidget {
       id: tipBubble
       implicitWidth: Math.max(tipLabel.implicitWidth + Style.spacing.controlPaddingX * 2, Style.space(40))
       implicitHeight: Math.max(tipLabel.implicitHeight + Style.spacing.controlPaddingY * 2, Style.space(24))
-      color: Color.tooltip.background
-      borderSpec: Border.surfaceSpec("tooltip", "border", Color.tooltip.border, 1)
+      color: Commons.Color.tooltip.background
+      borderSpec: Border.surfaceSpec("tooltip", "border", Commons.Color.tooltip.border, 1)
       radius: Style.cornerRadius
 
       Text {
@@ -480,7 +481,7 @@ BarWidget {
         anchors.centerIn: parent
         textFormat: Text.RichText
         text: root.tipHtml
-        color: Color.tooltip.text
+        color: Commons.Color.tooltip.text
         font.family: button.fontFamily
         font.pixelSize: Style.font.body
         horizontalAlignment: Text.AlignLeft

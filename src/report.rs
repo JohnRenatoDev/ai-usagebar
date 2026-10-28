@@ -172,6 +172,23 @@ enum ReportSection {
         /// Absent for metrics that stand on their own.
         #[serde(skip_serializing_if = "Option::is_none")]
         group: Option<String>,
+        /// Amount the window refills by when it reopens (Synthetic's weekly
+        /// credit tick, e.g. `"2%"`). Present only for refill-style windows;
+        /// a frontend countdown reads "Regenerates X in …" instead of
+        /// "Resets in …".
+        #[serde(skip_serializing_if = "Option::is_none")]
+        regen: Option<String>,
+        /// The percentage with its decimal precision preserved (Synthetic's
+        /// weekly budget, e.g. `29.52`). Present only when the vendor's API
+        /// reports a fraction; a frontend that prints a figure uses this and
+        /// leaves the rounded `percent` to meters and severity colours.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        percent_precise: Option<f64>,
+        /// How a frontend should read the percentage (`"left"` for
+        /// refill-style windows): what remains, whatever the global
+        /// reading. Fixed windows omit the field and follow the setting.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reading: Option<String>,
         /// A per-model quota pool rather than one of the provider's shared
         /// windows (Antigravity's "Gemini 4 Argon"): a frontend that shows one
         /// figure for the provider ranks it below the shared windows, so an
@@ -554,6 +571,9 @@ fn entry_from_state(tab: &TabId, state: &TabState, now: chrono::DateTime<Utc>) -
                         .filter(|window| window.num_seconds() > 0)
                         .map(|window| window.num_seconds() as u64),
                     group: projected.group.map(str::to_string),
+                    regen: projected.regen,
+                    percent_precise: projected.percent_precise,
+                    reading: projected.reading.map(str::to_string),
                     model_pool: projected.model_pool,
                 });
             }
@@ -873,6 +893,9 @@ fn session_section(session: &ContextSession) -> ReportSection {
         reset_at: None,
         window_secs: None,
         group: Some(SESSIONS_GROUP.into()),
+        regen: None,
+        percent_precise: None,
+        reading: None,
         model_pool: false,
     }
 }
@@ -1029,6 +1052,9 @@ fn json_rows(entries: &[Entry]) -> Vec<serde_json::Value> {
                         reset_at,
                         window_secs,
                         group,
+                        regen,
+                        percent_precise,
+                        reading,
                         model_pool,
                     } => {
                         let mut metric = json!({
@@ -1046,6 +1072,15 @@ fn json_rows(entries: &[Entry]) -> Vec<serde_json::Value> {
                         }
                         if let Some(group) = group {
                             metric["group"] = json!(group);
+                        }
+                        if let Some(regen) = regen {
+                            metric["regen"] = json!(regen);
+                        }
+                        if let Some(precise) = percent_precise {
+                            metric["percent_precise"] = json!(precise);
+                        }
+                        if let Some(reading) = reading {
+                            metric["reading"] = json!(reading);
                         }
                         if *model_pool {
                             metric["model_pool"] = json!(true);
@@ -1207,6 +1242,9 @@ mod tests {
             reset_at: None,
             window_secs: None,
             group: None,
+            regen: None,
+            percent_precise: None,
+            reading: None,
             model_pool: false,
         }
     }
@@ -1729,13 +1767,15 @@ mod tests {
         for duration in [chrono::Duration::zero(), chrono::Duration::seconds(-1)] {
             let state = TabState::Ready(Box::new(ReadyTab {
                 snapshot: VendorSnapshot::Synthetic(SyntheticSnapshot {
-                    subscription: UsageWindow {
+                    weekly: UsageWindow {
                         utilization_pct: 35,
                         resets_at: Some(reset_at),
                         window_duration: duration,
                     },
-                    requests: 350.0,
-                    limit: 1000.0,
+                    plan: None,
+                    credits: None,
+                    next_regen_percent: None,
+                    utilization_precise: 35.0,
                 }),
                 stale: false,
                 last_error: None,
@@ -1751,6 +1791,60 @@ mod tests {
             assert!(first["metrics"][0]["window_secs"].is_null());
             assert!(first["sections"][1].get("window_secs").is_none());
         }
+    }
+
+    #[test]
+    fn synthetic_weekly_regen_reaches_the_report_countdown() {
+        let fetched_at = Utc::now() - chrono::Duration::minutes(1);
+        let reset_at = Utc::now() + chrono::Duration::hours(3);
+        let state = TabState::Ready(Box::new(ReadyTab {
+            snapshot: VendorSnapshot::Synthetic(SyntheticSnapshot {
+                weekly: UsageWindow {
+                    utilization_pct: 30,
+                    resets_at: Some(reset_at),
+                    window_duration: chrono::Duration::zero(),
+                },
+                plan: Some("Standard".to_string()),
+                credits: None,
+                next_regen_percent: Some(2.0),
+                utilization_precise: 30.0,
+            }),
+            stale: false,
+            last_error: None,
+            fetched_at: Some(fetched_at),
+            display: Default::default(),
+        }));
+        let projected = entry_from_state(&TabId::vendor(VendorId::Synthetic), &state, Utc::now());
+        let rendered = render_json_for_primary(&[projected], None);
+        let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        let first = &value["entries"][0];
+
+        // The refill amount rides on the metric so a frontend countdown can
+        // read "Regenerates 2% in …", and the static detail already uses that
+        // wording for consumers that do not recompose the line live.
+        assert_eq!(first["metrics"][0]["regen"], "2%");
+        assert_eq!(first["sections"][1]["regen"], "2%");
+        // The printed figure keeps the API's decimal precision; the meter
+        // stays on the rounded integer.
+        assert_eq!(first["metrics"][0]["percent_precise"], 30.0);
+        assert_eq!(first["metrics"][0]["value"], "30%");
+        // A refilling budget reads as what's left, whatever the global
+        // reading; other providers' metrics carry no reading at all.
+        assert_eq!(first["metrics"][0]["reading"], "left");
+        assert_eq!(first["sections"][1]["reading"], "left");
+        // The configured plan tier label names the entry like other
+        // providers' plans do.
+        assert_eq!(first["plan"], "Standard");
+        let detail = first["metrics"][0]["detail"].as_str().unwrap();
+        assert!(detail.starts_with("Regenerates 2% in "), "{detail}");
+        // The standalone next-regen row is gone: the countdown carries it.
+        let labels: Vec<&str> = first["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|s| s.get("label").and_then(|l| l.as_str()))
+            .collect();
+        assert!(!labels.contains(&"Next regen"), "{labels:?}");
     }
 
     // --- #255: Claude CLI sessions as grouped report rows ----------------------
@@ -2177,6 +2271,8 @@ mod tests {
                         expires_at: Some(expiry),
                     }],
                 },
+                cloud_credits: None,
+                usage_credits: None,
             }),
             stale: false,
             last_error: None,
@@ -2359,6 +2455,8 @@ mod tests {
                 scoped: vec![],
                 extra: None,
                 reset_credits: Default::default(),
+                cloud_credits: None,
+                usage_credits: None,
             }),
             stale: false,
             last_error: None,

@@ -68,6 +68,7 @@ export function TopBar({ onBack, onReset, resetArmed, resetLabel, title }: TopBa
 }
 
 interface FooterProps {
+  notice?: { failed: boolean; text: string } | null;
   nowMs: number;
   optionsOpen: boolean;
   payload: Payload;
@@ -83,8 +84,11 @@ interface FooterProps {
 /**
  * PopoverFooter: app identity + next-update countdown on the left, the Options ▾ capsule on the
  * right. A blue dot after the version says a newer build is waiting (the banner may be snoozed).
+ * `notice` is the copy-image result: the footer's own small text, the meter's red when it
+ * failed, on the same line as the Options capsule.
  */
 export function Footer({
+  notice,
   nowMs,
   optionsOpen,
   payload,
@@ -117,6 +121,18 @@ export function Footer({
         {native ? null : <span className="tabular-nums">{nextLabel}</span>}
       </div>
       <span className="min-w-[var(--gap-controls)] flex-1" />
+      {notice ? (
+        <span
+          role="status"
+          className={
+            notice.failed
+              ? "min-w-0 truncate text-[length:var(--sz-badge)] leading-[var(--leading-note)] text-meter-red"
+              : "min-w-0 truncate text-[length:var(--sz-badge)] leading-[var(--leading-note)] text-label-2"
+          }
+        >
+          {notice.text}
+        </span>
+      ) : null}
       <DropdownMenu modal={false} open={optionsOpen} onOpenChange={onOptionsOpenChange}>
         <DropdownMenuTrigger asChild>
           <button type="button" className="capsule-btn">

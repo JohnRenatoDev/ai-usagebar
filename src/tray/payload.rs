@@ -41,6 +41,10 @@ pub struct HostFacts {
     pub providers: Vec<crate::catalog::VendorStatus>,
     /// Why the last enable/disable from the popover failed, or empty.
     pub providers_error: String,
+    /// Bumped each time the popover switches a provider. A catalog read that
+    /// began under an older generation is dropped rather than published, so
+    /// it cannot put back the state the switch replaced.
+    pub providers_generation: u64,
     /// The in-flight or finished `set-api-key` check; `None` before the
     /// first send.
     pub key_check: Option<KeyCheckFact>,
@@ -158,6 +162,7 @@ impl Default for HostFacts {
             accounts: Vec::new(),
             providers: Vec::new(),
             providers_error: String::new(),
+            providers_generation: 0,
             key_check: None,
         }
     }

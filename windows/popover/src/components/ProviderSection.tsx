@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import MdiAlert from "~icons/mdi/alert";
 import MdiChevronDown from "~icons/mdi/chevron-down";
 import MdiChevronUp from "~icons/mdi/chevron-up";
+import MdiContentCopy from "~icons/mdi/content-copy";
 import MdiFire from "~icons/mdi/fire";
 import MdiLoading from "~icons/mdi/loading";
 import MdiStar from "~icons/mdi/star";
@@ -87,6 +88,7 @@ interface ProviderSectionProps {
   lifted?: boolean;
   nowMs: number;
   onCustomize?: () => void;
+  onCopyImage?: () => void;
   onRowAction?: (key: string, action: RowAction) => void;
   onRowMenuOpenChange?: (open: boolean) => void;
   onSwitchAccount?: () => void;
@@ -111,6 +113,7 @@ export function ProviderSection({
   lifted,
   nowMs,
   onCustomize,
+  onCopyImage,
   onRowAction,
   onRowMenuOpenChange,
   onSwitchAccount,
@@ -180,6 +183,7 @@ export function ProviderSection({
         handle={handle}
         nowMs={nowMs}
         onCustomize={onCustomize}
+        onCopyImage={onCopyImage}
         onSwitchAccount={onSwitchAccount}
         title={grouped ? group.name : undefined}
       />
@@ -261,13 +265,15 @@ interface ProviderSectionHeaderProps {
   /** The header's name; the card's own title when absent (a multi-account provider names itself). */
   title?: string;
   onCustomize?: () => void;
+  onCopyImage?: () => void;
   onSwitchAccount?: () => void;
 }
 
 /**
  * ProviderSectionHeader: gray provider mark, name, plan badge, stale hint, warning triangle,
- * and on the trailing edge the per-provider shortcut OpenUsage keeps in the context menu:
- * Customize (this provider's rows). An account card also gets the
+ * and on the trailing edge the per-provider shortcuts OpenUsage keeps in the context menu:
+ * copy the card as an image (only on the header's hover or focus, like the tray's own reveal)
+ * and Customize (this provider's rows). An account card also gets the
  * switch control first: a filled star on the login in use, an outline star button on the others. The
  * header is also the drag handle, so the buttons stop the pointer-down from starting a drag.
  */
@@ -278,6 +284,7 @@ export function ProviderSectionHeader({
   nowMs = 0,
   title,
   onCustomize,
+  onCopyImage,
   onSwitchAccount,
 }: ProviderSectionHeaderProps) {
   const plan = displayPlan(card.title, card.plan);
@@ -308,6 +315,14 @@ export function ProviderSectionHeader({
       <span className="min-w-[var(--gap-controls)] flex-1" />
       {account ? <DesktopPrepareControl account={account} card={card} nowMs={nowMs} /> : null}
       {account ? <AccountControl account={account} title={name} onSwitch={onSwitchAccount} /> : null}
+      {onCopyImage ? (
+        <HeaderAction
+          // Always shown, beside the customize action; the exported PNG drops it (data-exporting).
+          icon={<MdiContentCopy />}
+          label={m.copy_as_image()}
+          onClick={onCopyImage}
+        />
+      ) : null}
       {onCustomize ? (
         <HeaderAction icon={<MdiTune />} label={`${m.customize()} ${name}`} onClick={onCustomize} />
       ) : null}
