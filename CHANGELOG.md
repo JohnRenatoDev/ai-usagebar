@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+### Fixed
+
+- **Nous credential-lock waits keep the TUI responsive.** An OAuth refresh
+  waiting for another process no longer blocks the async runtime, so input,
+  timers, and other requests can progress. The lock still protects the whole
+  token rotation and credential write.
+
 ## [1.45.0] — 2026-10-27
 
 ### Added
