@@ -990,11 +990,14 @@ pub enum OpenAiSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiCredits {
-    /// Credit balance, formatted dollars ("$0.00", "$5.00", etc.) — kept as
-    /// a string because OpenAI returns it that way.
+    /// Credit balance as a bare count of Codex credits ("62500", "12.5"),
+    /// not dollars. A value the vendor sends that is not a number is kept as
+    /// it came, so this stays a string.
     pub balance: String,
     pub has_credits: bool,
     pub unlimited: bool,
+    /// OpenAI's estimate of how many messages the balance buys. Only the
+    /// `{oai_local_msgs}`/`{oai_cloud_msgs}` placeholders carry them now.
     pub approx_local_messages: Option<(i64, i64)>,
     pub approx_cloud_messages: Option<(i64, i64)>,
 }

@@ -987,18 +987,7 @@ fn openai_sections(
     }
     if let Some(c) = &s.credits {
         v.push(Section::Spacer);
-        let balance = if c.unlimited {
-            "unlimited".into()
-        } else {
-            c.balance.clone()
-        };
-        let mut body = vec![format!("balance: {}", balance)];
-        if let Some((lo, hi)) = c.approx_local_messages {
-            body.push(format!("≈ {lo}-{hi} local messages"));
-        }
-        if let Some((lo, hi)) = c.approx_cloud_messages {
-            body.push(format!("≈ {lo}-{hi} cloud messages"));
-        }
+        let body = vec![crate::openai::vendor::credit_balance_label(c)];
         v.push(Section::Block {
             label: "Credits".into(),
             body,
@@ -3392,7 +3381,7 @@ mod tests {
             additional_limits: Vec::new(),
             unavailable_models: Vec::new(),
             credits: Some(OpenAiCredits {
-                balance: "$5.00".into(),
+                balance: "62500".into(),
                 has_credits: true,
                 unlimited: false,
                 approx_local_messages: Some((100, 200)),
@@ -3402,10 +3391,82 @@ mod tests {
             source: OpenAiSource::CodexOauth,
         };
         let sections = sections_for(&ready(VendorSnapshot::Openai(snap)), now(), 5);
+        let body = sections.iter().find_map(|s| match s {
+            Section::Block { label, body } if label == "Credits" => Some(body.clone()),
+            _ => None,
+        });
+        // The balance is a count of Codex credits, not dollars: a bare number
+        // followed by `credits`, the same line the Waybar tooltip renders. The
+        // block holds only that line — the estimated message counts (reported
+        // by both ranges here) are no longer listed under it.
+        assert_eq!(body, Some(vec!["62,500".to_string()]));
+    }
+
+    #[test]
+    fn openai_credits_block_omits_message_estimate_lines_when_both_ranges_are_reported() {
+        let snap = OpenAiSnapshot {
+            plan: "ChatGPT Plus".into(),
+            session: None,
+            weekly: None,
+            code_review: None,
+            additional_limits: Vec::new(),
+            unavailable_models: Vec::new(),
+            credits: Some(OpenAiCredits {
+                balance: "62500".into(),
+                has_credits: true,
+                unlimited: false,
+                approx_local_messages: Some((100, 200)),
+                approx_cloud_messages: Some((30, 50)),
+            }),
+            reset_credits: None,
+            source: OpenAiSource::CodexOauth,
+        };
+        let sections = sections_for(&ready(VendorSnapshot::Openai(snap)), now(), 5);
+        let body = sections
+            .iter()
+            .find_map(|s| match s {
+                Section::Block { label, body } if label == "Credits" => Some(body.clone()),
+                _ => None,
+            })
+            .expect("the Credits block is rendered");
+        // With both ranges reported, no line of the block may carry a message
+        // estimate; the balance line still does.
+        assert!(body.iter().any(|line| line.contains("62,500")));
         assert!(
-            sections
+            !body
                 .iter()
-                .any(|s| matches!(s, Section::Block { label, .. } if label == "Credits"))
+                .any(|line| line.contains("local messages") || line.contains("cloud messages"))
+        );
+    }
+
+    #[test]
+    fn openai_non_numeric_balance_is_shown_without_a_unit() {
+        let snap = OpenAiSnapshot {
+            plan: "ChatGPT Plus".into(),
+            session: None,
+            weekly: None,
+            code_review: None,
+            additional_limits: Vec::new(),
+            unavailable_models: Vec::new(),
+            credits: Some(OpenAiCredits {
+                balance: "$5.00".into(),
+                has_credits: true,
+                unlimited: false,
+                approx_local_messages: None,
+                approx_cloud_messages: None,
+            }),
+            reset_credits: None,
+            source: OpenAiSource::CodexOauth,
+        };
+        let sections = sections_for(&ready(VendorSnapshot::Openai(snap)), now(), 5);
+        let body = sections.iter().find_map(|s| match s {
+            Section::Block { label, body } if label == "Credits" => Some(body.clone()),
+            _ => None,
+        });
+        // Vendor text that is not a number keeps its own text: no `credits`.
+        assert_eq!(
+            body.as_ref().and_then(|b| b.first()),
+            Some(&"$5.00".to_string())
         );
     }
 
