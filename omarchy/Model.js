@@ -292,12 +292,6 @@ function shownPercent(percent, showAs) {
   return normalizeShowAs(showAs) === "left" ? Math.max(0, 100 - number) : number
 }
 
-function shownPercent(percent, showAs) {
-  var number = Number(percent)
-  if (!isFinite(number)) return null
-  return normalizeShowAs(showAs) === "left" ? Math.max(0, 100 - number) : number
-}
-
 // Prints a shown percentage with at most one decimal ("70.5%", "70%") so a
 // precise figure does not collapse to a whole number. Meters keep integers.
 function shownPctText(shown) {
