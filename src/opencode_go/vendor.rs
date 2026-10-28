@@ -83,6 +83,10 @@ fn build_placeholders_with_plan_and_tolerance(
 
     placeholders([
         (
+            "icon",
+            VendorId::OpenCodeGo.bar_icon().to_string(),
+        ),
+        (
             "vendor_short",
             VendorId::OpenCodeGo.short_name().to_string(),
         ),
