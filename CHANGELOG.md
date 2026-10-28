@@ -43,6 +43,14 @@
   every enabled provider fetched again — which took seconds. It moves now,
   and a catalog read that started before the click can no longer put it
   back.
+
+- **The macOS popover stays open when another app brings itself forward.**
+  It closed on any loss of focus, so an app that activated itself — a Teams
+  call or message, a system alert — closed it while it was being read or
+  clicked, while a quick click outside right after opening did not close it
+  at all. It now closes at once on any click outside it, which a global
+  mouse-down monitor sees; an app that activates itself, or a keyboard
+  switch, leaves it open until the next click elsewhere.
 - **Cursor still reads the IDE session after 3.27.12's opaque token.** That
   release replaced the `cursorAuth/accessToken` JWT with an opaque `curs…`
   string, so the provider's claim decoding failed and reported "session token
