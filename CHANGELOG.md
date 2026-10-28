@@ -85,6 +85,35 @@
   previously failed with `config.toml: [<section>] is not a table`. The writer
   helpers now operate over `TableLike`, preserving the inline table format,
   surrounding comments, and existing fields (#511).
+
+- **Synthetic usage after the weekly-only quota change.** Synthetic retired
+  the five-hour request window and made the regenerating weekly credit budget
+  the sole plan metric; the old `subscription.requests` counter is still
+  echoed by `/v2/quotas` but is no longer tracked, so the bar sat at 0%
+  forever. The provider now reads `planWeeklyLimit` (percentage-only
+  subscription plans) or `weeklyTokenLimit` (credit-denominated usage-based
+  plans) from the same endpoint, following the precedence Synthetic's own
+  Octofriend uses: the plan object wins and the token variant contributes its
+  credit figures when both appear. The bar shows the weekly percentage and a
+  countdown to the next ~2% regeneration tick, the tooltip and TUI add credit
+  spend (`used / max`) and next-regen amounts when the plan reports them, and
+  `{synthetic_requests}`/`{synthetic_limit}` now expand to those credit
+  figures — empty on percentage-only plans — while `{weekly_pct}` and
+  `{weekly_reset}` are populated for the first time. The stale pre-change
+  cache fails the new parser and is refetched automatically. The panel's
+  countdown for the weekly window now reads
+  "Regenerates 2% in 3h 4m · 12:30" (locale-aware) instead of
+  "Resets in …": the metric carries a new `regen` field naming the refill
+  amount, the standalone "Next regen" row is gone, and the TUI footnote uses
+  the same wording. Printed percentages keep the API's decimal precision —
+  the report metric carries `percent_precise` and the panel, hero, and bar
+  read "70.5%" rather than collapsing the figure to a whole number. The
+  refilling budget also reports `reading: "left"`, so the panel and bar read
+  Synthetic as what remains (a fuel gauge) whatever the global reading
+  setting; every other provider keeps following that setting. The entry can
+  carry a plan label via `[synthetic] plan_tier` (go/standard/big — the
+  quotas API has no tier identifier), naming the panel hero, report, and
+  `{plan}` like the other providers' plans do.
 - **Cursor still reads the IDE session after 3.27.12's opaque token.** That
   release replaced the `cursorAuth/accessToken` JWT with an opaque `curs…`
   string, so the provider's claim decoding failed and reported "session token

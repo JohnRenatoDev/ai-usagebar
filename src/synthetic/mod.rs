@@ -1,4 +1,4 @@
-//! Synthetic subscription quota from the documented `/v2/quotas` API.
+//! Synthetic weekly credit quota from the regenerating `/v2/quotas` budget.
 
 pub mod fetch;
 pub mod types;

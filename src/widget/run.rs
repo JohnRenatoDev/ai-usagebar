@@ -700,14 +700,22 @@ async fn synthetic_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let (api_key, cache) = api_key_target(cli, config, VendorId::Synthetic)?;
     let client = http_client()?;
     let endpoints = synthetic::fetch::Endpoints::default();
-    let outcome =
-        match synthetic::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL).await {
-            Ok(outcome) => outcome,
-            Err(error) if error.is_transient() => {
-                return Ok(WaybarOutput::loading(cli.icon.as_deref()));
-            }
-            Err(error) => return Err(error),
-        };
+    let outcome = match synthetic::fetch_snapshot(
+        &client,
+        &api_key,
+        &cache,
+        &endpoints,
+        DEFAULT_TTL,
+        config.synthetic.plan_tier.as_deref(),
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) if error.is_transient() => {
+            return Ok(WaybarOutput::loading(cli.icon.as_deref()));
+        }
+        Err(error) => return Err(error),
+    };
     let snapshot = outcome.snapshot.clone();
     let vendor_outcome: VendorOutcome = outcome.into();
     Ok(synthetic::vendor::render(

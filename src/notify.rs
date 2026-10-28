@@ -1661,6 +1661,9 @@ mod tests {
             headline: MetricHeadline::Percent,
             used_cents: None,
             limit_cents: None,
+            regen: None,
+            percent_precise: None,
+            reading: None,
         };
         let metric = |label: &str, pct| {
             projection(Section::Metric {

@@ -92,6 +92,21 @@ pub(crate) struct SectionProjection {
     /// Positive prepaid cap in USD cents. `None` when Cursor reported spend
     /// without a cap — the row stays a plain amount.
     pub limit_cents: Option<i64>,
+    /// Amount the metric's window refills by when it reopens (Synthetic's
+    /// weekly credit tick, e.g. `"2%"`). Present only for refill-style
+    /// windows, so a frontend's countdown reads "Regenerates X in …"
+    /// instead of "Resets in …".
+    pub regen: Option<String>,
+    /// The metric's percentage with its decimal precision preserved, for
+    /// frontends that print a figure ("70.5%"). Only vendors whose API
+    /// reports a fraction set this; the integer `Section::Metric::pct`
+    /// remains what meters and severity colours use.
+    pub percent_precise: Option<f64>,
+    /// How a frontend should read the percentage. Refill-style windows
+    /// (Synthetic's weekly credits) read as a fuel gauge — `"left"`, what
+    /// remains — while fixed windows keep the default "used" reading and
+    /// omit the field.
+    pub reading: Option<&'static str>,
 }
 
 struct SectionBuilder(Vec<SectionProjection>);
@@ -107,6 +122,9 @@ impl SectionBuilder {
             headline: MetricHeadline::Percent,
             used_cents: None,
             limit_cents: None,
+            regen: None,
+            percent_precise: None,
+            reading: None,
         }
     }
 
@@ -140,6 +158,39 @@ impl SectionBuilder {
         let mut row = Self::projection(section);
         row.reset_at = reset_at;
         self.0.push(row);
+    }
+
+    /// Mark the most recently pushed metric as a refilling window: `amount`
+    /// is what the vendor restores when it reopens (Synthetic's weekly
+    /// credit tick), so the footnote and every report-driven countdown read
+    /// "Regenerates {amount} in …" instead of "Resets in …". The report
+    /// also tags the metric `reading: "left"`: a budget that regenerates
+    /// reads as a fuel gauge — what remains — whatever the global reading.
+    fn regen_last_metric(&mut self, amount: String) {
+        let Some(last) = self.0.last_mut() else {
+            return;
+        };
+        last.regen = Some(amount.clone());
+        last.reading = Some("left");
+        if let Section::Metric { footnote, .. } = &mut last.section
+            && let Some(rest) = footnote.strip_prefix("Resets in ")
+        {
+            *footnote = format!("Regenerates {amount} in {rest}");
+        }
+    }
+
+    /// Give the most recently pushed metric a decimal-precise percentage
+    /// (Synthetic's weekly budget), so report-driven frontends can print
+    /// "70.5%" instead of the meter's rounded integer. The printed value
+    /// label gains the same precision; the meter keeps the integer.
+    fn precise_last_metric(&mut self, pct: f64) {
+        let Some(last) = self.0.last_mut() else {
+            return;
+        };
+        last.percent_precise = Some(pct);
+        if let Section::Metric { value_label, .. } = &mut last.section {
+            *value_label = format_precise_pct(pct);
+        }
     }
 
     /// A metric whose vendor chose which of its two numbers goes on the bar.
@@ -369,10 +420,9 @@ pub fn compact_cells(snapshot: &VendorSnapshot) -> (String, Vec<(String, PaceSev
         }
         VendorSnapshot::Kilo(s) => (String::new(), vec![usd_cell(s.balance)]),
         VendorSnapshot::Novita(s) => (String::new(), vec![usd_cell(s.available)]),
-        VendorSnapshot::Synthetic(s) => (
-            String::new(),
-            vec![pct("subscription", s.subscription.utilization_pct)],
-        ),
+        VendorSnapshot::Synthetic(s) => {
+            (String::new(), vec![pct("week", s.weekly.utilization_pct)])
+        }
         VendorSnapshot::Lyceum(s) => (
             String::new(),
             vec![(usd(s.available_credits), PaceSeverity::Low)],
@@ -587,7 +637,7 @@ pub fn headline_pct(snapshot: &VendorSnapshot) -> Option<i32> {
             .flatten()
             .map(|window| window.utilization_pct)
             .max(),
-        VendorSnapshot::Synthetic(s) => Some(s.subscription.utilization_pct),
+        VendorSnapshot::Synthetic(s) => Some(s.weekly.utilization_pct),
         VendorSnapshot::OpenCodeGo(s) => [
             s.rolling
                 .as_ref()
@@ -1766,21 +1816,44 @@ fn synthetic_sections(
     tolerance: u32,
 ) -> SectionBuilder {
     let mut sections = SectionBuilder::new(vec![Section::Title {
-        left: "Synthetic".into(),
+        left: s.plan.clone().unwrap_or_else(|| "Synthetic".to_string()),
         right: None,
     }]);
     push_window(
         &mut sections,
-        "Subscription quota",
-        &s.subscription,
+        "Weekly credits",
+        &s.weekly,
         now,
         tolerance,
         false,
     );
-    sections.push(Section::Text {
-        label: "Requests".into(),
-        value: format!("{} / {}", s.requests, s.limit),
-    });
+    // The weekly budget refills by this much at the countdown moment rather
+    // than resetting wholesale, so the countdown line carries the amount.
+    let regen_amount = match &s.credits {
+        Some(credits) if credits.next_regen > 0.0 => {
+            Some(format!("{} credits", credits_number(credits.next_regen)))
+        }
+        _ => s
+            .next_regen_percent
+            .filter(|p| *p > 0.0)
+            .map(|p| format!("{}%", credits_number(p))),
+    };
+    if let Some(amount) = regen_amount {
+        sections.regen_last_metric(amount);
+    }
+    // Keep the API's decimal precision for printed figures ("70.5%"); the
+    // meter itself stays on the rounded integer.
+    sections.precise_last_metric(s.utilization_precise);
+    if let Some(credits) = &s.credits {
+        sections.push(Section::Text {
+            label: "Credits".into(),
+            value: format!(
+                "{} / {}",
+                credits_number(credits.used),
+                credits_number(credits.max)
+            ),
+        });
+    }
     sections
 }
 
@@ -2046,6 +2119,15 @@ fn usd_str(cost: &str) -> String {
     cost.parse::<f64>()
         .map(usd)
         .unwrap_or_else(|_| cost.to_string())
+}
+
+/// Whole numbers print bare; fractions keep two decimals (Synthetic credits).
+fn credits_number(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.2}")
+    }
 }
 
 fn push_reset_credits(
@@ -2471,6 +2553,16 @@ fn push_droid_window(
         None,
         w.window_duration,
     );
+}
+
+/// One decimal when it matters ("70.5%"), none when it does not ("70%").
+fn format_precise_pct(pct: f64) -> String {
+    let rounded = (pct * 10.0).round() / 10.0;
+    if rounded == rounded.trunc() {
+        format!("{rounded:.0}%")
+    } else {
+        format!("{rounded}%")
+    }
 }
 
 fn push_window(

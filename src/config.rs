@@ -1693,6 +1693,9 @@ pub struct SyntheticConfig {
     pub enabled: bool,
     pub api_key_env: String,
     pub api_key: Option<String>,
+    /// Optional plan tier label (go/standard/big) — display-only. The
+    /// quotas API carries no tier identifier, so the label is manual.
+    pub plan_tier: Option<String>,
 }
 
 impl Default for SyntheticConfig {
@@ -1701,6 +1704,7 @@ impl Default for SyntheticConfig {
             enabled: false,
             api_key_env: "SYNTHETIC_API_KEY".into(),
             api_key: None,
+            plan_tier: None,
         }
     }
 }

@@ -1358,8 +1358,8 @@ Panel {
       : metricRow.ragColor
     readonly property int indent: grouped ? Style.space(10) : 0
     readonly property string detailText: I18n.displayDetail(root.uiLocale, Model.metricDetail(row))
-    readonly property string resetText: row ? I18n.formatReset(row.reset_at, root.nowMs, root.uiLocale) : ""
-    readonly property int shownPercent: row ? Model.shownPercent(row.percent, root.showAs) : 0
+    readonly property string resetText: row ? I18n.formatReset(row.reset_at, root.nowMs, root.uiLocale, row.regen) : ""
+    readonly property int shownPercent: row ? Model.shownPercent(row.percent, Model.metricShowAs(row, root.showAs)) : 0
     readonly property var valueView: Model.metricValueView(row, root.showAs)
     readonly property string valueText: valueView.left
       ? I18n.t(root.uiLocale, "metric.left", { percent: valueView.percent })
