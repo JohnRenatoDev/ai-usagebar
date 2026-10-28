@@ -2,6 +2,12 @@
 
 ### Fixed
 
+- **The generic `{icon}` placeholder works for all built-in providers.** OpenCode
+  Go, Command Code, Cline, and Nous Research omitted `"icon"` from their
+  placeholder maps, so cross-provider format strings like `--format "{icon} {session_pct}%"`
+  rendered the literal string `{icon}` on the bar (#520). Each provider now outputs
+  its designated bar icon.
+
 - **Cursor still reads the IDE session after 3.27.12's opaque token.** That
   release replaced the `cursorAuth/accessToken` JWT with an opaque `curs…`
   string, so the provider's claim decoding failed and reported "session token
