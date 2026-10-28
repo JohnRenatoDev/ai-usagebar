@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+### Fixed
+
+- **Synthetic quota alerts describe the next partial refill.** Notifications
+  now carry the report's regeneration amount, such as `regenerates 2% in 3h`,
+  instead of calling the next refill a full window reset. Thresholds, urgency,
+  and notification deduplication are unchanged.
+
 ## [1.45.0] — 2026-10-27
 
 ### Added

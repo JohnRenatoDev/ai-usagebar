@@ -378,8 +378,10 @@ sub-second drift between fetches and a rolling window slides it forward with
 the refresh interval — and the dedupe state lives in
 `~/.cache/ai-usagebar/notifications.json` behind the same file locking as the
 vendor caches. Banked reset credits (Codex, SuperGrok) also notify once, 48
-hours before each credit expires. Bodies carry only vendor-reported absolute
-resets — never a burn-rate estimate.
+hours before each credit expires. Bodies carry only vendor-reported reset or
+refill times — never a burn-rate estimate. For a partially refilling window
+such as Synthetic's weekly budget, the alert names the regeneration amount
+(for example, `regenerates 2% in 3h 00m`) rather than promising a full reset.
 
 Delivery is best-effort: a missing or failing notifier, an unwritable state
 file, or lock contention is a silent skip that never affects the bar, the
