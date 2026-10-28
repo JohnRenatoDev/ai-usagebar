@@ -50,6 +50,17 @@
   Anthropic API (#496), a refused payload during an active backoff now
   surfaces the shared countdown without contacting the server (#515).
 
+- **The Omarchy panel follows the theme again on Qt 6.12.** Qt 6.12 added a
+  QtQuick type named `Color`, and it takes precedence over the `qs.Commons`
+  singleton of that name wherever a bare `Color` is written. Every bare read
+  then resolved to the new type instead: `Color.foreground` was undefined and
+  the panel painted black, `Color.currentThemePath` was undefined so the
+  theme's `colors.toml` never loaded and the severity colours stayed at their
+  defaults, and the watcher that reloads the theme on a theme switch was bound
+  to a type without the signals it listens for, so it never fired. The
+  affected files now qualify the singleton as `Commons.Color`, the same form
+  the settings view already used.
+
 ## [1.44.0] — 2026-10-25
 
 ### Added
