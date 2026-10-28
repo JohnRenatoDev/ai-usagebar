@@ -253,6 +253,7 @@ mod tests {
     fn exposes_exact_cline_and_generic_placeholders() {
         let values = build_placeholders(&sample(), at("2026-09-09T20:00:00Z"));
 
+        assert_eq!(values["icon"], "cln");
         assert_eq!(values["vendor_short"], "cln");
         assert_eq!(values["cline_5h_pct"], "10");
         assert_eq!(values["cline_7d_pct"], "50");
