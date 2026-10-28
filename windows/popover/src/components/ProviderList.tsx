@@ -3,6 +3,7 @@ import MdiAlert from "~icons/mdi/alert";
 import MdiChevronRight from "~icons/mdi/chevron-right";
 import MdiConsole from "~icons/mdi/console";
 import MdiKeyPlus from "~icons/mdi/key-plus";
+import MdiLogin from "~icons/mdi/login";
 import MdiOpenInApp from "~icons/mdi/open-in-app";
 import MdiPlus from "~icons/mdi/plus";
 import { DragHandle } from "@/components/DragHandle";
@@ -55,7 +56,13 @@ export function ProviderList({ cards, error, headerExtra, layout, onOpen, onReor
     sendCommand("providers");
   }, []);
   const actions = usePopoverActions();
-  const onAddKey = (row: ProviderListRow, trigger: HTMLElement) => actions.addKey(row.id, trigger);
+  // The credential's fix, from the "+" column: the key dialog for a key-only
+  // provider, the sign-in sheet for a device-code one, the host otherwise.
+  const onAddKey = (row: ProviderListRow, trigger: HTMLElement) => {
+    if (row.action === "settings" && row.keyLabel) actions.addKey(row.id, trigger);
+    else if (row.action === "device") actions.signIn(row.id, trigger);
+    else sendCommand("sign-in-provider", { id: row.id });
+  };
   const { enabled, disabled } = providerListRows(providers, cards, layout);
   return (
     <div className="flex flex-col gap-[var(--header-card-gap)]">
@@ -107,7 +114,7 @@ interface ProviderRowProps {
   handle?: Parameters<typeof DragHandle>[0];
   /** Drawn in the disabled block: faded, no drag handle, an inert chevron. */
   off?: boolean;
-  /** Opens the key dialog for a key-only provider's "Add key". */
+  /** Runs the credential's action: the key dialog, the sign-in sheet, or the host's sign-in. */
   onAddKey: (row: ProviderListRow, trigger: HTMLElement) => void;
   onOpen: (id: string) => void;
   onToggle: (id: string, on: boolean) => void;
@@ -145,16 +152,20 @@ function ProviderRow({ row, handle, off = false, onAddKey, onOpen, onToggle }: P
       : statusText;
   // The credential's action wears the "+" column as an icon, and while it is
   // there the add-account "+" stands down for the row. A key-only provider's
-  // "Add key" opens the key dialog; the others still go through the host.
+  // "Add key" opens the key dialog, a device-code provider's "Sign in" the
+  // sign-in sheet; the others still go through the host.
   const action = needs && row.action
     ? row.action === "settings" ? { icon: MdiKeyPlus, label: m.provider_add_key() }
-      : row.action === "terminal" ? { icon: MdiConsole, label: m.provider_sign_in() }
-        : { icon: MdiOpenInApp, label: m.provider_open_app() }
+      : row.action === "device" ? { icon: MdiLogin, label: m.provider_sign_in() }
+        : row.action === "terminal" ? { icon: MdiConsole, label: m.provider_sign_in() }
+          : { icon: MdiOpenInApp, label: m.provider_open_app() }
     : null;
   const add = addAccountDecision(row);
-  // The host's hint names the TUI ("Add an API key in Settings"); a key-only
-  // provider takes its key here, so its hint points at the key button.
-  const hint = row.action === "settings" && row.keyLabel ? m.needs_api_key_hint() : row.signIn;
+  // The host's hint names the TUI or a terminal command; a provider whose fix
+  // is here (the key dialog, the sign-in sheet) points at its button instead.
+  const hint = row.action === "settings" && row.keyLabel ? m.needs_api_key_hint()
+    : row.action === "device" && row.signInAccount ? m.sign_in_to_track_usage({ account: row.signInAccount })
+      : row.signIn;
   const identity = (
     <>
       <ProviderIcon className="text-label-2" size="var(--row-icon-box)" slug={row.icon} title={row.name} />
@@ -197,7 +208,7 @@ function ProviderRow({ row, handle, off = false, onAddKey, onOpen, onToggle }: P
             icon={action.icon}
             label={action.label}
             rowId={row.id}
-            onClick={(event) => (row.action === "settings" && row.keyLabel ? onAddKey(row, event.currentTarget) : sendCommand("sign-in-provider", { id: row.id }))}
+            onClick={(event) => onAddKey(row, event.currentTarget)}
           />
         ) : add ? (
           add.kind === "direct" ? (

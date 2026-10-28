@@ -332,7 +332,7 @@ fn token_expiration(now: DateTime<Utc>, expires_in: u64) -> Result<DateTime<Utc>
         .ok_or(OAuthError::Schema)
 }
 
-fn is_safe_portal_url(url: &str) -> bool {
+pub(crate) fn is_safe_portal_url(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url) else {
         return false;
     };

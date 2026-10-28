@@ -48,6 +48,9 @@ pub struct HostFacts {
     /// The in-flight or finished `set-api-key` check; `None` before the
     /// first send.
     pub key_check: Option<KeyCheckFact>,
+    /// The popover's device-code sign-in, from `start-sign-in` until it
+    /// ends or is cancelled; `None` when no sign-in sheet is open.
+    pub sign_in: Option<SignInFact>,
 }
 
 /// One vendor's switchable logins, as the popover renders them beside each
@@ -102,6 +105,62 @@ pub struct KeyCheckFact {
     pub state: KeyCheckState,
     /// Why the check failed (sanitized on the way out), or empty.
     pub error: String,
+}
+
+/// Where one device-code sign-in stands; see [`super::device_login`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignInState {
+    /// Asking the provider (or its CLI) for a one-time code.
+    Starting,
+    /// The code is on screen; the flow waits for the browser's approval.
+    Waiting,
+    /// Approved and saved: the provider's next reading uses the new login.
+    Ok,
+    /// The code expired before anyone approved it.
+    Expired,
+    /// Device sign-in cannot run here; `reason` says why, and the terminal
+    /// is the way left.
+    Unavailable,
+    /// Anything else that ended the flow; `error` is the diagnostic.
+    Failed,
+}
+
+impl SignInState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SignInState::Starting => "starting",
+            SignInState::Waiting => "waiting",
+            SignInState::Ok => "ok",
+            SignInState::Expired => "expired",
+            SignInState::Unavailable => "unavailable",
+            SignInState::Failed => "failed",
+        }
+    }
+}
+
+/// The popover's device-code sign-in. `seq` is the popover's send number:
+/// a flow that a newer `start-sign-in` or a `cancel-sign-in` replaced finds
+/// another `seq` (or none) here, stops its child, and publishes nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignInFact {
+    /// The vendor slug; from the device-login table, so trusted.
+    pub id: String,
+    pub seq: u64,
+    pub state: SignInState,
+    /// The one-time code the user types on the provider's page, or empty
+    /// until the flow prints one.
+    pub code: String,
+    /// Wall-clock ms when the code stops working; 0 while unknown.
+    pub expires_at: i64,
+    /// Why device sign-in cannot run (`Unavailable`) or was refused:
+    /// `device-off`, `cli-missing`, `custom-path`, `denied`, or empty.
+    pub reason: &'static str,
+    /// The flow's own diagnostic for `Failed`, or empty.
+    pub error: String,
+    /// The page that takes the code. Never serialized: the popover asks
+    /// the host to open it by `seq`, so a page address never comes from the
+    /// webview, and only an address the flow's allowlist accepted is kept.
+    pub url: String,
 }
 
 /// State of a newer release as the popover renders it.
@@ -164,6 +223,7 @@ impl Default for HostFacts {
             providers_error: String::new(),
             providers_generation: 0,
             key_check: None,
+            sign_in: None,
         }
     }
 }
@@ -268,6 +328,17 @@ pub fn wrap_report(
                 "id": fact.id,
                 "seq": fact.seq,
                 "state": state,
+                "error": sanitize_untrusted_field(&fact.error),
+            })
+        }),
+        "sign_in": facts.sign_in.as_ref().map(|fact| {
+            json!({
+                "id": fact.id,
+                "seq": fact.seq,
+                "state": fact.state.as_str(),
+                "code": sanitize_untrusted_field(&fact.code),
+                "expires_at": fact.expires_at,
+                "reason": fact.reason,
                 "error": sanitize_untrusted_field(&fact.error),
             })
         }),

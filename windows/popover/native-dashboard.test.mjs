@@ -530,6 +530,95 @@ try {
       }))));
   assert.match(keyOnlyList, /aria-label="Needs an API key: add it with the key button\."/);
   assert.doesNotMatch(keyOnlyList, /in Settings, then Refresh/);
+  // The sign-in sheet, as the approved design lays it out per phase. Tested on
+  // `SignInDialogView` for the same reason as the key dialog.
+  const { SignInDialog, SignInDialogView } = await server.ssrLoadModule('/src/components/SignInDialog.tsx');
+  const signInProvider = { account: 'ChatGPT', icon: 'openai', id: 'openai', issuer: 'OpenAI', name: 'Codex' };
+  const signInView = (props) => renderToStaticMarkup(React.createElement(LanguageProvider, { language: 'en' },
+    React.createElement(Dialog, { open: true, onOpenChange() {} },
+      React.createElement(SignInDialogView, {
+        code: '', copied: false, error: '', expiresAt: 0, language: 'en', nowMs: 1_000_000, phase: 'starting',
+        provider: signInProvider, reason: '',
+        onCancel() {}, onCopy() {}, onOpenPage() {}, onRetry() {}, onTerminal() {},
+        ...props,
+      }))));
+  const buttonsOf = (markup) => (markup.match(/<button[^>]*>.*?<\/button>/gs) ?? []);
+  // Before the code: the mark, the title, the spinner asking the issuer; only Cancel.
+  const starting = signInView({});
+  assert.match(starting, /class="key-dialog-mark"/);
+  assert.match(starting, />Sign in to Codex</);
+  assert.match(starting, /animate-spin.*Asking OpenAI for a sign-in code…/s);
+  assert.doesNotMatch(starting, /With your ChatGPT account/);
+  assert.equal(buttonsOf(starting).length, 1);
+  assert.match(starting, />Cancel<\/button>/);
+  // The code is ready: the account under the title, the code in its box with
+  // Copy, the wait with the time left, then Cancel and the primary Open page.
+  const waiting = signInView({ phase: 'waiting', code: 'WXYZ-1234', expiresAt: 1_000_000 + (14 * 60 + 32) * 1000 });
+  assert.match(waiting, />With your ChatGPT account</);
+  assert.match(waiting, />Open the page and enter this code:</);
+  assert.match(waiting, /<div class="sign-in-code"><span class="sign-in-code-text select-all">WXYZ-1234<\/span><button[^>]*>.*?Copy<\/button><\/div>/s);
+  assert.match(waiting, /Waiting for you to approve it in the browser…/);
+  assert.match(waiting, /aria-label="Expires in 14:32"[^>]*>14:32</);
+  assert.match(waiting, /<button[^>]*data-variant="primary"[^>]*>Open page<svg/);
+  assert.ok(waiting.indexOf('>Cancel<') < waiting.indexOf('>Open page<'));
+  // The page address is never in the markup: the host opens it by seq.
+  assert.doesNotMatch(waiting, /https?:\/\/(?!www\.w3\.org\/)/);
+  assert.match(signInView({ phase: 'waiting', code: 'WXYZ-1234', copied: true }), />Copied<\/button>/);
+  // Approved: the check, the title and the fetching line, no buttons.
+  const done = signInView({ phase: 'ok' });
+  assert.match(done, /class="sign-in-done"/);
+  assert.match(done, />Signed in to Codex</);
+  assert.match(done, />Fetching your usage…</);
+  assert.equal(buttonsOf(done).length, 0);
+  // Expired: the code dimmed, the reason in red, a new code as the next step.
+  const expired = signInView({ phase: 'expired', code: 'WXYZ-1234' });
+  assert.match(expired, /<div class="sign-in-code" data-dimmed="">/);
+  assert.match(expired, /text-meter-red[^>]*>The code expired before it was approved\.</);
+  assert.match(expired, /<button[^>]*data-variant="primary"[^>]*>Get a new code<\/button>/);
+  // Device sign-in off: the account's setting is named, and the terminal is the way left.
+  const deviceOff = signInView({ phase: 'unavailable', reason: 'device-off' });
+  assert.match(deviceOff, /Device sign-in is off for this account\. Turn it on in ChatGPT(?:'|&#x27;)s security settings/);
+  assert.match(deviceOff, /<button[^>]*>.*?Use the terminal<\/button>/s);
+  assert.doesNotMatch(deviceOff, /data-variant="primary"/);
+  assert.match(signInView({ phase: 'unavailable', reason: 'cli-missing' }), /Codex(?:'|&#x27;)s command-line tool isn(?:'|&#x27;)t installed here/);
+  assert.match(signInView({ phase: 'unavailable', reason: 'custom-path' }), /config\.toml points Codex at a login file of its own/);
+  // Failed: the sheet's sentence, the flow's own words under it, Try again.
+  const failed = signInView({ phase: 'failed', error: 'Error logging in with device code: boom' });
+  assert.match(failed, /text-meter-red[^>]*>Couldn(?:'|&#x27;)t sign in\.</);
+  assert.match(failed, /text-label-2[^>]*>Error logging in with device code: boom</);
+  assert.match(failed, /<button[^>]*data-variant="primary"[^>]*>Try again<\/button>/);
+  assert.match(signInView({ phase: 'failed', reason: 'denied', error: 'x' }), />The sign-in was turned down in the browser\.</);
+  assert.match(signInView({ phase: 'no-answer' }), /The tray hasn(?:'|&#x27;)t answered\./);
+  // Closed renders nothing.
+  assert.equal(renderToStaticMarkup(React.createElement(LanguageProvider, { language: 'en' },
+    React.createElement(SignInDialog, { provider: null, fact: null, nowMs: 1, onClose() {} }))), '');
+  // A device-code provider's card offers "Sign in", carrying the provider for focus.
+  const signInRow = renderToStaticMarkup(React.createElement(LanguageProvider, { language: 'en' },
+    React.createElement(ErrorRow, { explained: explainError('io error: not found', 'openai', 'en', { id: 'openai', account: 'ChatGPT', configured: false }) })));
+  assert.match(signInRow, />Not signed in</);
+  assert.match(signInRow, />Sign in with your ChatGPT account to track usage\.</);
+  assert.match(signInRow, /<button[^>]*data-key-row="openai"[^>]*>Sign in<\/button>/);
+  // In the list, a device-code provider's row wears the sign-in icon and says
+  // whose account it needs; a terminal provider keeps its terminal icon.
+  const deviceList = renderToStaticMarkup(React.createElement(TooltipProvider, {},
+    React.createElement(LanguageProvider, { language: 'en' },
+      React.createElement(ProviderList, {
+        cards: [], error: '', layout: emptyLayout(),
+        providers: [
+          { id: 'openai', name: 'Codex', enabled: true, configured: false, env: '', signIn: 'Run `codex login` in a terminal, then Refresh.', action: 'device', addAccounts: [], signInAccount: 'ChatGPT', signInIssuer: 'OpenAI' },
+          { id: 'anthropic', name: 'Claude', enabled: true, configured: false, env: '', signIn: 'Run `claude` in a terminal, then Refresh.', action: 'terminal', addAccounts: [] },
+        ],
+        onOpen() {}, onReorder() {}, onToggle() {},
+      }))));
+  const listRow = (id) => {
+    const start = deviceList.indexOf(`data-provider-id="${id}"`);
+    const next = deviceList.indexOf('data-provider-id=', start + 1);
+    return deviceList.slice(start, next === -1 ? undefined : next);
+  };
+  assert.match(listRow('openai'), /aria-label="Sign in with your ChatGPT account to track usage\."/);
+  assert.match(listRow('openai'), /<button[^>]*aria-label="Sign in"[^>]*data-key-row="openai"/);
+  assert.doesNotMatch(listRow('openai'), /codex login/);
+  assert.match(listRow('anthropic'), /aria-label="Run `claude` in a terminal, then Refresh\."/);
   console.log('native dashboard: ok');
 } finally {
   await server.close();

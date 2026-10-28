@@ -13,6 +13,9 @@ import {
   keyCheckError,
   keyDialogPhase,
   KEY_CHECK_NO_ANSWER_MS,
+  signInPhase,
+  SIGN_IN_NO_ANSWER_MS,
+  countdownText,
   explainError,
   displayPlan,
   leftLabel,
@@ -2729,4 +2732,86 @@ console.log('ok');
   const codex = enabled.find((row) => row.id === 'openai');
   assert.equal(codex.keyLabel, '');
   assert.equal(codex.keyNote, '');
+}
+
+// --- the sign-in sheet: sign_in from the host -------------------------------------
+{
+  const fact = { id: 'openai', seq: 7, state: 'waiting', code: 'ABCD-12345', expires_at: 1_700_000_000_000, reason: '', error: '' };
+  assert.deepEqual(parseHostPayload(JSON.stringify({ sign_in: fact })).signIn, {
+    id: 'openai', seq: 7, state: 'waiting', code: 'ABCD-12345', expiresAt: 1_700_000_000_000, reason: '', error: '',
+  });
+  // Absent, malformed, or an unknown state: no fact, never a guess.
+  assert.equal(parseHostPayload('{}').signIn, null);
+  assert.equal(parseHostPayload(JSON.stringify({ sign_in: 'waiting' })).signIn, null);
+  assert.equal(parseHostPayload(JSON.stringify({ sign_in: { ...fact, state: 'exploded' } })).signIn, null);
+  assert.equal(parseHostPayload(JSON.stringify({ sign_in: { ...fact, seq: 7.5 } })).signIn, null);
+  assert.equal(parseHostPayload(JSON.stringify({ sign_in: { ...fact, id: '' } })).signIn, null);
+  // The code is shown and typed elsewhere: anything but its shape is dropped,
+  // and so is an unknown reason; the error is cleaned like every host text.
+  const odd = parseHostPayload(JSON.stringify({ sign_in: { ...fact, code: '<img src=x>', reason: 'hacked', error: 'bad\u001b[31m', expires_at: -4 } })).signIn;
+  assert.equal(odd.code, '');
+  assert.equal(odd.reason, '');
+  assert.equal(odd.expiresAt, 0);
+  assert.ok(!odd.error.includes('\u001b'));
+  assert.equal(parseHostPayload(JSON.stringify({ sign_in: { ...fact, state: 'unavailable', reason: 'device-off' } })).signIn.reason, 'device-off');
+}
+
+// --- the sign-in sheet: signInPhase and the countdown -----------------------------
+{
+  const now = 10_000_000;
+  const sent = (ago) => now - ago;
+  const fact = (state, extra = {}) => ({ id: 'openai', seq: 5, state, code: 'ABCD-1234', expiresAt: 0, reason: '', error: '', ...extra });
+  assert.equal(signInPhase(null, null, 0, now), 'idle');
+  // Until the host answers this start, the sheet is asking for a code.
+  assert.equal(signInPhase(null, 5, sent(1_000), now), 'starting');
+  assert.equal(signInPhase(fact('ok', { seq: 4 }), 5, sent(1_000), now), 'starting');
+  assert.equal(signInPhase(null, 5, sent(SIGN_IN_NO_ANSWER_MS - 1), now), 'starting');
+  assert.equal(signInPhase(null, 5, sent(SIGN_IN_NO_ANSWER_MS), now), 'no-answer');
+  // The host's own fact answers, whatever its age.
+  for (const state of ['starting', 'waiting', 'ok', 'expired', 'unavailable', 'failed']) {
+    assert.equal(signInPhase(fact(state), 5, sent(SIGN_IN_NO_ANSWER_MS * 10), now), state);
+  }
+  // A code past its expiry on this clock reads as expired before the host gives up on it.
+  assert.equal(signInPhase(fact('waiting', { expiresAt: now + 1 }), 5, sent(1_000), now), 'waiting');
+  assert.equal(signInPhase(fact('waiting', { expiresAt: now }), 5, sent(1_000), now), 'expired');
+  assert.equal(countdownText(now + (14 * 60 + 32) * 1000 + 999, now), '14:32');
+  assert.equal(countdownText(now + 5_000, now), '0:05');
+  assert.equal(countdownText(now - 5_000, now), '0:00');
+}
+
+// --- a device-code provider's card offers the sign-in sheet -----------------------
+{
+  const device = (configured) => ({ id: 'openai', account: 'ChatGPT', configured });
+  // No login at all: "Not signed in", whatever the read failure said.
+  const missing = explainError('io error: No such file or directory at ~/.codex/auth.json', 'openai', 'en', device(false));
+  assert.equal(missing.title, 'Not signed in');
+  assert.equal(missing.hint, 'Sign in with your ChatGPT account to track usage.');
+  assert.deepEqual(missing.action, { cmd: 'sign-in', id: 'openai', label: 'Sign in' });
+  // A login the provider refused: the same fix, under "Sign-in expired".
+  const refused = explainError('HTTP 401: authentication rejected', 'openai', 'en', device(true));
+  assert.equal(refused.title, 'Sign-in expired');
+  assert.deepEqual(refused.action, { cmd: 'sign-in', id: 'openai', label: 'Sign in' });
+  assert.equal(explainError('Kimi Code CLI token refresh failed (x). Run `kimi` and log in again.', 'kimi', 'en', { id: 'kimi', account: 'Kimi', configured: true }).action.cmd, 'sign-in');
+  // Any other failure of a signed-in provider reads as before.
+  assert.deepEqual(explainError('HTTP 503: down', 'openai', 'en', device(true)).action, { cmd: 'refresh', label: 'Refresh' });
+  // Without a device flow, a refused login keeps the terminal hint and no button.
+  assert.equal(explainError('HTTP 401: authentication rejected', 'openai', 'en', null).action, undefined);
+  assert.equal(explainError('HTTP 401: authentication rejected', 'openai', 'pt-BR', device(false)).title, 'Não conectado');
+}
+
+// --- the catalog rows carry a device-code provider's sheet words ------------------
+{
+  const payload = parseHostPayload(JSON.stringify({ providers: [
+    { id: 'openai', name: 'Codex', enabled: true, configured: false, action: 'device', sign_in_account: 'ChatGPT', sign_in_issuer: 'OpenAI' },
+    { id: 'anthropic', name: 'Claude', enabled: true, configured: false, action: 'terminal' },
+  ] }));
+  assert.equal(payload.providers[0].action, 'device');
+  assert.equal(payload.providers[0].signInAccount, 'ChatGPT');
+  assert.equal(payload.providers[0].signInIssuer, 'OpenAI');
+  assert.equal(payload.providers[1].signInAccount, '');
+  const { enabled } = providerListRows(payload.providers, [], emptyLayout());
+  const codex = enabled.find((row) => row.id === 'openai');
+  assert.equal(codex.action, 'device');
+  assert.equal(codex.signInAccount, 'ChatGPT');
+  assert.equal(codex.signInIssuer, 'OpenAI');
 }

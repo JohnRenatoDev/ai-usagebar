@@ -160,6 +160,7 @@
 /** @typedef {{}} No_Usage_Or_Balance_Data_YetInputs */
 /** @typedef {{}} NoneInputs */
 /** @typedef {{}} Not_Checked_YetInputs */
+/** @typedef {{}} Not_Signed_InInputs */
 /** @typedef {{}} NotificationsInputs */
 /** @typedef {{}} Notify_MeInputs */
 /** @typedef {{}} NowInputs */
@@ -232,7 +233,29 @@
 /** @typedef {{}} Show_On_DemandInputs */
 /** @typedef {{}} Show_Usage_AsInputs */
 /** @typedef {{}} Show_Usage_As_HintInputs */
+/** @typedef {{ issuer: NonNullable<unknown> }} Sign_In_AskingInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Sign_In_Cli_MissingInputs */
+/** @typedef {{}} Sign_In_Code_ExpiredInputs */
+/** @typedef {{}} Sign_In_CopiedInputs */
+/** @typedef {{}} Sign_In_CopyInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Sign_In_Custom_PathInputs */
+/** @typedef {{}} Sign_In_DeniedInputs */
+/** @typedef {{ account: NonNullable<unknown> }} Sign_In_Device_OffInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Sign_In_Dialog_TitleInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Sign_In_DoneInputs */
+/** @typedef {{}} Sign_In_Enter_CodeInputs */
 /** @typedef {{}} Sign_In_ExpiredInputs */
+/** @typedef {{ time: NonNullable<unknown> }} Sign_In_Expires_InInputs */
+/** @typedef {{}} Sign_In_FailedInputs */
+/** @typedef {{}} Sign_In_FetchingInputs */
+/** @typedef {{}} Sign_In_New_CodeInputs */
+/** @typedef {{}} Sign_In_No_AnswerInputs */
+/** @typedef {{}} Sign_In_Open_PageInputs */
+/** @typedef {{ account: NonNullable<unknown> }} Sign_In_To_Track_UsageInputs */
+/** @typedef {{}} Sign_In_Try_AgainInputs */
+/** @typedef {{}} Sign_In_Use_TerminalInputs */
+/** @typedef {{}} Sign_In_WaitingInputs */
+/** @typedef {{ account: NonNullable<unknown> }} Sign_In_With_AccountInputs */
 /** @typedef {{}} Source_CodeInputs */
 /** @typedef {{}} Source_On_GithubInputs */
 /** @typedef {{}} StaleInputs */
@@ -936,6 +959,10 @@ export const not_checked_yet = /** @type {(inputs: Not_Checked_YetInputs) => Loc
 	return /** @type {LocalizedString} */ (`Not checked yet`)
 };
 
+export const not_signed_in = /** @type {(inputs: Not_Signed_InInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Not signed in`)
+};
+
 export const notifications = /** @type {(inputs: NotificationsInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`Notifications`)
 };
@@ -1224,8 +1251,96 @@ export const show_usage_as_hint = /** @type {(inputs: Show_Usage_As_HintInputs) 
 	return /** @type {LocalizedString} */ (`Used fills the bar with what is spent. Left fills it with what remains.`)
 };
 
+export const sign_in_asking = /** @type {(inputs: Sign_In_AskingInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`Asking ${i?.issuer} for a sign-in code…`)
+};
+
+export const sign_in_cli_missing = /** @type {(inputs: Sign_In_Cli_MissingInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`${i?.provider}'s command-line tool isn't installed here. Install it, or sign in from the terminal.`)
+};
+
+export const sign_in_code_expired = /** @type {(inputs: Sign_In_Code_ExpiredInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`The code expired before it was approved.`)
+};
+
+export const sign_in_copied = /** @type {(inputs: Sign_In_CopiedInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Copied`)
+};
+
+export const sign_in_copy = /** @type {(inputs: Sign_In_CopyInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Copy`)
+};
+
+export const sign_in_custom_path = /** @type {(inputs: Sign_In_Custom_PathInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`config.toml points ${i?.provider} at a login file of its own, so sign in from the terminal.`)
+};
+
+export const sign_in_denied = /** @type {(inputs: Sign_In_DeniedInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`The sign-in was turned down in the browser.`)
+};
+
+export const sign_in_device_off = /** @type {(inputs: Sign_In_Device_OffInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`Device sign-in is off for this account. Turn it on in ${i?.account}'s security settings, or sign in from the terminal.`)
+};
+
+export const sign_in_dialog_title = /** @type {(inputs: Sign_In_Dialog_TitleInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`Sign in to ${i?.provider}`)
+};
+
+export const sign_in_done = /** @type {(inputs: Sign_In_DoneInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`Signed in to ${i?.provider}`)
+};
+
+export const sign_in_enter_code = /** @type {(inputs: Sign_In_Enter_CodeInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Open the page and enter this code:`)
+};
+
 export const sign_in_expired = /** @type {(inputs: Sign_In_ExpiredInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`Sign-in expired`)
+};
+
+export const sign_in_expires_in = /** @type {(inputs: Sign_In_Expires_InInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`Expires in ${i?.time}`)
+};
+
+export const sign_in_failed = /** @type {(inputs: Sign_In_FailedInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Couldn't sign in.`)
+};
+
+export const sign_in_fetching = /** @type {(inputs: Sign_In_FetchingInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Fetching your usage…`)
+};
+
+export const sign_in_new_code = /** @type {(inputs: Sign_In_New_CodeInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Get a new code`)
+};
+
+export const sign_in_no_answer = /** @type {(inputs: Sign_In_No_AnswerInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`The tray hasn't answered. Close this and try again.`)
+};
+
+export const sign_in_open_page = /** @type {(inputs: Sign_In_Open_PageInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Open page`)
+};
+
+export const sign_in_to_track_usage = /** @type {(inputs: Sign_In_To_Track_UsageInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`Sign in with your ${i?.account} account to track usage.`)
+};
+
+export const sign_in_try_again = /** @type {(inputs: Sign_In_Try_AgainInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Try again`)
+};
+
+export const sign_in_use_terminal = /** @type {(inputs: Sign_In_Use_TerminalInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Use the terminal`)
+};
+
+export const sign_in_waiting = /** @type {(inputs: Sign_In_WaitingInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Waiting for you to approve it in the browser…`)
+};
+
+export const sign_in_with_account = /** @type {(inputs: Sign_In_With_AccountInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`With your ${i?.account} account`)
 };
 
 export const source_code = /** @type {(inputs: Source_CodeInputs) => LocalizedString} */ () => {

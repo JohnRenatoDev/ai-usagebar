@@ -279,8 +279,10 @@ fn anthropic_credentials_path(cfg: &Config) -> crate::error::Result<PathBuf> {
 fn kimi_credentials_path(cfg: &Config) -> crate::error::Result<PathBuf> {
     match &cfg.kimi.credentials_path {
         Some(path) => Ok(path.clone()),
+        // The kimi-code home (`~/.kimi-code`), not the user's: the CLI keeps
+        // its login under its own directory.
         None => Ok(crate::kimi::oauth::credentials_path_in(
-            &crate::cache::home_dir()?,
+            &crate::kimi::oauth::default_home()?,
         )),
     }
 }
@@ -549,6 +551,16 @@ mod tests {
         let exists = |path: &Path| path == custom;
         let rows = statuses_with(&cfg, &probes(&|_| false, &exists, &|_| false));
         assert!(row(&rows, "anthropic").configured);
+    }
+
+    #[test]
+    fn the_kimi_code_cli_login_counts_under_its_own_home() {
+        // `kimi login` writes `~/.kimi-code/credentials/kimi-code.json`; the
+        // row read `~/credentials/…`, so a signed-in CLI still asked for a
+        // sign-in. Only the path's tail is pinned: the probe touches no disk.
+        let exists = |path: &Path| path.ends_with(".kimi-code/credentials/kimi-code.json");
+        let rows = statuses_with(&Config::default(), &probes(&|_| false, &exists, &|_| false));
+        assert!(row(&rows, "kimi").configured);
     }
 
     #[test]

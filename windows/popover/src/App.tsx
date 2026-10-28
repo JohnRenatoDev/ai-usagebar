@@ -3,6 +3,7 @@ import { Footer, TopBar } from "@/components/Chrome";
 import type { RowAction } from "@/components/RowMenu";
 import type { RowLists } from "@/components/dnd";
 import { ApiKeyDialog, type KeyDialogProvider } from "@/components/ApiKeyDialog";
+import { SignInDialog, type SignInProvider } from "@/components/SignInDialog";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import type { Layout, Screen } from "@/lib/types";
 import { LanguageProvider } from "@/lib/i18n";
@@ -96,6 +97,17 @@ export default function App() {
   // provider's switch in the list, or on its card's header action.
   const keyFocus = useCallback(() => {
     const trigger = keyTrigger.current;
+    if (trigger && trigger.isConnected) return trigger;
+    const id = trigger?.dataset.keyRow;
+    return id ? providerFocusTarget(id) : null;
+  }, []);
+  // The sign-in sheet for a device-code provider, opened from the list's
+  // sign-in icon or a card's "Sign in"; focus returns the same way.
+  const [signInProvider, setSignInProvider] = useState<SignInProvider | null>(null);
+  const signInTrigger = useRef<HTMLElement | null>(null);
+  const closeSignIn = useCallback(() => setSignInProvider(null), []);
+  const signInFocus = useCallback(() => {
+    const trigger = signInTrigger.current;
     if (trigger && trigger.isConnected) return trigger;
     const id = trigger?.dataset.keyRow;
     return id ? providerFocusTarget(id) : null;
@@ -519,7 +531,30 @@ export default function App() {
         name: provider.name,
       });
     },
+    deviceProvider(cardId) {
+      // Only the provider's own card: an `@account` card has a login of its
+      // own, which the provider's device flow does not write.
+      const provider = payload.providers.find((item) => item.id === cardId);
+      if (!provider || provider.action !== "device" || !provider.signInAccount) return null;
+      return { account: provider.signInAccount, configured: provider.configured, id: provider.id };
+    },
     openCustomize: () => go("customize"),
+    signIn(providerId, trigger) {
+      const provider = payload.providers.find((item) => item.id === providerId);
+      // A provider without a device flow keeps its terminal sign-in.
+      if (!provider || provider.action !== "device") {
+        sendCommand("sign-in-provider", { id: providerId });
+        return;
+      }
+      signInTrigger.current = trigger;
+      setSignInProvider({
+        account: provider.signInAccount || provider.name,
+        icon: providerIconId(provider.id),
+        id: provider.id,
+        issuer: provider.signInIssuer || provider.name,
+        name: provider.name,
+      });
+    },
   };
 
   return (
@@ -706,6 +741,13 @@ export default function App() {
         provider={keyProvider}
         returnFocus={keyFocus}
         onClose={closeKeyDialog}
+      />
+      <SignInDialog
+        fact={payload.signIn}
+        nowMs={nowMs}
+        provider={signInProvider}
+        returnFocus={signInFocus}
+        onClose={closeSignIn}
       />
     </div>
     </PopoverActionsProvider>
