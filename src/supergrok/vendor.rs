@@ -148,7 +148,7 @@ fn push_product_row(
     let label = crate::display::pad_end(&product.label, label_width);
     let pct = format!("{:>4}%", product.percent);
     lines.push(TooltipLine::Body(format!(
-        " <span foreground='{dim}'>  󰚩  {}  </span><span foreground='{dim}' font_weight='bold'>{pct}</span>",
+        " <span foreground='{dim}'>  󰇷  {}  </span><span foreground='{dim}' font_weight='bold'>{pct}</span>",
         escape(&label)
     )));
 }
