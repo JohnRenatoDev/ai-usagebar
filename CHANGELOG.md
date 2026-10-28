@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+### Added
+
+- **Usage priorities: which AI to use first.** `usage --json --priorities`
+  adds a `ranking` of every configured provider, ordered by the weekly quota
+  projected to reset unused, and the first row worth using as
+  `recommendation`. Each provider is measured on its weekly window (the most
+  used one when there are several), so a 5-hour session never drives it; the
+  cycle average spans at least a day, and the recent pace from a local history
+  (provider and metric ids, percentages and timestamps for 25 hours, in the
+  cache directory) weighs only on the next 24 hours. `--recent-hours`,
+  `--alert-unused-percent` and `--alert-hours` tune it. Without the flag the
+  report is byte-for-byte unchanged and nothing is recorded.
+
 ## [1.45.0] — 2026-10-27
 
 ### Added
