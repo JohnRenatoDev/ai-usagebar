@@ -32,6 +32,7 @@ pub fn build_placeholders(snap: &Snapshot, now: DateTime<Utc>) -> HashMap<&'stat
     let thirty = window_values(snap.thirty_day.as_ref(), now);
 
     placeholders([
+        ("icon", VendorId::Cline.bar_icon().to_string()),
         ("vendor_short", VendorId::Cline.short_name().to_string()),
         ("plan", plan.clone()),
         ("cline_plan", plan),
