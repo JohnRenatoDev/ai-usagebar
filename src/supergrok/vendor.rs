@@ -389,6 +389,19 @@ mod tests {
         assert!(!out.tooltip.contains("<b>Build"), "{}", out.tooltip);
     }
 
+    #[test]
+    fn tooltip_product_row_uses_supergrok_glyph() {
+        let mut snap = sample_snap();
+        snap.products = vec![crate::usage::SuperGrokProduct {
+            label: "Grok".into(),
+            percent: 7,
+        }];
+        let o = sample_outcome(snap.clone());
+        let out = render(&o, &snap, &Theme::default(), &opts(), now());
+        assert!(out.tooltip.contains("󰇷"), "{}", out.tooltip);
+        assert!(!out.tooltip.contains("󰚩"), "{}", out.tooltip);
+    }
+
     /// The prepaid line appears only when there is credit to show — a $0.00
     /// row reads as "no money" when the billing document merely reports that
     /// nothing was purchased on top of the subscription. The `{sgk_prepaid}`
