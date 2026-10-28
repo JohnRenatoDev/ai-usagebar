@@ -63,6 +63,7 @@
   and `{oai_credit_balance}` carries the bare number. The estimated local
   and cloud message counts are no longer listed under it; the
   `{oai_local_msgs}` and `{oai_cloud_msgs}` placeholders still carry them.
+  **Custom `--format` strings reading the dollar form must be updated.**
 
 - **A provider's switch in the tray moves when it is clicked.** Turning a
   provider on or off in Customize or Settings → Providers wrote
