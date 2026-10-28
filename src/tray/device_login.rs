@@ -903,18 +903,31 @@ fn last_error_line(tail: &std::collections::VecDeque<String>, flow: Flow) -> Str
 struct Tree {
     child: Child,
     ended: bool,
+    registry: &'static std::sync::Mutex<Running>,
 }
 
 impl Tree {
-    /// Spawned and registered under the registry's lock, so `stop_all` can
-    /// never miss a CLI started while the tray quits.
     fn spawn(command: &mut Command) -> std::io::Result<Tree> {
-        let mut running = running();
+        Tree::spawn_in(&RUNNING, command)
+    }
+
+    /// Spawned and registered under the registry's lock, so `stop_all` can
+    /// never miss a CLI started while the tray quits; once it has run, no
+    /// CLI starts at all.
+    fn spawn_in(
+        registry: &'static std::sync::Mutex<Running>,
+        command: &mut Command,
+    ) -> std::io::Result<Tree> {
+        let mut running = lock(registry);
+        if running.closed {
+            return Err(std::io::Error::other("the tray is quitting"));
+        }
         let child = command.spawn()?;
-        running.push(child.id());
+        running.pids.push(child.id());
         Ok(Tree {
             child,
             ended: false,
+            registry,
         })
     }
 
@@ -975,7 +988,7 @@ impl Tree {
         self.ended = true;
         self.signal(false);
         let pid = self.child.id();
-        running().retain(|running| *running != pid);
+        lock(self.registry).pids.retain(|running| *running != pid);
         self.child.wait().ok()
     }
 }
@@ -1005,24 +1018,40 @@ fn kill_tree(pid: u32) {
         .status();
 }
 
-/// The CLIs running right now, so a tray that quits can take them along:
-/// a Codex login left behind would keep polling for fifteen minutes.
-static RUNNING: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+/// The CLIs running right now, so a tray that quits can take them along
+/// (a Codex login left behind would keep polling for fifteen minutes), and
+/// whether it is quitting, so a flow that had not started its CLI yet does
+/// not start it afterwards.
+struct Running {
+    closed: bool,
+    pids: Vec<u32>,
+}
 
-/// The registry, whole even when a flow panicked while holding it.
-fn running() -> std::sync::MutexGuard<'static, Vec<u32>> {
-    RUNNING
+static RUNNING: std::sync::Mutex<Running> = std::sync::Mutex::new(Running {
+    closed: false,
+    pids: Vec::new(),
+});
+
+/// A registry, whole even when a flow panicked while holding it.
+fn lock(registry: &std::sync::Mutex<Running>) -> std::sync::MutexGuard<'_, Running> {
+    registry
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Kill every sign-in CLI still running; the hosts call it on their way out.
-/// The signals go out under the registry's lock: a CLI still listed has not
-/// been reaped, and its flow cannot reap it until the lock is free.
+/// Kill every sign-in CLI still running, and start no other; the hosts call
+/// it on their way out.
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 pub(crate) fn stop_all() {
-    let mut running = running();
-    for pid in running.drain(..) {
+    stop_all_in(&RUNNING);
+}
+
+/// The signals go out under the registry's lock: a CLI still listed has not
+/// been reaped, and its flow cannot reap it until the lock is free.
+fn stop_all_in(registry: &std::sync::Mutex<Running>) {
+    let mut running = lock(registry);
+    running.closed = true;
+    for pid in running.pids.drain(..) {
         #[cfg(unix)]
         if let Some(pid) = i32::try_from(pid)
             .ok()
@@ -1070,7 +1099,10 @@ fn run_nous(job: &Job, login: NousLogin, push: &dyn Fn()) -> Outcome {
         if !is_code(&device.user_code) {
             return failed("Nous Research sent a sign-in code this sheet cannot show.".into());
         }
-        let expires_in = Duration::from_secs(device.expires_in).min(MAX_EXPIRY);
+        // The poll gives up when the sheet says the code is gone.
+        let mut device = device;
+        device.expires_in = device.expires_in.min(MAX_EXPIRY.as_secs());
+        let expires_in = Duration::from_secs(device.expires_in);
         if !job.show_code(
             &device.user_code,
             &device.verification_uri_complete,
@@ -1850,7 +1882,8 @@ Waiting for authorization to complete…\n";
         assert_eq!(fact(&facts).unwrap().state, SignInState::Ok);
         assert!(gone(read_pid(&pid_file)), "the writer outlived its CLI");
         assert!(
-            !running()
+            !lock(&RUNNING)
+                .pids
                 .iter()
                 .any(|pid| *pid as i32 == read_pid(&pid_file))
         );
@@ -1908,6 +1941,69 @@ Waiting for authorization to complete…\n";
         );
         assert!(cancel(&facts, &json!({"seq": 1})));
         handle.join().expect("the flow did not panic");
+    }
+
+    /// A registry of a test's own, so closing it stops nothing elsewhere.
+    #[cfg(unix)]
+    fn registry() -> &'static Mutex<Running> {
+        Box::leak(Box::new(Mutex::new(Running {
+            closed: false,
+            pids: Vec::new(),
+        })))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_all_takes_every_cli_along_and_starts_no_other() {
+        let root = tempfile::TempDir::new().unwrap();
+        let registry = registry();
+        let program = script(root.path(), "exec sleep 60");
+        let mut command = Command::new(&program);
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let tree = Tree::spawn_in(registry, &mut command).unwrap();
+        let pid = tree.child.id() as i32;
+        stop_all_in(registry);
+        assert!(lock(registry).pids.is_empty());
+        // Killed while unreaped: the zombie stays until its flow reaps it.
+        drop(tree);
+        assert!(gone(pid), "the CLI outlived stop_all");
+        // A flow that had not started its CLI yet starts nothing now.
+        let marker = root.path().join("started");
+        let late = script(root.path(), &format!("touch '{}'", marker.display()));
+        assert!(Tree::spawn_in(registry, &mut Command::new(late)).is_err());
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn a_nous_poll_ends_when_the_sheet_says_the_code_is_gone() {
+        // Two hours from the portal, a poll interval past the one-hour cap:
+        // capped, the poll gives up at once instead of sleeping on.
+        let mut server = mockito::Server::new();
+        let _device = server
+            .mock("POST", "/device")
+            .with_status(200)
+            .with_body(nous_device_body(7200).replace(r#""interval":1"#, r#""interval":3601"#))
+            .create();
+        let root = tempfile::TempDir::new().unwrap();
+        let store = root.path().join("credentials.json");
+        let facts = shared();
+        let handle = start_with(
+            &facts,
+            &json!({"cmd": "start-sign-in", "id": "nous", "seq": 1}),
+            |_| Ok(nous(&server, &store)),
+            quiet(),
+        )
+        .unwrap();
+        let done = wait_for(&facts, |f| {
+            f.is_some_and(|f| !matches!(f.state, SignInState::Starting | SignInState::Waiting))
+        })
+        .unwrap();
+        assert_eq!(done.state, SignInState::Expired);
+        handle.join().unwrap();
     }
 
     #[test]
