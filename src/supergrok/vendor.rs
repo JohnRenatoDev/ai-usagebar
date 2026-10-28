@@ -20,8 +20,6 @@ use super::fetch::FetchOutcome;
 
 pub const DEFAULT_FORMAT: &str = "{sgk_pct}% · {sgk_reset}";
 
-const DEFAULT_ICON: &str = "󰚩";
-
 pub fn build_placeholders(
     snap: &SuperGrokSnapshot,
     now: DateTime<Utc>,
@@ -31,7 +29,7 @@ pub fn build_placeholders(
     let prepaid = snap.prepaid_balance.map(usd).unwrap_or_else(|| "—".into());
 
     placeholders(vec![
-        ("icon", DEFAULT_ICON.to_string()),
+        ("icon", VendorId::Supergrok.bar_icon().to_string()),
         ("vendor_short", VendorId::Supergrok.short_name().to_string()),
         // Cross-vendor compatibility aliases for the single current pool.
         ("plan", snap.plan.clone()),
@@ -475,6 +473,7 @@ mod tests {
     fn placeholders_include_generic_aliases() {
         let snap = sample_snap();
         let ph = build_placeholders(&snap, now());
+        assert_eq!(ph.get("icon").map(String::as_str), Some("󰇷"));
         assert_eq!(ph.get("vendor_short").map(String::as_str), Some("sgk"));
         assert_eq!(ph.get("weekly_pct").map(String::as_str), Some("34"));
         assert_eq!(ph.get("session_pct").map(String::as_str), Some("34"));

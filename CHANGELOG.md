@@ -15,6 +15,10 @@
   `cli_path = "~/.local/bin/droid"` caused Droid token renewal spawns to fail
   with NotFound.
 
+- **SuperGrok {icon} placeholder outputs the Grok bar icon.** The placeholder
+  previously expanded to the Claude icon (`󰚩`) instead of Grok's mark (`󰇷`),
+  having inherited the constant from the Claude renderer. It now returns
+  `VendorId::Supergrok.bar_icon()` directly (#513).
 - **Cursor still reads the IDE session after 3.27.12's opaque token.** That
   release replaced the `cursorAuth/accessToken` JWT with an opaque `curs…`
   string, so the provider's claim decoding failed and reported "session token
