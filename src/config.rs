@@ -2510,6 +2510,12 @@ impl Config {
                 *path = expand_tilde(path);
             }
         }
+        if let Some(paths) = &mut self.opencode_go.auth_paths {
+            for path in paths {
+                *path = expand_tilde(path);
+            }
+        }
+        expand_tilde_opt(&mut self.droid.cli_path);
     }
 
     /// Explicitly enumerate every inline credential field. Adding a new
@@ -5526,6 +5532,29 @@ api_key = "synthetic-account"
             ])
         );
         assert_eq!(config.copilot.gh_binary, Some(home.join("bin/gh")));
+    }
+
+    #[test]
+    fn opencode_go_and_droid_paths_are_tilde_expanded() {
+        let file = write_toml(
+            r#"
+            [opencode-go]
+            auth_paths = ["~/.local/share/opencode/opencode.db", "/etc/opencode/auth.json"]
+
+            [droid]
+            cli_path = "~/.local/bin/droid"
+            "#,
+        );
+        let config = Config::load_from(file.path()).unwrap();
+        let home = crate::cache::home_dir().unwrap();
+        assert_eq!(
+            config.opencode_go.auth_paths,
+            Some(vec![
+                home.join(".local/share/opencode/opencode.db"),
+                PathBuf::from("/etc/opencode/auth.json"),
+            ])
+        );
+        assert_eq!(config.droid.cli_path, Some(home.join(".local/bin/droid")));
     }
 
     #[test]
