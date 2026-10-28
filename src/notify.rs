@@ -300,9 +300,13 @@ fn credit_notification(
     now: DateTime<Utc>,
 ) -> Notification {
     let label = credit.title.as_deref().unwrap_or("Reset credit");
+    let who = match &input.account {
+        Some(account) => format!("{} · {}", input.vendor, account),
+        None => input.vendor.clone(),
+    };
     let title = sanitize_untrusted_line(&format!(
         "{} — reset credit expires {}",
-        input.vendor,
+        who,
         format::local_date_hm(credit.expires_at)
     ));
     let body = sanitize_untrusted_line(&format!(
@@ -964,7 +968,9 @@ mod tests {
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].urgency, Urgency::Normal);
         assert!(
-            fired[0].title.starts_with("Claude — reset credit expires "),
+            fired[0]
+                .title
+                .starts_with("Claude · gmail — reset credit expires "),
             "{}",
             fired[0].title
         );
@@ -1012,6 +1018,68 @@ mod tests {
             ..input(Vec::new())
         };
         assert_eq!(decide(&later, 97, &mut state, now).len(), 1);
+    }
+
+    #[test]
+    fn credit_expiry_alerts_identify_each_named_account() {
+        use crate::tui::app::{ReadyTab, TabId, TabState};
+        use crate::usage::{
+            OpenAiSnapshot, OpenAiSource, ResetCredit, ResetCredits, VendorSnapshot,
+        };
+
+        let now = at(23, 12, 0);
+        let expiry = now + chrono::Duration::hours(3);
+        let ready = TabState::Ready(Box::new(ReadyTab {
+            snapshot: VendorSnapshot::Openai(OpenAiSnapshot {
+                plan: "ChatGPT Pro".into(),
+                session: None,
+                weekly: None,
+                code_review: None,
+                additional_limits: Vec::new(),
+                unavailable_models: Vec::new(),
+                credits: None,
+                reset_credits: Some(ResetCredits {
+                    available: 1,
+                    credits: vec![ResetCredit {
+                        title: Some("Full reset".into()),
+                        expires_at: Some(expiry),
+                    }],
+                }),
+                source: OpenAiSource::CodexOauth,
+            }),
+            stale: false,
+            last_error: None,
+            fetched_at: Some(now),
+            display: Default::default(),
+        }));
+        let mut state = NotifyState::default();
+        for account in [Some("personal"), Some("work"), None] {
+            let tab = account.map_or_else(
+                || TabId::vendor(crate::vendor::VendorId::Openai),
+                |label| TabId::account_for(crate::vendor::VendorId::Openai, label),
+            );
+            let input = RefreshInput::from_tab(&tab, &ready, now).unwrap();
+            let fired = decide(&input, 97, &mut state, now);
+            assert_eq!(fired.len(), 1);
+            let who = account.map_or(input.vendor.clone(), |label| {
+                format!("{} · {label}", input.vendor)
+            });
+            assert_eq!(
+                fired[0].title,
+                format!(
+                    "{who} — reset credit expires {}",
+                    format::local_date_hm(expiry)
+                )
+            );
+            assert!(fired[0].body.starts_with("Full reset — redeem within 3h"));
+            assert_eq!(fired[0].urgency, Urgency::Normal);
+            assert!(
+                fired[0]
+                    .key
+                    .starts_with(&format!("{}::credit::", input.entry_id))
+            );
+            assert!(decide(&input, 97, &mut state, now).is_empty());
+        }
     }
 
     // — State persistence ———————————————————————————

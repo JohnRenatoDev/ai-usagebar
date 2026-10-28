@@ -381,6 +381,9 @@ vendor caches. Banked reset credits (Codex, SuperGrok) also notify once, 48
 hours before each credit expires. Bodies carry only vendor-reported absolute
 resets — never a burn-rate estimate.
 
+Credit-expiry alerts include the configured account label for named accounts,
+so the reminder identifies which account needs to redeem the credit.
+
 Delivery is best-effort: a missing or failing notifier, an unwritable state
 file, or lock contention is a silent skip that never affects the bar, the
 report, or any exit code. Both fields are also editable in the TUI Settings

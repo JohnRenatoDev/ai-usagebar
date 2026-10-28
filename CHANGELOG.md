@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Fixed
+
+- **Credit-expiry notifications identify named accounts.** Reminders for a
+  banked reset credit now include the account label, like quota alerts do,
+  so users with several accounts can tell where to redeem it.
+
 ## [1.45.0] — 2026-10-27
 
 ### Added
