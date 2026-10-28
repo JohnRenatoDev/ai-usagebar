@@ -12,11 +12,12 @@ export type PopoverStyle = "classic" | "native";
 export type MenuBarLook = "chart" | "logos" | "quattro";
 
 export interface Layout {
+  /** The account tab each provider's card shows (provider id → card id); the first card when absent. */
+  accountTab: Record<string, string>;
   alwaysShowPace: boolean;
   usageGoal: boolean;
   cardOrder: string[];
   collapsed: Record<string, boolean>;
-  hidden: Record<string, boolean>;
   hideExtras: boolean;
   hintDismissed: boolean;
   language: Language;
@@ -273,6 +274,30 @@ export interface ProviderInfo {
   id: string;
   name: string;
   signIn: string;
+}
+
+/** One row of the single provider list, as built by `providerListRows`. */
+export interface ProviderListRow {
+  /** The provider id for a catalog row, or the card id for a custom row. */
+  id: string;
+  /** The catalog's name (owned by the host), or the card title for a custom row. */
+  name: string;
+  /** The mark slug: the provider's icon, or the card's for a custom row. */
+  icon: string;
+  /** On in config.toml; a custom row is on by definition. */
+  enabled: boolean;
+  /** The switch draws (a catalog row); a custom row toggles in config.toml. */
+  switchable: boolean;
+  /** `providerState` of the catalog row; "" for a custom row. */
+  state: string;
+  /** The catalog's sign-in hint; the status line while `state` is "needs". */
+  signIn: string;
+  action: "" | "app" | "settings" | "terminal";
+  addAccounts: Array<"code" | "codex" | "desktop">;
+  /** The provider's cards in the dashboard's order; a custom row carries its one. */
+  cards: Array<{ id: string; metrics: number; title: string }>;
+  /** The provider's total metric count across its accounts. */
+  metrics: number;
 }
 
 export interface Payload {

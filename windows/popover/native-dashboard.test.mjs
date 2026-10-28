@@ -242,6 +242,50 @@ try {
   assert.match(withUpdate, />Update available</);
   assert.ok(withUpdate.indexOf('>Update available<') < withUpdate.indexOf('native-provider-tabs'));
   assert.doesNotMatch(nativeDashboard, /Atualização disponível/);
+
+  // A provider with several accounts is one tab (named after the provider) and its section
+  // gets the account tabs under the header — no dot, no bullet: the label is the tab. The
+  // card shows the selected account's metrics; with one account there are no tabs at all.
+  const workCard = {
+    ...card, id: 'anthropic@work', title: 'Claude · work',
+    rows: [quotaRow('Session', 90), { ...card.rows[1] }],
+  };
+  const multiAccount = (accountTab = {}, primary = payload.primary) => renderToStaticMarkup(React.createElement(TooltipProvider, {},
+    React.createElement(LanguageProvider, { language: 'en' },
+      React.createElement(NativeDashboard, {
+        cards: [card, workCard, { ...card, id: 'zai', title: 'Z.AI', rows: [quotaRow('Session', 10)] }],
+        hint: false,
+        layout: { ...emptyLayout(), popoverStyle: 'native', accountTab },
+        nowMs, payload: { ...payload, primary },
+        onCustomizeProvider() {}, onDismissHint() {}, onOpenCustomize() {}, onOpenSettings() {},
+        onRowAction() {}, onRowMenuOpenChange() {}, onSelectAccount() {},
+        onSwitchAccount() {}, onToggleCollapse() {}, onToggleShowAs() {},
+      }))));
+  const tabs = multiAccount();
+  // One provider tab per provider, not one per account: Claude and Z.AI.
+  assert.equal((tabs.match(/class="native-tab"/g) || []).length, 2);
+  // ASSERT: the section header names the provider, never the account's "Claude · work" title.
+  assert.doesNotMatch(tabs, /Claude · work/);
+  // ASSERT: the account tabs live under the header, labelled Default (no suffix) and work.
+  assert.match(tabs, /role="tablist" aria-label="Accounts"/);
+  assert.match(tabs, />Default</);
+  assert.match(tabs, />work</);
+  // ASSERT: the tablist is plain — no dot or bullet standing in for a label.
+  const tablist = tabs.slice(tabs.indexOf('role="tablist"'), tabs.indexOf('</div>', tabs.indexOf('role="tablist"')));
+  assert.doesNotMatch(tablist, /aria-hidden|●|•/);
+  // ASSERT: with no remembered tab the payload's primary is worth when it is one of the group's cards.
+  assert.match(tabs, /data-card-id="anthropic"/);
+  assert.doesNotMatch(tabs, /data-card-id="anthropic@work"/);
+  // ASSERT: a remembered tab picks that account's card, and wins over the primary.
+  assert.match(multiAccount({ anthropic: 'anthropic@work' }), /data-card-id="anthropic@work"/);
+  assert.match(multiAccount({ anthropic: 'anthropic' }, 'anthropic@work'), /data-card-id="anthropic"/);
+  // ASSERT: with nothing remembered the primary's account is the one shown.
+  assert.match(multiAccount({}, 'anthropic@work'), /data-card-id="anthropic@work"/);
+  // ASSERT: a remembered tab no account holds falls back to the primary, else the first card.
+  assert.doesNotMatch(multiAccount({ anthropic: 'anthropic@gone' }), /data-card-id="anthropic@work"/);
+  assert.match(multiAccount({ anthropic: 'anthropic@gone' }, 'anthropic@work'), /data-card-id="anthropic@work"/);
+  // ASSERT: the single-account dashboard keeps no account tabs (the old screen).
+  assert.doesNotMatch(nativeDashboard, /role="tablist"/);
   const settingsPayload = { ...emptyPayload(''), os: 'macos' };
   const settingsProps = {
     cards: [card], layout: { ...emptyLayout(), popoverStyle: 'native' }, nowMs, payload: settingsPayload,
@@ -341,6 +385,63 @@ try {
     const chromeSource = await readFile(new URL('./src/components/Chrome.tsx', import.meta.url), 'utf8');
     assert.doesNotMatch(chromeSource, /m\.native_style\(\)|Native Style/);
   }
+  // The single provider list: an enabled row that still needs its credential
+  // keeps the hint off the row's text — it rides an alert icon beside the name
+  // — and its sign-in action takes the "+" column as an icon.
+  const { ProviderList } = await server.ssrLoadModule('/src/components/ProviderList.tsx');
+  const needsProviders = [
+    { id: 'anthropic', name: 'Anthropic API', enabled: true, configured: false, env: '', signIn: 'Add an API key in Settings, then Refresh.', action: 'settings', addAccounts: ['code'] },
+    { id: 'openai', name: 'Codex', enabled: true, configured: false, env: '', signIn: 'Run `codex login` in a terminal, then Refresh.', action: 'terminal', addAccounts: ['codex'] },
+    { id: 'cursor', name: 'Cursor', enabled: true, configured: false, env: '', signIn: 'Sign in to the Cursor app, then Refresh.', action: 'app', addAccounts: [] },
+    { id: 'zai', name: 'Z.AI', enabled: true, configured: false, env: 'ZAI_API_KEY', signIn: 'Set the ZAI_API_KEY, then Refresh.', action: '', addAccounts: [] },
+    { id: 'moonshot', name: 'Moonshot', enabled: true, configured: true, env: '', signIn: '', action: '', addAccounts: ['code'] },
+  ];
+  // Every row already has its card, as once the report brings the error card.
+  const needsCards = [
+    { id: 'anthropic', title: 'Anthropic API', icon: 'anthropic_api', rows: [{ kind: 'metric' }] },
+    { id: 'openai', title: 'Codex', icon: 'openai', rows: [{ kind: 'metric' }] },
+    { id: 'cursor', title: 'Cursor', icon: 'cursor', rows: [{ kind: 'metric' }] },
+    { id: 'zai', title: 'Z.AI', icon: 'zai', rows: [{ kind: 'metric' }] },
+    { id: 'moonshot', title: 'Moonshot', icon: 'moonshot', rows: [{ kind: 'metric' }, { kind: 'metric' }] },
+  ];
+  const listMarkup = renderToStaticMarkup(React.createElement(TooltipProvider, {},
+    React.createElement(LanguageProvider, { language: 'en' },
+      React.createElement(ProviderList, {
+        cards: needsCards, error: '', layout: emptyLayout(), providers: needsProviders,
+        onOpen() {}, onReorder() {}, onToggle() {},
+      }))));
+  const rowOf = (id, nextId) => listMarkup.slice(
+    listMarkup.indexOf(`data-provider-id="${id}"`),
+    nextId ? listMarkup.indexOf(`data-provider-id="${nextId}"`) : listMarkup.length,
+  );
+  const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const keyHint = 'Add an API key in Settings, then Refresh.';
+  // The hint is never visible text: once, as the alert icon's label (Radix
+  // keeps the tooltip itself out of static markup).
+  assert.equal(listMarkup.split(keyHint).length - 1, 1);
+  assert.doesNotMatch(listMarkup, new RegExp(`>${escaped(keyHint)}`));
+  const settingsRow = rowOf('anthropic', 'openai');
+  assert.match(settingsRow, new RegExp(`<span tabindex="0" role="img" aria-label="${escaped(keyHint)}"`));
+  assert.match(settingsRow, /<svg[^>]*class="[^"]*text-notice[^"]*"/);
+  assert.match(settingsRow, /<button[^>]*aria-label="Add key"/);
+  assert.doesNotMatch(settingsRow, /action-btn|aria-label="Add account"/);
+  // The focusable alert icon is not nested in the row's open button: the
+  // identity of a row that needs its credential is not a button.
+  assert.doesNotMatch(settingsRow, /<button[^>]*>(?:(?!<\/button>).)*role="img"/s);
+  const terminalRow = rowOf('openai', 'cursor');
+  assert.match(terminalRow, /<button[^>]*aria-label="Sign in"/);
+  assert.doesNotMatch(terminalRow, /action-btn|aria-label="Add account"/);
+  assert.match(rowOf('cursor', 'zai'), /<button[^>]*aria-label="Open app"/);
+  // Without an action the alert stays and the "+" column is an empty slot.
+  const noActionRow = rowOf('zai', 'moonshot');
+  assert.match(noActionRow, /<span tabindex="0" role="img" aria-label="Set the ZAI_API_KEY, then Refresh\."/);
+  assert.doesNotMatch(noActionRow, /aria-label="(Add key|Sign in|Open app)"/);
+  assert.match(noActionRow, /<span aria-hidden="true" class="size-\[var\(--row-icon-box\)\]">/);
+  // A ready row keeps its metrics subtitle and the add-account "+".
+  const readyRow = rowOf('moonshot');
+  assert.match(readyRow, />2 metrics</);
+  assert.match(readyRow, /<button[^>]*aria-label="Add account"/);
+  assert.doesNotMatch(readyRow, /text-notice/);
   console.log('native dashboard: ok');
 } finally {
   await server.close();

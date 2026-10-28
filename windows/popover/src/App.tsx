@@ -29,6 +29,7 @@ import {
   parseHostPayload,
   prefsForCard,
   projectCards,
+  providerGroups,
   resolvedTheme,
   saveLayout,
   seedStars,
@@ -85,6 +86,16 @@ export default function App() {
   const cards = useMemo(() => (payload.hostError ? [] : projectCards(payload, nowMs, layout.language)), [payload, nowMs, layout.language]);
   const visible = useMemo(() => applyCardLayout(cards, layout), [cards, layout]);
   const currentCard = cards.find((card) => card.id === providerId);
+  // The provider's accounts for the detail screen's tabs: the group that holds the
+  // opened card, so a provider with several accounts names itself and lists them.
+  const currentGroup = providerGroups(cards).find((group) => group.cards.some((card) => card.id === providerId));
+  const currentProviderName = currentGroup
+    ? payload.providers.find((provider) => provider.id === currentGroup.id)?.name ?? currentGroup.cards[0].title
+    : "";
+
+  function selectAccount(providerId: string, cardId: string) {
+    commit({ ...layout, accountTab: { ...layout.accountTab, [providerId]: cardId } });
+  }
 
   function commit(next: Layout) {
     setLayout(next);
@@ -401,7 +412,9 @@ export default function App() {
         ? m.settings({}, { locale: layout.language })
         : screen === "about"
           ? m.about({}, { locale: layout.language })
-          : currentCard?.title || m.provider({}, { locale: layout.language });
+          : screen === "provider"
+            ? (currentGroup && currentGroup.cards.length > 1 ? currentProviderName : currentCard?.title) || m.provider({}, { locale: layout.language })
+            : currentCard?.title || m.provider({}, { locale: layout.language });
 
   return (
     <LanguageProvider language={layout.language}>
@@ -447,6 +460,7 @@ export default function App() {
                 onOpenSettings={() => go("settings")}
                 onRowAction={onRowAction}
                 onRowMenuOpenChange={setRowMenuOpen}
+                onSelectAccount={selectAccount}
                 onSwitchAccount={(vendor, label) => sendCommand("switch-account", { vendor, label })}
                 onToggleCollapse={(id) => {
                   const collapsed = { ...layout.collapsed };
@@ -470,6 +484,7 @@ export default function App() {
               onReorder={(ids) => commit({ ...layout, cardOrder: mergeVisibleOrder(layout.cardOrder, ids) })}
               onRowAction={onRowAction}
               onRowMenuOpenChange={setRowMenuOpen}
+              onSelectAccount={selectAccount}
               onSwitchAccount={(vendor, label) => sendCommand("switch-account", { vendor, label })}
               onToggleCollapse={(id) => {
                 const collapsed = { ...layout.collapsed };
@@ -489,19 +504,17 @@ export default function App() {
               onOpen={(id) => openProvider(id, "customize")}
               onOpenSettings={() => go("settings")}
               onReorder={(ids) => commit({ ...layout, cardOrder: mergeVisibleOrder(layout.cardOrder, ids) })}
-              onToggle={(id, on) => {
-                const hidden = { ...layout.hidden };
-                if (on) delete hidden[id];
-                else hidden[id] = true;
-                commit({ ...layout, hidden });
-              }}
+              onToggle={(id, on) => sendCommand("set-provider-enabled", { id, value: on })}
             />
           ) : null}
           {screen === "provider" ? (
             <ProviderDetail
               card={currentCard}
+              cards={currentGroup ? currentGroup.cards : undefined}
+              providerName={currentGroup ? currentProviderName : undefined}
               layout={layout}
               starError={starError}
+              onSelectAccount={(cardId) => setProviderId(cardId)}
               onReorderRows={reorderRows}
               onToggleStar={(key) => {
                 if (!currentCard) return;
@@ -538,12 +551,7 @@ export default function App() {
               onOpenCustomize={() => go("customize")}
               onOpenProvider={(id) => openProvider(id, "settings")}
               onReorderProviders={(ids) => commit({ ...layout, cardOrder: mergeVisibleOrder(layout.cardOrder, ids) })}
-              onToggleProvider={(id, on) => {
-                const hidden = { ...layout.hidden };
-                if (on) delete hidden[id];
-                else hidden[id] = true;
-                commit({ ...layout, hidden });
-              }}
+              onToggleProvider={(id, on) => sendCommand("set-provider-enabled", { id, value: on })}
               onResetCustomization={resetAll}
               resetArmed={resetArmed}
               onResetTimes={(resetTimes) => commit({ ...layout, resetTimes })}

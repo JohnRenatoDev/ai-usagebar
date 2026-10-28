@@ -31,7 +31,16 @@ import {
   quotaAlternate,
   headlineLabel,
   headlineAlternate,
-  lacksCredentials,
+  providerListRows,
+  providerOf,
+  reorderProviderRows,
+  providerGroups,
+  expandGroupOrder,
+  activeAccountTab,
+  accountLabel,
+  metricsCountText,
+  multiAccountSubtitle,
+  addAccountDecision,
   seedLayout,
   hintPending,
   absorbPayload,
@@ -499,22 +508,26 @@ const three = [
   { id: 'openai', title: 'Codex' },
   { id: 'cursor', title: 'Cursor' },
 ];
+assert.deepEqual(orderedCards(three, { cardOrder: ['cursor'] }).map((c) => c.id), ['cursor', 'anthropic', 'openai']);
+
+// A layout saved with the removed `hidden` key still loads: the key is ignored
+// and a once-hidden card shows again.
 assert.deepEqual(
   applyCardLayout(three, { cardOrder: ['cursor', 'anthropic'], hidden: { openai: true }, collapsed: {}, hideExtras: false }).map((c) => c.id),
-  ['cursor', 'anthropic'],
+  ['cursor', 'anthropic', 'openai'],
 );
 assert.deepEqual(moveCardBefore(['a', 'b', 'c'], 'c', 'a'), ['c', 'a', 'b']);
 assert.deepEqual(moveCardBefore(['a', 'b', 'c'], 'a', null), ['b', 'c', 'a']);
 assert.deepEqual(nudgeCard(['a', 'b', 'c'], 'b', -1), ['b', 'a', 'c']);
-assert.deepEqual(orderedCards(three, { cardOrder: ['cursor'] }).map((c) => c.id), ['cursor', 'anthropic', 'openai']);
 
 const store = memoryStorage();
 saveLayout(store, { cardOrder: ['cursor', 'openai'], hidden: { openai: true }, collapsed: { cursor: true }, hideExtras: true });
 const loaded = loadLayout(store);
 assert.equal(loaded.hideExtras, true);
-assert.equal(loaded.hidden.openai, true);
+assert.equal(loaded.hidden, undefined, 'hidden is no longer a layout field');
 assert.equal(loaded.collapsed.cursor, true);
 assert.deepEqual(loaded.cardOrder, ['cursor', 'openai']);
+assert.ok(!store.getItem(LAYOUT_KEY).includes('"hidden"'), 'the old key drops on the next save');
 const synced = syncLayout(loaded, ['anthropic', 'openai', 'cursor']);
 assert.deepEqual(synced.cardOrder, ['cursor', 'openai', 'anthropic']);
 assert.ok(store.getItem(LAYOUT_KEY).includes('cursor'));
@@ -1200,42 +1213,33 @@ assert.equal(quotaAlternate({ kind: 'metric', leftPercent: 0, usedPercent: 100 }
 assert.equal(quotaAlternate({ kind: 'text', label: 'Balance', value: '$1' }, 'left'), '');
 assert.equal(quotaAlternate(null, 'left'), '');
 
-// --- first launch: lacksCredentials / seedLayout / hintPending ---------------
+// --- first launch: seedLayout / hintPending ---------------------------------
 
 {
-  // ARRANGE: two providers with keys, two without, one with an expired login
-  const keyed = { id: 'anthropic', error: '' };
-  const expired = { id: 'openai', error: 'HTTP 401: authentication rejected' };
-  const zai = { id: 'zai', error: 'no API key configured for zai' };
-  const openrouter = { id: 'openrouter', error: 'No API key' };
-  const entries = [keyed, expired, zai, openrouter];
+  // ARRANGE: providers with and without credentials on this machine
+  const entries = [
+    { id: 'anthropic', error: '' },
+    { id: 'openai', error: 'HTTP 401: authentication rejected' },
+    { id: 'zai', error: 'no API key configured for zai' },
+    { id: 'openrouter', error: 'No API key' },
+  ];
 
   // ACT
   const seeded = seedLayout(emptyLayout(), entries);
 
-  // ASSERT: only the "No API key" providers start hidden, once
-  assert.equal(lacksCredentials(zai), true);
-  assert.equal(lacksCredentials(expired), false);
-  assert.equal(lacksCredentials(keyed), false);
-  assert.equal(lacksCredentials(null), false);
-  assert.deepEqual(seeded.hidden, { zai: true, openrouter: true });
+  // ASSERT: first launch only marks the layout seeded — nothing is hidden any
+  // more, since the list's switch is the provider's `enabled` in config.toml
   assert.equal(seeded.seeded, true);
+  assert.equal(seeded.hidden, undefined);
   assert.equal(hintPending(seeded), true);
 
-  // ACT: the user re-enables Z.AI later; a second payload must not hide it again
-  const reenabled = { ...seeded, hidden: { openrouter: true } };
-  assert.deepEqual(seedLayout(reenabled, entries).hidden, { openrouter: true });
-  assert.strictEqual(seedLayout(reenabled, entries), reenabled);
+  // ACT: a second payload is not a first launch
+  assert.strictEqual(seedLayout(seeded, entries), seeded);
 
   // ASSERT: no entries (host error) is not a first launch
   assert.equal(seedLayout(emptyLayout(), []).seeded, false);
   assert.equal(seedLayout(emptyLayout(), null).seeded, false);
   assert.equal(hintPending(emptyLayout()), false);
-
-  // ASSERT: when every provider lacks a credential the starter set stays visible
-  const allMissing = seedLayout(emptyLayout(), [zai, openrouter]);
-  assert.deepEqual(allMissing.hidden, {});
-  assert.equal(allMissing.seeded, true);
 
   // ASSERT: the flags survive storage and syncLayout; the hint can be dismissed
   const store = memoryStorage();
@@ -1247,7 +1251,6 @@ assert.equal(quotaAlternate(null, 'left'), '');
   const synced = syncLayout(loaded, ['anthropic', 'openai', 'zai', 'openrouter']);
   assert.equal(synced.seeded, true);
   assert.equal(synced.hintDismissed, true);
-  assert.deepEqual(synced.hidden, { zai: true, openrouter: true });
   assert.equal(emptyLayout().seeded, false);
   assert.equal(emptyLayout().hintDismissed, false);
   assert.equal(normalizeLayout({ seeded: 'yes', hintDismissed: 1 }).seeded, false);
@@ -1256,11 +1259,10 @@ assert.equal(quotaAlternate(null, 'left'), '');
 // --- absorbPayload ------------------------------------------------------------
 
 {
-  // ARRANGE: a remembered layout with hidden providers and a custom order
+  // ARRANGE: a remembered layout with a custom order
   const remembered = {
     ...emptyLayout(),
     cardOrder: ['openai', 'anthropic'],
-    hidden: { zai: true },
     seeded: true,
     hintDismissed: true,
   };
@@ -1269,18 +1271,165 @@ assert.equal(quotaAlternate(null, 'left'), '');
   assert.strictEqual(absorbPayload(remembered, []), remembered);
   assert.strictEqual(absorbPayload(remembered, null), remembered);
 
-  // ACT + ASSERT: a real payload syncs (keeps hidden for known ids, appends new ids)
+  // ACT + ASSERT: a real payload syncs (appends new ids after the remembered order)
   const entries = [{ id: 'anthropic', error: '' }, { id: 'openai', error: '' }, { id: 'zai', error: 'no API key' }, { id: 'cursor', error: '' }];
   const synced = absorbPayload(remembered, entries);
   assert.deepEqual(synced.cardOrder, ['openai', 'anthropic', 'zai', 'cursor']);
-  assert.deepEqual(synced.hidden, { zai: true });
   assert.equal(synced.seeded, true);
 
-  // ACT + ASSERT: a fresh layout gets seeded by its first real payload
+  // ACT + ASSERT: a fresh layout gets seeded by its first real payload, hiding nothing
   const fresh = absorbPayload(emptyLayout(), entries);
-  assert.deepEqual(fresh.hidden, { zai: true });
   assert.equal(fresh.seeded, true);
+  assert.equal(fresh.hidden, undefined);
   assert.equal(hintPending(fresh), true);
+}
+
+// --- the single provider list: providerListRows / reorderProviderRows --------
+
+{
+  // ARRANGE: a catalog with three on (one without a card on screen) and two
+  // off (one with a card still on screen), plus a custom provider only the
+  // report knows
+  const providers = [
+    { id: 'anthropic', name: 'Claude', enabled: true, configured: true, env: '', signIn: '', action: '', addAccounts: ['code', 'desktop'] },
+    { id: 'openai', name: 'Codex', enabled: true, configured: false, env: '', signIn: 'Run `codex login`', action: 'terminal', addAccounts: ['codex'] },
+    { id: 'supergrok', name: 'SuperGrok', enabled: true, configured: false, env: '', signIn: '', action: 'terminal', addAccounts: [] },
+    { id: 'zai', name: 'Z.AI', enabled: false, configured: false, env: '', signIn: '', action: 'settings', addAccounts: [] },
+    { id: 'moonshot', name: 'Moonshot', enabled: false, configured: true, env: '', signIn: '', action: 'settings', addAccounts: [] },
+  ];
+  const cards = [
+    { id: 'zai', title: 'Z.AI', icon: 'zai', rows: [{ kind: 'metric' }] },
+    { id: 'anthropic', title: 'Claude', icon: 'anthropic', rows: [{ kind: 'metric' }, { kind: 'text' }] },
+    { id: 'openai@work', title: 'Work', icon: 'openai', rows: [{ kind: 'metric' }, { kind: 'metric' }] },
+    { id: 'openai@home', title: 'Home', icon: 'openai', rows: [{ kind: 'metric' }] },
+    { id: 'my-llm', title: 'My LLM', icon: 'ollama', rows: [{ kind: 'metric' }] },
+  ];
+  const layout = { ...emptyLayout(), cardOrder: ['zai', 'anthropic', 'openai@work', 'openai@home', 'my-llm'] };
+
+  // ACT
+  const { enabled, disabled } = providerListRows(providers, cards, layout);
+
+  // ASSERT: the enabled block follows the dashboard's first-card order — the
+  // switched-off provider's card takes no row — and an enabled provider with no
+  // card on screen trails the block, in the catalog's order
+  assert.deepEqual(enabled.map((row) => row.id), ['anthropic', 'openai', 'my-llm', 'supergrok']);
+  assert.deepEqual(disabled.map((row) => row.id), ['zai', 'moonshot']);
+
+  // ASSERT: accounts group under their provider, keeping the dashboard's order
+  const codex = enabled.find((row) => row.id === 'openai');
+  assert.deepEqual(codex.cards.map((card) => card.id), ['openai@work', 'openai@home']);
+  assert.deepEqual(codex.cards.map((card) => card.metrics), [2, 1]);
+  assert.equal(codex.state, 'needs');
+  assert.equal(codex.signIn, 'Run `codex login`');
+  assert.deepEqual(codex.addAccounts, ['codex']);
+
+  // ASSERT: a catalog-less card is a custom row: on, no switch, its own place
+  const custom = enabled.find((row) => row.id === 'my-llm');
+  assert.equal(custom.switchable, false);
+  assert.equal(custom.enabled, true);
+  assert.equal(custom.state, '');
+  assert.equal(custom.name, 'My LLM');
+  assert.equal(custom.icon, 'ollama');
+  assert.deepEqual(custom.cards, [{ id: 'my-llm', title: 'My LLM', metrics: 1 }]);
+
+  // ASSERT: the disabled block reads the catalog's status and keeps its card
+  const offZai = disabled.find((row) => row.id === 'zai');
+  assert.equal(offZai.state, 'off');
+  assert.equal(offZai.switchable, true);
+  assert.deepEqual(offZai.cards.map((card) => card.id), ['zai']);
+  const offMoonshot = disabled.find((row) => row.id === 'moonshot');
+  assert.equal(offMoonshot.state, 'off-ready');
+  assert.deepEqual(offMoonshot.cards, []);
+
+  // ACT: drag My LLM to the top; its provider's cards move together
+  const moved = reorderProviderRows(layout.cardOrder, enabled, ['my-llm', 'anthropic', 'openai', 'supergrok']);
+
+  // ASSERT: Codex's two accounts stay in their own order, and the switched-off
+  // card waits after them
+  assert.deepEqual(moved, ['my-llm', 'anthropic', 'openai@work', 'openai@home', 'zai']);
+
+  // ASSERT: providerOf links an account card to its provider
+  assert.equal(providerOf('anthropic@work'), 'anthropic');
+  assert.equal(providerOf('anthropic'), 'anthropic');
+}
+
+// --- provider accounts: grouping, tabs, labels, and the "+" decision -------
+
+{
+  // ARRANGE: dashboard order with one provider's two accounts, a plain card, and a
+  // custom provider's card the catalog doesn't know
+  const cards = [
+    { id: 'zai', title: 'Z.AI', icon: 'zai', rows: [{ kind: 'metric' }] },
+    { id: 'anthropic', title: 'Claude', icon: 'anthropic', rows: [{ kind: 'metric' }, { kind: 'metric' }] },
+    { id: 'anthropic@work', title: 'Claude · work', icon: 'anthropic', rows: [{ kind: 'metric' }, { kind: 'metric' }, { kind: 'metric' }] },
+    { id: 'my-llm', title: 'My LLM', icon: 'ollama', rows: [{ kind: 'metric' }] },
+  ];
+  const layout = emptyLayout();
+
+  // ACT: group the dashboard's cards by provider
+  const groups = providerGroups(cards);
+
+  // ASSERT: groups follow the first-card order; several accounts land in one
+  // group; a catalog-less card is a group of one
+  assert.deepEqual(groups.map((group) => group.id), ['zai', 'anthropic', 'my-llm']);
+  assert.deepEqual(groups[1].cards.map((card) => card.id), ['anthropic', 'anthropic@work']);
+  assert.deepEqual(groups[2].cards.map((card) => card.id), ['my-llm']);
+
+  // ACT: the remembered account tab, then the fallbacks
+  // ASSERT: a remembered tab that is one of the provider's cards wins, over primary
+  assert.equal(activeAccountTab(groups[1].cards, { ...layout, accountTab: { anthropic: 'anthropic@work' } }, 'anthropic', 'anthropic'), 'anthropic@work');
+  // ASSERT: with no value, the payload's primary is worth when it is one of the group's cards
+  assert.equal(activeAccountTab(groups[1].cards, layout, 'anthropic', 'anthropic@work'), 'anthropic@work');
+  // ASSERT: a remembered tab no card holds yields to a valid primary
+  assert.equal(activeAccountTab(groups[1].cards, { ...layout, accountTab: { anthropic: 'anthropic@gone' } }, 'anthropic', 'anthropic@work'), 'anthropic@work');
+  // ASSERT: a primary of another provider (or none) doesn't count; the first card is worth
+  assert.equal(activeAccountTab(groups[1].cards, layout, 'anthropic', 'zai'), 'anthropic');
+  assert.equal(activeAccountTab(groups[1].cards, layout, 'anthropic'), 'anthropic');
+  assert.equal(activeAccountTab(groups[1].cards, { ...layout, accountTab: { anthropic: 'anthropic@gone' } }, 'anthropic', 'zai'), 'anthropic');
+  // ASSERT: a group of one always lands on its card, primary or not
+  assert.equal(activeAccountTab(groups[0].cards, layout, 'zai', 'anthropic'), 'zai');
+
+  // ACT: the tab labels — "Claude · work" loses its prefix, "anthropic@home" uses its
+  // suffix, and the plain account reads the catalog's word
+  // ASSERT
+  assert.equal(accountLabel({ id: 'anthropic@work', title: 'Claude · work' }, 'Claude'), 'work');
+  assert.equal(accountLabel({ id: 'anthropic@home', title: 'Claude' }, 'Claude'), 'home');
+  assert.equal(accountLabel({ id: 'anthropic', title: 'Claude' }, 'Claude'), 'Default');
+  assert.equal(accountLabel({ id: 'anthropic', title: 'Claude' }, 'Claude', 'pt-BR'), 'Padrão');
+
+  // ACT: the multi-account subtitle joins the labels and the provider's total count
+  // ASSERT
+  const rowCards = [
+    { id: 'anthropic', title: 'Claude', metrics: 2 },
+    { id: 'anthropic@work', title: 'Claude · work', metrics: 3 },
+  ];
+  assert.equal(multiAccountSubtitle(rowCards, 5, 'Claude', 'en'), 'Default, work · 5 metrics');
+  assert.equal(metricsCountText(1, 'en'), '1 metric');
+  assert.equal(metricsCountText(5, 'en'), '5 metrics');
+  assert.equal(metricsCountText(5, 'pt-BR'), '5 métricas');
+
+  // ACT: the "+" decision — nothing when off or kindless, the kind's action when there
+  // is one, a menu when there are several
+  // ASSERT
+  assert.equal(addAccountDecision({ enabled: false, addAccounts: ['code'] }), null);
+  assert.equal(addAccountDecision({ enabled: true, addAccounts: [] }), null);
+  assert.deepEqual(addAccountDecision({ enabled: true, addAccounts: ['codex'] }), { kind: 'direct', value: 'codex' });
+  assert.deepEqual(addAccountDecision({ enabled: true, addAccounts: ['code', 'desktop'] }), { kind: 'menu', value: ['code', 'desktop'] });
+
+  // ACT: dragging the Claude group to the top expands it to its accounts in their own
+  // order; groups the drag order left out still keep their cards
+  // ASSERT
+  assert.deepEqual(expandGroupOrder(groups, ['anthropic', 'zai', 'my-llm']), ['anthropic', 'anthropic@work', 'zai', 'my-llm']);
+  assert.deepEqual(expandGroupOrder(groups, ['zai']), ['zai', 'anthropic', 'anthropic@work', 'my-llm']);
+
+  // ACT: the layout round-trip remembers the tab per provider
+  const storage = memoryStorage();
+  saveLayout(storage, { ...layout, accountTab: { anthropic: 'anthropic@work' } });
+  const loaded = loadLayout(storage);
+  assert.deepEqual(loaded.accountTab, { anthropic: 'anthropic@work' });
+  // ASSERT: syncLayout keeps it, and a fresh layout starts without tabs
+  assert.deepEqual(syncLayout(loaded, cards.map((card) => card.id)).accountTab, { anthropic: 'anthropic@work' });
+  assert.deepEqual(normalizeLayout({}).accountTab, {});
 }
 
 // --- grouped metrics (Antigravity Session / Weekly) and duplicate labels -----
@@ -1774,7 +1923,6 @@ assert.equal(resolvedTheme('system'), 'light');
     ...emptyLayout(),
     seeded: true,
     cardOrder: ['anthropic', 'supergrok', 'antigravity@abc123', 'zai'],
-    hidden: { zai: true },
     collapsed: { 'antigravity@abc123': true },
     rows: { 'antigravity@abc123': { always: ['metric:Gemini (Weekly)'], demand: [], off: {} } },
     stars: {
@@ -1797,7 +1945,6 @@ assert.equal(resolvedTheme('system'), 'light');
   assert.deepEqual(again.stars, mine.stars);
   assert.deepEqual(again.collapsed, mine.collapsed);
   assert.deepEqual(again.rows, mine.rows);
-  assert.deepEqual(again.hidden, { zai: true });
 }
 
 {
@@ -1805,7 +1952,6 @@ assert.equal(resolvedTheme('system'), 'light');
   const mine = {
     ...emptyLayout(),
     cardOrder: ['openai', 'anthropic', 'zai'],
-    hidden: { zai: true },
     stars: { openai: ['metric:Codex weekly'], zai: [] },
   };
 
@@ -1816,7 +1962,6 @@ assert.equal(resolvedTheme('system'), 'light');
   // ASSERT: its place, stars (even "off the menu bar") and flags wait for it
   assert.deepEqual(without.cardOrder, ['openai', 'anthropic', 'zai']);
   assert.deepEqual(back.cardOrder, ['openai', 'anthropic', 'zai']);
-  assert.deepEqual(back.hidden, { zai: true });
   assert.deepEqual(back.stars.zai, []);
 }
 

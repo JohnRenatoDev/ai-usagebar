@@ -14,7 +14,9 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{}} AboutInputs */
 /** @typedef {{}} About_Summary_Menu_BarInputs */
 /** @typedef {{}} About_Summary_TrayInputs */
+/** @typedef {{}} AccountsInputs */
 /** @typedef {{}} ActivityInputs */
+/** @typedef {{}} Add_AccountInputs */
 /** @typedef {{}} Add_Claude_Code_AccountInputs */
 /** @typedef {{}} Add_Claude_Desktop_AccountInputs */
 /** @typedef {{}} Add_Codex_AccountInputs */
@@ -77,6 +79,7 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{}} Date_UnavailableInputs */
 /** @typedef {{ day: NonNullable<unknown>, time: NonNullable<unknown> }} Day_AtInputs */
 /** @typedef {{ days: NonNullable<unknown> }} Days_AgoInputs */
+/** @typedef {{}} Default_AccountInputs */
 /** @typedef {{}} Detect_ProvidersInputs */
 /** @typedef {{}} Development_BuildInputs */
 /** @typedef {{}} DismissInputs */
@@ -488,6 +491,22 @@ export const about_summary_tray = /** @type {((inputs?: About_Summary_TrayInputs
 /**
 * | output |
 * | --- |
+* | "Accounts" |
+*
+* @param {AccountsInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const accounts = /** @type {((inputs?: AccountsInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<AccountsInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.accounts(inputs)
+	if (locale === "ko") return __ko.accounts(inputs)
+	if (locale === "es") return __es.accounts(inputs)
+	return __en.accounts(inputs)
+});
+/**
+* | output |
+* | --- |
 * | "Activity" |
 *
 * @param {ActivityInputs} inputs
@@ -500,6 +519,22 @@ export const activity = /** @type {((inputs?: ActivityInputs, options?: { locale
 	if (locale === "ko") return __ko.activity(inputs)
 	if (locale === "es") return __es.activity(inputs)
 	return __en.activity(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Add account" |
+*
+* @param {Add_AccountInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const add_account = /** @type {((inputs?: Add_AccountInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Add_AccountInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.add_account(inputs)
+	if (locale === "ko") return __ko.add_account(inputs)
+	if (locale === "es") return __es.add_account(inputs)
+	return __en.add_account(inputs)
 });
 /**
 * | output |
@@ -1492,6 +1527,22 @@ export const days_ago = /** @type {((inputs: Days_AgoInputs, options?: { locale?
 	if (locale === "ko") return __ko.days_ago(inputs)
 	if (locale === "es") return __es.days_ago(inputs)
 	return __en.days_ago(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Default" |
+*
+* @param {Default_AccountInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const default_account = /** @type {((inputs?: Default_AccountInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Default_AccountInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.default_account(inputs)
+	if (locale === "ko") return __ko.default_account(inputs)
+	if (locale === "es") return __es.default_account(inputs)
+	return __en.default_account(inputs)
 });
 /**
 * | output |

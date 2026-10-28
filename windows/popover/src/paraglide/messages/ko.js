@@ -12,7 +12,9 @@
 /** @typedef {{}} AboutInputs */
 /** @typedef {{}} About_Summary_Menu_BarInputs */
 /** @typedef {{}} About_Summary_TrayInputs */
+/** @typedef {{}} AccountsInputs */
 /** @typedef {{}} ActivityInputs */
+/** @typedef {{}} Add_AccountInputs */
 /** @typedef {{}} Add_Claude_Code_AccountInputs */
 /** @typedef {{}} Add_Claude_Desktop_AccountInputs */
 /** @typedef {{}} Add_Codex_AccountInputs */
@@ -75,6 +77,7 @@
 /** @typedef {{}} Date_UnavailableInputs */
 /** @typedef {{ day: NonNullable<unknown>, time: NonNullable<unknown> }} Day_AtInputs */
 /** @typedef {{ days: NonNullable<unknown> }} Days_AgoInputs */
+/** @typedef {{}} Default_AccountInputs */
 /** @typedef {{}} Detect_ProvidersInputs */
 /** @typedef {{}} Development_BuildInputs */
 /** @typedef {{}} DismissInputs */
@@ -328,8 +331,16 @@ export const about_summary_tray = /** @type {(inputs: About_Summary_TrayInputs) 
 	return /** @type {LocalizedString} */ (`Claude, Codex, Cursor, Copilot 등 AI 요금제별 남은 사용량을 시스템 트레이에서 바로 확인합니다. 초기화 시각과 사용 속도도 함께 보여 주므로 작업 도중 한도에 걸리지 않습니다.`)
 };
 
+export const accounts = /** @type {(inputs: AccountsInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`계정`)
+};
+
 export const activity = /** @type {(inputs: ActivityInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`활동`)
+};
+
+export const add_account = /** @type {(inputs: Add_AccountInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`계정 추가`)
 };
 
 export const add_claude_code_account = /** @type {(inputs: Add_Claude_Code_AccountInputs) => LocalizedString} */ () => {
@@ -578,6 +589,10 @@ export const day_at = /** @type {(inputs: Day_AtInputs) => LocalizedString} */ (
 
 export const days_ago = /** @type {(inputs: Days_AgoInputs) => LocalizedString} */ (i) => {
 	return /** @type {LocalizedString} */ (`${i?.days}일 전`)
+};
+
+export const default_account = /** @type {(inputs: Default_AccountInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`기본`)
 };
 
 export const detect_providers = /** @type {(inputs: Detect_ProvidersInputs) => LocalizedString} */ () => {

@@ -12,7 +12,9 @@
 /** @typedef {{}} AboutInputs */
 /** @typedef {{}} About_Summary_Menu_BarInputs */
 /** @typedef {{}} About_Summary_TrayInputs */
+/** @typedef {{}} AccountsInputs */
 /** @typedef {{}} ActivityInputs */
+/** @typedef {{}} Add_AccountInputs */
 /** @typedef {{}} Add_Claude_Code_AccountInputs */
 /** @typedef {{}} Add_Claude_Desktop_AccountInputs */
 /** @typedef {{}} Add_Codex_AccountInputs */
@@ -75,6 +77,7 @@
 /** @typedef {{}} Date_UnavailableInputs */
 /** @typedef {{ day: NonNullable<unknown>, time: NonNullable<unknown> }} Day_AtInputs */
 /** @typedef {{ days: NonNullable<unknown> }} Days_AgoInputs */
+/** @typedef {{}} Default_AccountInputs */
 /** @typedef {{}} Detect_ProvidersInputs */
 /** @typedef {{}} Development_BuildInputs */
 /** @typedef {{}} DismissInputs */
@@ -328,8 +331,16 @@ export const about_summary_tray = /** @type {(inputs: About_Summary_TrayInputs) 
 	return /** @type {LocalizedString} */ (`Veja quanto resta em cada plano de IA — Claude, Codex, Cursor, Copilot e muitos outros — direto na bandeja do sistema, com horários de redefinição e ritmo de uso para que um limite não interrompa sua tarefa.`)
 };
 
+export const accounts = /** @type {(inputs: AccountsInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Contas`)
+};
+
 export const activity = /** @type {(inputs: ActivityInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`Atividade`)
+};
+
+export const add_account = /** @type {(inputs: Add_AccountInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Adicionar conta`)
 };
 
 export const add_claude_code_account = /** @type {(inputs: Add_Claude_Code_AccountInputs) => LocalizedString} */ () => {
@@ -578,6 +589,10 @@ export const day_at = /** @type {(inputs: Day_AtInputs) => LocalizedString} */ (
 
 export const days_ago = /** @type {(inputs: Days_AgoInputs) => LocalizedString} */ (i) => {
 	return /** @type {LocalizedString} */ (`há ${i?.days} d`)
+};
+
+export const default_account = /** @type {(inputs: Default_AccountInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`Padrão`)
 };
 
 export const detect_providers = /** @type {(inputs: Detect_ProvidersInputs) => LocalizedString} */ () => {
