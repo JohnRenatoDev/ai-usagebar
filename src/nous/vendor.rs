@@ -41,6 +41,7 @@ pub fn build_placeholders(
         .map(crate::format::usd)
         .unwrap_or_else(|| NEUTRAL_UNAVAILABLE.into());
     let mut values = HashMap::new();
+    values.insert("icon", VendorId::NousResearch.bar_icon().into());
     values.insert("vendor", DISPLAY_NAME.into());
     values.insert("vendor_short", VENDOR_SHORT.into());
     values.insert("plan", plan.clone());
