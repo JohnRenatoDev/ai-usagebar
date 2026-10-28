@@ -82,10 +82,7 @@ fn build_placeholders_with_plan_and_tolerance(
     let weekly_pace = window_pacing(usage.weekly.as_ref(), WEEKLY_WINDOW, pace_tolerance, now);
 
     placeholders([
-        (
-            "icon",
-            VendorId::OpenCodeGo.bar_icon().to_string(),
-        ),
+        ("icon", VendorId::OpenCodeGo.bar_icon().to_string()),
         (
             "vendor_short",
             VendorId::OpenCodeGo.short_name().to_string(),

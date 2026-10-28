@@ -55,10 +55,7 @@ pub fn build_placeholders(snap: &Snapshot, now: DateTime<Utc>) -> HashMap<&'stat
         .unwrap_or_else(|| UNAVAILABLE.to_string());
 
     placeholders([
-        (
-            "icon",
-            VendorId::CommandCode.bar_icon().to_string(),
-        ),
+        ("icon", VendorId::CommandCode.bar_icon().to_string()),
         (
             "vendor_short",
             VendorId::CommandCode.short_name().to_string(),
