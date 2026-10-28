@@ -433,6 +433,19 @@ const claudeCard = cardFor(anthropic);
 const codexCard = cardFor(openai);
 const zaiCard = cardFor(zai);
 
+const syntheticEntry = parseReport(JSON.stringify({entries: [{
+    id: 'synthetic', display_name: 'Synthetic', name: 'synthetic', plan: 'Standard',
+    status: 'ready', stale: false, error: null,
+    sections: [{type: 'metric', label: 'Weekly credits', value: '30%', percent: 30,
+        severity: 'low', detail: 'Regenerates 2% in 3h 04m', regen: '2%',
+        reset_at: '2026-01-01T02:00:00Z'}],
+}]})).entries[0];
+assert.equal(detailRows(syntheticEntry)[0].regen, '2%');
+assert.equal(metricDetail(detailRows(syntheticEntry)[0]), '');
+const syntheticCard = cardFor(syntheticEntry);
+assert.equal(syntheticCard.windows[0].regen, '2%');
+assert.equal(syntheticCard.windows[0].detail, '');
+
 // One card per entry the aggregate report returned, in report order — the
 // card view never restates a provider list of its own.
 assert.deepEqual(cardModel(report).map(c => c.label), ['Claude', 'Codex', 'Z.AI']);
@@ -496,8 +509,15 @@ assert.equal(shortLabel(undefined), '');
 // stale.
 assert.equal(metricDetail(detailRows(anthropic)[0]), '40% elapsed · 22pts over');
 assert.equal(metricDetail(detailRows(anthropic)[1]), '', 'a reset-only detail collapses to nothing');
+assert.equal(metricDetail({detail: 'Regenerates 2% in 3h 04m · 50% elapsed · 20pts ahead', resetAt: '2026-01-01T02:00:00Z'}),
+    '50% elapsed · 20pts ahead');
+assert.equal(metricDetail({detail: 'Regenerates 2% in 3h', resetAt: '2026-01-01T02:00:00Z'}),
+    '', 'a regenerating-only detail collapses to nothing');
+assert.equal(metricDetail({detail: 'Regenerates 20 credits in 3h', resetAt: '2026-01-01T02:00:00Z'}),
+    '');
 assert.equal(metricDetail(null), '');
 assert.equal(metricDetail({detail: 'kept', resetAt: ''}), 'kept');
+assert.equal(metricDetail({detail: 'Regenerates 2% in 3h', resetAt: ''}), 'Regenerates 2% in 3h');
 
 // ---------------------------------------------------------------------------
 // time
