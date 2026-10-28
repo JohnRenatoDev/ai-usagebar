@@ -346,6 +346,7 @@ mod tests {
     fn exposes_exact_and_generic_placeholders() {
         let values = build_placeholders(&sample(), at("2026-08-27T02:30:00Z"));
 
+        assert_eq!(values["icon"], "cmc");
         assert_eq!(values["vendor_short"], "cmc");
         assert_eq!(values["plan"], "GOAT");
         assert_eq!(values["cc_session_pct"], "9");
