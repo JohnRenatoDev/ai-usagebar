@@ -157,6 +157,7 @@ function normalizeSection(raw) {
             headline: raw.headline === 'value' ? 'value' : 'percent',
             resetAt: safeText(raw.reset_at, 64),
             severity: severityOf(percent, raw.severity),
+            regen: safeText(raw && raw.regen, 40),
         };
     }
     if (type === 'block') {
@@ -569,6 +570,7 @@ export function cardFor(entry) {
                 severity: s.severity,
                 resetAt: s.resetAt,
                 detail: metricDetail(s),
+                regen: s.regen,
             };
         }),
         blocks: entry.sections.filter(s => s.type === 'block'),
@@ -599,6 +601,7 @@ export function metricDetail(row) {
     if (!row || !row.resetAt)
         return detail.trim();
     detail = detail.replace(/^Resets in [^·]+\s*(?:·\s*)?/i, '');
+    detail = detail.replace(/^Regenerates [^·]+? in [^·]+\s*(?:·\s*)?/i, '');
     detail = detail.replace(/\s*·\s*reset\s+[^·]+$/i, '');
     return detail.trim();
 }
