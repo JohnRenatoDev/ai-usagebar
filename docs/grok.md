@@ -47,6 +47,11 @@ Banked reset credits, when shown, come from a separate `grok.com` call. That
 call is not part of `/usage` and is not a documented API. If it fails, the
 usage percentage above is unchanged.
 
+An HTTP 429 from the billing fetch pauses refreshes for five minutes, even
+when no usable figure is cached. A cached billing period that ends during
+that wait is no longer shown; the entry displays the rate-limit countdown
+without making another billing request until the wait expires.
+
 ### Setup
 
 Install the official Grok CLI, then:

@@ -2,7 +2,7 @@
 
 use std::future::Future;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -85,6 +85,17 @@ where
         && !period_has_ended(&outcome.snapshot, now)
     {
         return Ok(outcome);
+    }
+    // An ended period or an unverifiable login cannot be shown, but neither
+    // makes another billing request safe while the shared backoff is armed.
+    if let Some(remaining) = cache.backoff_remaining() {
+        return Err(AppError::Http {
+            status: 429,
+            body: format!(
+                "rate limited; next attempt in {}",
+                crate::cache::human_backoff(remaining)
+            ),
+        });
     }
 
     match fetch_billing().await {
@@ -281,6 +292,11 @@ fn fallback(
     now: DateTime<Utc>,
     original: AppError,
 ) -> Result<FetchOutcome> {
+    // A 429 must stop the next request even when there is no usable figure to
+    // attach an error to (a cold cache, an ended period, or a changed login).
+    if matches!(original, AppError::Http { status: 429, .. }) {
+        cache.note_rate_limit_at(SystemTime::now());
+    }
     let Some(account_scope) = account_scope else {
         return Err(original);
     };
@@ -684,6 +700,100 @@ mod tests {
         )
         .await;
         assert!(outcome.is_err());
+    }
+
+    #[tokio::test]
+    async fn an_active_backoff_survives_an_ended_period_or_unusable_scope() {
+        for scope in [Some("scope-a"), Some("scope-b"), None] {
+            let (_td, cache) = fixture();
+            let snapshot = types::to_snapshot(weekly_response(88.0), "scope-a").unwrap();
+            cache
+                .write_payload(
+                    &serde_json::to_vec(&CachedEnvelope::from_snapshot("scope-a", &snapshot))
+                        .unwrap(),
+                )
+                .unwrap();
+            cache.write_last_error(429, "billing limited");
+            let marker = std::fs::read(cache.retry_after_path()).unwrap();
+            let error = fetch_snapshot_with(
+                &cache,
+                Duration::ZERO,
+                snapshot.reset_at.unwrap(),
+                || scope.map(str::to_string),
+                || async { panic!("billing must not be called during backoff") },
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(error, AppError::Http { status: 429, .. }));
+            assert!(error.to_string().contains("next attempt in"));
+            assert_eq!(std::fs::read(cache.retry_after_path()).unwrap(), marker);
+            assert_eq!(
+                cache.read_last_error(),
+                Some((429, "billing limited".into()))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_429_after_the_period_ends_arms_backoff_without_a_usable_cache() {
+        let (_td, cache) = fixture();
+        let snapshot = types::to_snapshot(weekly_response(88.0), "scope-a").unwrap();
+        cache
+            .write_payload(
+                &serde_json::to_vec(&CachedEnvelope::from_snapshot("scope-a", &snapshot)).unwrap(),
+            )
+            .unwrap();
+        let calls = AtomicUsize::new(0);
+        for attempt in 0..2 {
+            let error = fetch_snapshot_with(
+                &cache,
+                Duration::ZERO,
+                snapshot.reset_at.unwrap(),
+                || Some("scope-a".into()),
+                || async {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Err(AppError::Http {
+                        status: 429,
+                        body: "billing limited".into(),
+                    })
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(error, AppError::Http { status: 429, .. }));
+            if attempt == 0 {
+                assert!(error.to_string().contains("billing limited"));
+            } else {
+                assert!(error.to_string().contains("next attempt in"));
+            }
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(cache.backoff_remaining().is_some());
+        assert!(cache.read_last_error().is_none());
+    }
+
+    #[tokio::test]
+    async fn an_active_backoff_keeps_a_current_same_scope_period_visible() {
+        let (_td, cache) = fixture();
+        let snapshot = types::to_snapshot(weekly_response(33.0), "scope-a").unwrap();
+        cache
+            .write_payload(
+                &serde_json::to_vec(&CachedEnvelope::from_snapshot("scope-a", &snapshot)).unwrap(),
+            )
+            .unwrap();
+        cache.write_last_error(429, "billing limited");
+        let outcome = fetch_snapshot_with(
+            &cache,
+            Duration::ZERO,
+            now(),
+            || Some("scope-a".into()),
+            || async { panic!("a usable cache must be served during backoff") },
+        )
+        .await
+        .unwrap();
+        assert!(outcome.stale);
+        assert_eq!(outcome.snapshot.weekly_pct, 33);
+        assert_eq!(outcome.last_error, Some((429, "billing limited".into())));
     }
 
     #[test]

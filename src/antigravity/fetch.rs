@@ -264,6 +264,15 @@ pub async fn fetch_snapshot_at(
             match fetch_remote(client, cache, oauth, endpoints, token, renewal, now).await {
                 Ok(RemoteReading::Live(snap)) => Ok(snap),
                 Ok(RemoteReading::Kept(outcome)) => return Ok(outcome),
+                Ok(RemoteReading::Backoff(remaining)) => {
+                    return Err(AppError::Http {
+                        status: 429,
+                        body: format!(
+                            "rate limited; next attempt in {}",
+                            crate::cache::human_backoff(remaining)
+                        ),
+                    });
+                }
                 Err(e) => Err(e),
             }
         }
@@ -694,6 +703,9 @@ impl Renewal<'_> {
 enum RemoteReading {
     Live(AntigravitySnapshot),
     Kept(FetchOutcome),
+    /// A pre-network refusal, not a failed request: do not record it as a new
+    /// HTTP error or extend the backoff that is already counting down.
+    Backoff(Duration),
 }
 
 /// Quota as the signed-in Google account: `agy`'s own reading when it can
@@ -734,7 +746,9 @@ async fn fetch_remote(
     let oauth_path = cloud::oauth_cache_path(cache);
     match super::agy::quota_snapshot(renewal.agy, cache, now).await {
         Some(mut snap) => {
-            snap.plan = match current_access_token(&oauth_path, &token, now) {
+            let access = current_access_token(&oauth_path, &token, now)
+                .filter(|_| cache.backoff_remaining().is_none());
+            snap.plan = match access {
                 Some(access) => cloud::fetch_plan(client, endpoints, &access).await,
                 None => None,
             }
@@ -749,6 +763,12 @@ async fn fetch_remote(
             }
         }
         None => {}
+    }
+    // Local RPC and `agy` can still answer after a cached window expires.
+    // Once neither has a figure, honor the shared backoff before any OAuth
+    // refresh or Cloud Code request; rejected cache bytes cannot bypass it.
+    if let Some(remaining) = cache.backoff_remaining() {
+        return Ok(RemoteReading::Backoff(remaining));
     }
     let mut access =
         match resolve_access_token(client, oauth, endpoints, &oauth_path, &token, now).await {
@@ -3563,6 +3583,148 @@ mod tests {
         .unwrap();
         assert_eq!(cached.source, AntigravitySource::Remote);
         assert_eq!(cached.account, snap.account);
+    }
+
+    fn cached_remote(cache: &Cache, blob: &str, expired: bool) -> AntigravitySnapshot {
+        let mut snap = parsed();
+        snap.source = AntigravitySource::Remote;
+        snap.account = remote_account(&credential::parse_keyring_blob(blob).unwrap().fingerprint);
+        if expired {
+            snap.session.as_mut().unwrap().resets_at = Some(now());
+        }
+        cache
+            .write_payload(&serde_json::to_vec(&snap_to_json(&snap)).unwrap())
+            .unwrap();
+        snap
+    }
+
+    #[tokio::test]
+    async fn an_active_backoff_blocks_cloud_requests_after_a_window_reset() {
+        for expiry in [VALID, EXPIRED] {
+            let mut server = mockito::Server::new_async().await;
+            let eps = endpoints(&server);
+            let network = server
+                .mock("POST", mockito::Matcher::Any)
+                .with_status(429)
+                .expect(0)
+                .create_async()
+                .await;
+            let blob = keyring_blob(expiry, true);
+            let (_td, cache) = fixture();
+            cached_remote(&cache, &blob, true);
+            cache.write_last_error(429, "quota limited");
+            let marker = std::fs::read(cache.retry_after_path()).unwrap();
+
+            let error = run(&cache, remote(&blob, &eps), Duration::ZERO)
+                .await
+                .unwrap_err();
+
+            network.assert_async().await;
+            assert!(matches!(error, AppError::Http { status: 429, .. }));
+            assert!(error.to_string().contains("next attempt in"));
+            assert_eq!(std::fs::read(cache.retry_after_path()).unwrap(), marker);
+            assert_eq!(cache.read_last_error(), Some((429, "quota limited".into())));
+        }
+    }
+
+    #[tokio::test]
+    async fn an_active_backoff_keeps_an_unexpired_remote_cache_visible() {
+        let mut server = mockito::Server::new_async().await;
+        let eps = endpoints(&server);
+        let network = server
+            .mock("POST", mockito::Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+        let blob = keyring_blob(VALID, true);
+        let (_td, cache) = fixture();
+        let snap = cached_remote(&cache, &blob, false);
+        cache.write_last_error(429, "quota limited");
+
+        let outcome = run(&cache, remote(&blob, &eps), Duration::ZERO)
+            .await
+            .unwrap();
+
+        network.assert_async().await;
+        assert!(outcome.stale);
+        assert_eq!(outcome.snapshot, snap);
+        assert_eq!(outcome.last_error, Some((429, "quota limited".into())));
+    }
+
+    #[tokio::test]
+    async fn an_active_backoff_does_not_block_a_local_quota_after_a_window_reset() {
+        let mut server = mockito::Server::new_async().await;
+        let eps = endpoints(&server);
+        let status_path = format!("/{STATUS_RPC}");
+        server
+            .mock("POST", status_path.as_str())
+            .with_status(200)
+            .with_body(r#"{"userStatus":{"email":"test@example.test"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let quota_path = format!("/{QUOTA_RPC}");
+        let quota = server
+            .mock("POST", quota_path.as_str())
+            .with_status(200)
+            .with_body(QUOTA_JSON)
+            .expect(1)
+            .create_async()
+            .await;
+        let blob = keyring_blob(VALID, true);
+        let (_td, cache) = fixture();
+        cached_remote(&cache, &blob, true);
+        cache.write_last_error(429, "quota limited");
+
+        let outcome = run(
+            &cache,
+            RemoteOverride {
+                local_bases: Some(vec![server.url().into()]),
+                ..remote(&blob, &eps)
+            },
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
+
+        quota.assert_async().await;
+        assert!(!outcome.stale);
+        assert_eq!(outcome.snapshot.source, AntigravitySource::Local);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_active_backoff_allows_agy_but_skips_its_cloud_plan_lookup() {
+        let mut server = mockito::Server::new_async().await;
+        let eps = endpoints(&server);
+        let network = server
+            .mock("POST", mockito::Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+        let blob = keyring_blob(VALID, true);
+        let (td, cache) = fixture();
+        cached_remote(&cache, &blob, true);
+        cache.write_last_error(429, "quota limited");
+        let runs = td.path().join("runs");
+        let agy = agy_reading(td.path(), &runs);
+
+        let outcome = run(
+            &cache,
+            RemoteOverride {
+                agy: super::super::agy::AgyCommand::At(agy),
+                ..remote(&blob, &eps)
+            },
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
+
+        network.assert_async().await;
+        assert!(!outcome.stale);
+        assert_eq!(outcome.snapshot.source, AntigravitySource::Agy);
+        assert_eq!(outcome.snapshot.plan, DEFAULT_PLAN);
+        assert_eq!(std::fs::read_to_string(runs).unwrap().lines().count(), 1);
     }
 
     /// `agy` exposes the local RPC port but, unlike the desktop products, does

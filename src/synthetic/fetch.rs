@@ -47,6 +47,18 @@ pub async fn fetch_snapshot(
     {
         return Ok(crate::outcome::Outcome::cached(snapshot, cache, false));
     }
+    // A cache written before the weekly-only quota change is incompatible
+    // with this parser, but rejecting it must not bypass an active backoff.
+    // Keep usable weekly figures above; otherwise wait before refetching.
+    if let Some(remaining) = cache.backoff_remaining() {
+        return Err(AppError::Http {
+            status: 429,
+            body: format!(
+                "rate limited; next attempt in {}",
+                crate::cache::human_backoff(remaining)
+            ),
+        });
+    }
 
     match request(client, api_key, endpoints).await {
         Ok((response, snapshot)) => {
@@ -114,6 +126,102 @@ mod tests {
     }
 
     const PLAN_BODY: &str = r#"{"planWeeklyLimit":{"nextRegenAt":"2026-11-01T00:00:00Z","percentRemaining":80,"nextRegenPercent":2}}"#;
+
+    #[tokio::test]
+    async fn legacy_cache_respects_backoff_and_refetches_after_expiry() {
+        let mut server = mockito::Server::new_async().await;
+        let request = server
+            .mock("GET", "/v2/quotas")
+            .with_status(200)
+            .with_body(PLAN_BODY)
+            .expect(1)
+            .create_async()
+            .await;
+        let endpoints = Endpoints {
+            quotas: format!("{}/v2/quotas", server.url()),
+        };
+        let (_dir, cache) = cache();
+        // v1.44 stored only the retired five-hour subscription object.
+        let legacy =
+            br#"{"subscription":{"limit":135,"requests":27,"renewsAt":"2026-11-01T00:00:00Z"}}"#;
+        cache.write_payload(legacy).unwrap();
+        let diagnostic = cache.write_last_error(429, "rate limited");
+        let retry_after = std::fs::read(cache.retry_after_path()).unwrap();
+        let client = reqwest::Client::new();
+
+        let error = fetch_snapshot(
+            &client,
+            "syn-test",
+            &cache,
+            &endpoints,
+            Duration::ZERO,
+            None,
+        )
+        .await
+        .expect_err("an incompatible cache must not bypass the active backoff");
+        assert!(matches!(
+            error,
+            AppError::Http { status: 429, body } if body.contains("next attempt in")
+        ));
+        assert_eq!(std::fs::read(cache.payload_path()).unwrap(), legacy);
+        assert_eq!(
+            std::fs::read(cache.retry_after_path()).unwrap(),
+            retry_after
+        );
+        assert_eq!(cache.read_last_error(), Some(diagnostic));
+
+        // Expire the persisted deadline without sleeping through five minutes.
+        std::fs::write(cache.retry_after_path(), b"1").unwrap();
+        let outcome = fetch_snapshot(
+            &client,
+            "syn-test",
+            &cache,
+            &endpoints,
+            Duration::ZERO,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(outcome.off_the_wire());
+        assert_eq!(outcome.snapshot.weekly.utilization_pct, 20);
+        assert!(cache.backoff_remaining().is_none());
+        assert!(cache.read_last_error().is_none());
+        request.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn usable_weekly_cache_stays_visible_during_backoff() {
+        let mut server = mockito::Server::new_async().await;
+        let request = server
+            .mock("GET", "/v2/quotas")
+            .expect(0)
+            .create_async()
+            .await;
+        let (_dir, cache) = cache();
+        cache.write_payload(PLAN_BODY.as_bytes()).unwrap();
+        let diagnostic = cache.write_last_error(429, "rate limited");
+
+        let outcome = fetch_snapshot(
+            &reqwest::Client::new(),
+            "syn-test",
+            &cache,
+            &Endpoints {
+                quotas: format!("{}/v2/quotas", server.url()),
+            },
+            Duration::ZERO,
+            Some("Standard"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.snapshot.weekly.utilization_pct, 20);
+        assert_eq!(outcome.snapshot.plan.as_deref(), Some("Standard"));
+        assert!(outcome.stale);
+        assert!(!outcome.off_the_wire());
+        assert_eq!(outcome.last_error, Some(diagnostic));
+        assert!(cache.backoff_remaining().is_some());
+        request.assert_async().await;
+    }
 
     #[tokio::test]
     async fn sends_bearer_key_and_parses_documented_shape() {
