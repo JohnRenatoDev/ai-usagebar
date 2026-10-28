@@ -209,6 +209,7 @@ mod tests {
         let values = build_placeholders(&snap, now);
         assert_eq!(DISPLAY_NAME, "Nous Research");
         assert_eq!(VENDOR_SHORT, "nrs");
+        assert_eq!(values["icon"], "nrs");
         assert_eq!(values["vendor"], "Nous Research");
         assert_eq!(values["vendor_short"], "nrs");
         assert_eq!(values["plan"], "Pro");
