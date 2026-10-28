@@ -596,21 +596,8 @@ fn stamp_facts(state: &mut TrayState) {
     let Some(obj) = state.payload.as_object_mut() else {
         return;
     };
-    for key in [
-        "shortcut",
-        "shortcut_error",
-        "refresh_minutes",
-        "updates",
-        "update",
-        "update_checked_at",
-        "repository",
-        "version",
-        "accounts",
-        "providers",
-        "providers_error",
-        "key_check",
-    ] {
-        obj.insert(key.into(), stamped[key].clone());
+    for key in super::payload::STAMPED_FACTS {
+        obj.insert((*key).into(), stamped[*key].clone());
     }
 }
 

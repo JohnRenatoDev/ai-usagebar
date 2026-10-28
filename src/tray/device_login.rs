@@ -160,6 +160,15 @@ const GRACE: Duration = Duration::from_secs(30);
 const TAIL_LINES: usize = 40;
 /// One output line's cap; a CLI that never prints a newline still yields.
 const LINE_BYTES: u64 = 4096;
+/// Lines buffered between the readers and the flow. A full buffer blocks the
+/// reader, and the CLI behind it, until the flow catches up.
+const CHANNEL_LINES: usize = 64;
+/// Lines handled per tick before the flow looks at its fact and deadline.
+const LINES_PER_TICK: usize = 256;
+/// How long the last lines may keep coming once the CLI exited.
+const DRAIN: Duration = Duration::from_secs(1);
+/// The longest a code is believed to live, whatever the flow says.
+const MAX_EXPIRY: Duration = Duration::from_secs(60 * 60);
 
 /// `{"cmd":"start-sign-in","id":"openai","seq":3}`: open the flow for the
 /// provider, unless a newer one is already on screen. `push` sends the fact
@@ -211,6 +220,7 @@ pub(crate) fn start_with(
             reason: "",
             error: String::new(),
             url: String::new(),
+            committing: false,
         });
         accepted = true;
     });
@@ -270,7 +280,9 @@ fn request_seq(value: &Value) -> Option<u64> {
 }
 
 /// `{"cmd":"cancel-sign-in","seq":3}`: the sheet closed. Clears the fact when
-/// it is that flow's, which stops the flow; `true` when it did.
+/// it is that flow's, which stops the flow; `true` when it did. A flow that is
+/// already saving the login it was granted is past cancelling: its fact stays,
+/// and its verdict follows.
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 pub(crate) fn cancel(facts: &SharedFacts, value: &Value) -> bool {
     let Some(seq) = request_seq(value) else {
@@ -278,7 +290,10 @@ pub(crate) fn cancel(facts: &SharedFacts, value: &Value) -> bool {
     };
     let mut cleared = false;
     with_facts(facts, |f| {
-        if f.sign_in.as_ref().is_some_and(|fact| fact.seq == seq) {
+        if f.sign_in
+            .as_ref()
+            .is_some_and(|fact| fact.seq == seq && !fact.committing)
+        {
             f.sign_in = None;
             cleared = true;
         }
@@ -311,7 +326,7 @@ pub(crate) fn open_page(facts: &SharedFacts, value: &Value) {
 pub(crate) fn code_to_copy(facts: &SharedFacts, value: &Value) -> Option<String> {
     let seq = request_seq(value)?;
     let fact = facts.lock().ok()?.sign_in.clone()?;
-    (fact.seq == seq && fact.state == SignInState::Waiting && !fact.code.is_empty())
+    (fact.seq == seq && fact.state == SignInState::Waiting && is_code(&fact.code))
         .then_some(fact.code)
 }
 
@@ -380,6 +395,14 @@ impl Job {
         if landed {
             (hooks.signed_in)(slug);
         }
+    }
+
+    /// The approval arrived: claim the right to save it, in the same pass
+    /// that proves the flow is still on screen. From here `cancel` leaves the
+    /// fact alone, so a cancel either lands before this and nothing is saved,
+    /// or after it and the login is kept; never both.
+    fn begin_commit(&self) -> bool {
+        self.publish(|fact| fact.committing = true)
     }
 
     /// The code is on screen: publish it with its page and expiry.
@@ -557,8 +580,8 @@ fn run_cli(job: &Job, login: CliLogin, push: &dyn Fn()) -> Outcome {
         use std::os::windows::process::CommandExt;
         command.creation_flags(crate::process::CREATE_NO_WINDOW);
     }
-    let mut child = match command.spawn() {
-        Ok(child) => child,
+    let mut tree = match Tree::spawn(&mut command) {
+        Ok(tree) => tree,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Outcome::Unavailable("cli-missing");
         }
@@ -569,12 +592,11 @@ fn run_cli(job: &Job, login: CliLogin, push: &dyn Fn()) -> Outcome {
             };
         }
     };
-    let running = Running::track(child.id());
-    let (sender, lines) = mpsc::channel();
-    if let Some(stdout) = child.stdout.take() {
+    let (sender, lines) = mpsc::sync_channel(CHANNEL_LINES);
+    if let Some(stdout) = tree.child.stdout.take() {
         read_lines(stdout, sender.clone());
     }
-    if let Some(stderr) = child.stderr.take() {
+    if let Some(stderr) = tree.child.stderr.take() {
         read_lines(stderr, sender);
     } else {
         drop(sender);
@@ -586,23 +608,28 @@ fn run_cli(job: &Job, login: CliLogin, push: &dyn Fn()) -> Outcome {
     let mut shown: Option<Duration> = None;
     loop {
         // Every line already there, so a code and its expiry printed in one
-        // write are read together.
+        // write are read together; a bounded batch, so a flood cannot hold
+        // off the fact and the deadline.
         if let Ok(first) = lines.recv_timeout(TICK) {
-            for line in std::iter::once(first).chain(lines.try_iter()) {
+            for line in std::iter::once(first)
+                .chain(lines.try_iter())
+                .take(LINES_PER_TICK)
+            {
                 take_line(login.flow, &line, &mut output, &mut tail);
             }
         }
         if !job.current() {
-            stop(&mut child, running);
+            tree.stop();
             return Outcome::Gone;
         }
         if let (Some(code), Some(url)) = (&output.code, &output.url) {
             let expires_in = output
                 .expires_in
-                .unwrap_or_else(|| login.flow.default_expiry());
+                .unwrap_or_else(|| login.flow.default_expiry())
+                .min(MAX_EXPIRY);
             if shown != Some(expires_in) {
                 if !login.flow.page_allowed(url) {
-                    stop(&mut child, running);
+                    tree.stop();
                     return Outcome::Failed {
                         reason: "",
                         error: format!(
@@ -618,21 +645,28 @@ fn run_cli(job: &Job, login: CliLogin, push: &dyn Fn()) -> Outcome {
                 shown = Some(expires_in);
             }
         }
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                // Reaped: its id may be handed out again, so `stop_all`
-                // must no longer see it.
-                drop(running);
-                // The pipes may still hold the last lines: read until both
-                // close, or briefly when a grandchild keeps one open.
-                while let Ok(line) = lines.recv_timeout(Duration::from_millis(300)) {
-                    take_line(login.flow, &line, &mut output, &mut tail);
+        match tree.exited() {
+            Ok(true) => {
+                // The last lines, for at most `DRAIN`: a descendant that
+                // keeps a pipe open cannot hold the flow.
+                let until = Instant::now() + DRAIN;
+                while let Some(left) = until
+                    .checked_duration_since(Instant::now())
+                    .filter(|left| !left.is_zero())
+                {
+                    match lines.recv_timeout(left.min(TICK)) {
+                        Ok(line) => take_line(login.flow, &line, &mut output, &mut tail),
+                        Err(mpsc::RecvTimeoutError::Timeout) if job.current() => {}
+                        Err(_) => break,
+                    }
                 }
-                return verdict(login.flow, status.success(), &tail);
+                // What the CLI left running goes with it.
+                let success = tree.end().is_some_and(|status| status.success());
+                return verdict(login.flow, success, &tail);
             }
-            Ok(None) => {}
+            Ok(false) => {}
             Err(error) => {
-                stop(&mut child, running);
+                tree.stop();
                 return Outcome::Failed {
                     reason: "",
                     error: format!("Lost track of `{command_name}`: {error}"),
@@ -640,7 +674,7 @@ fn run_cli(job: &Job, login: CliLogin, push: &dyn Fn()) -> Outcome {
             }
         }
         if Instant::now() >= deadline {
-            stop(&mut child, running);
+            tree.stop();
             return if shown.is_some() {
                 Outcome::Expired
             } else {
@@ -669,7 +703,7 @@ fn take_line(
 
 /// Forward a stream's lines, each cut at [`LINE_BYTES`], until it closes or
 /// nobody listens.
-fn read_lines(stream: impl Read + Send + 'static, sender: mpsc::Sender<String>) {
+fn read_lines(stream: impl Read + Send + 'static, sender: mpsc::SyncSender<String>) {
     let _ = std::thread::Builder::new()
         .name("ai-usagebar-sign-in-output".into())
         .spawn(move || {
@@ -856,24 +890,102 @@ fn last_error_line(tail: &std::collections::VecDeque<String>, flow: Flow) -> Str
         .unwrap_or_else(|| format!("`{}` exited without signing in.", flow.command()))
 }
 
-/// Stop the CLI and everything it started. The group is signalled while the
-/// leader is still unreaped, so its id cannot have been handed to anyone
-/// else; it gets a moment to exit before the kill.
-fn stop(child: &mut Child, running: Running) {
-    #[cfg(unix)]
-    {
-        use rustix::process::{Pid, Signal, kill_process_group};
-        let pid = Pid::from_child(child);
-        let _ = kill_process_group(pid, Signal::TERM);
-        std::thread::sleep(Duration::from_millis(300));
-        let _ = kill_process_group(pid, Signal::KILL);
+/// A CLI and what it starts, owned until it is reaped.
+///
+/// On Unix the CLI leads a process group of its own. The group is signalled
+/// only while the leader is registered in [`RUNNING`] and unreaped, so its id
+/// cannot have been handed to anyone else: exits are watched without reaping
+/// (`waitid` with `WNOWAIT`), and the leader leaves the registry, under its
+/// lock, before it is reaped. On Windows the process handle stays open until
+/// then, which keeps the id from being reused, and the tree is ended by
+/// `taskkill /T`. No job object: `kimi login` opens the browser through
+/// `Start-Process`, and a job would take the browser down with the CLI.
+struct Tree {
+    child: Child,
+    ended: bool,
+}
+
+impl Tree {
+    /// Spawned and registered under the registry's lock, so `stop_all` can
+    /// never miss a CLI started while the tray quits.
+    fn spawn(command: &mut Command) -> std::io::Result<Tree> {
+        let mut running = running();
+        let child = command.spawn()?;
+        running.push(child.id());
+        Ok(Tree {
+            child,
+            ended: false,
+        })
     }
-    #[cfg(windows)]
-    kill_tree(child.id());
-    let _ = child.kill();
-    // Out of the registry before the reap, after which the id may be reused.
-    drop(running);
-    let _ = child.wait();
+
+    /// Whether the CLI exited; on Unix without reaping it.
+    fn exited(&mut self) -> std::io::Result<bool> {
+        #[cfg(unix)]
+        {
+            use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
+            waitid(
+                WaitId::Pid(Pid::from_child(&self.child)),
+                WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+            )
+            .map(|status| status.is_some())
+            .map_err(std::io::Error::from)
+        }
+        #[cfg(not(unix))]
+        {
+            self.child.try_wait().map(|status| status.is_some())
+        }
+    }
+
+    /// Signal everything the CLI started; `gently` gives it a moment first.
+    fn signal(&mut self, gently: bool) {
+        #[cfg(unix)]
+        {
+            use rustix::process::{Pid, Signal, kill_process_group};
+            let pid = Pid::from_child(&self.child);
+            if gently {
+                let _ = kill_process_group(pid, Signal::TERM);
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            let _ = kill_process_group(pid, Signal::KILL);
+        }
+        #[cfg(windows)]
+        {
+            let _ = gently;
+            kill_tree(self.child.id());
+        }
+        let _ = self.child.kill();
+    }
+
+    /// Stop a CLI that is still at work, and reap it.
+    fn stop(mut self) {
+        self.signal(true);
+        self.end();
+    }
+
+    /// End a CLI that exited: whatever it left in its group goes with it,
+    /// then it leaves the registry and is reaped, in that order.
+    fn end(mut self) -> Option<std::process::ExitStatus> {
+        self.finish()
+    }
+
+    fn finish(&mut self) -> Option<std::process::ExitStatus> {
+        if self.ended {
+            return None;
+        }
+        self.ended = true;
+        self.signal(false);
+        let pid = self.child.id();
+        running().retain(|running| *running != pid);
+        self.child.wait().ok()
+    }
+}
+
+impl Drop for Tree {
+    /// A flow that unwinds still takes its CLI along, and never leaves an id
+    /// behind in the registry.
+    fn drop(&mut self) {
+        self.finish();
+    }
 }
 
 /// `taskkill /T /F` on a process and its children, from System32 by full
@@ -897,33 +1009,20 @@ fn kill_tree(pid: u32) {
 /// a Codex login left behind would keep polling for fifteen minutes.
 static RUNNING: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
 
-struct Running(u32);
-
-impl Running {
-    fn track(pid: u32) -> Running {
-        if let Ok(mut running) = RUNNING.lock() {
-            running.push(pid);
-        }
-        Running(pid)
-    }
-}
-
-impl Drop for Running {
-    fn drop(&mut self) {
-        if let Ok(mut running) = RUNNING.lock() {
-            running.retain(|pid| *pid != self.0);
-        }
-    }
+/// The registry, whole even when a flow panicked while holding it.
+fn running() -> std::sync::MutexGuard<'static, Vec<u32>> {
+    RUNNING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Kill every sign-in CLI still running; the hosts call it on their way out.
+/// The signals go out under the registry's lock: a CLI still listed has not
+/// been reaped, and its flow cannot reap it until the lock is free.
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 pub(crate) fn stop_all() {
-    let pids: Vec<u32> = RUNNING
-        .lock()
-        .map(|mut running| running.drain(..).collect())
-        .unwrap_or_default();
-    for pid in pids {
+    let mut running = running();
+    for pid in running.drain(..) {
         #[cfg(unix)]
         if let Some(pid) = i32::try_from(pid)
             .ok()
@@ -967,7 +1066,11 @@ fn run_nous(job: &Job, login: NousLogin, push: &dyn Fn()) -> Outcome {
         if !(login.page_ok)(&device.verification_uri_complete) {
             return failed("Nous Research named a sign-in page outside its portal.".into());
         }
-        let expires_in = Duration::from_secs(device.expires_in);
+        // Shown, copied and typed elsewhere: only a code's shape goes out.
+        if !is_code(&device.user_code) {
+            return failed("Nous Research sent a sign-in code this sheet cannot show.".into());
+        }
+        let expires_in = Duration::from_secs(device.expires_in).min(MAX_EXPIRY);
         if !job.show_code(
             &device.user_code,
             &device.verification_uri_complete,
@@ -989,7 +1092,7 @@ fn run_nous(job: &Job, login: NousLogin, push: &dyn Fn()) -> Outcome {
             Err(error) => failed(format!("Nous Research: {error}")),
             // Approved after the sheet closed: the user cancelled, so the
             // token is dropped rather than saved.
-            Ok(_) if !job.current() => Outcome::Gone,
+            Ok(_) if !job.begin_commit() => Outcome::Gone,
             Ok(token) => oauth::credential_from_token(token, chrono::Utc::now())
                 .and_then(|credential| oauth::persist_credential(&login.store, credential))
                 .map_or_else(
@@ -1318,6 +1421,7 @@ Waiting for authorization to complete…\n";
                 reason: "",
                 error: String::new(),
                 url: url.into(),
+                committing: false,
             });
         });
     }
@@ -1368,6 +1472,7 @@ Waiting for authorization to complete…\n";
                 reason: "",
                 error: String::new(),
                 url: "https://auth.openai.com/codex/device".into(),
+                committing: false,
             }),
             ..HostFacts::default()
         };
@@ -1649,6 +1754,218 @@ Waiting for authorization to complete…\n";
             (done.state, done.reason),
             (SignInState::Unavailable, "cli-missing")
         );
+    }
+
+    /// Live: the installed `codex`, found and run the way a tray started by
+    /// launchd finds it (`PATH` is only the system's directories), prints a
+    /// code this parser reads, and a cancel stops it. OpenAI is asked for a
+    /// code that is never approved; nothing is written outside a temporary
+    /// `CODEX_HOME`. Run with `cargo test --lib device_login -- --ignored`.
+    #[cfg(unix)]
+    #[test]
+    #[ignore]
+    fn live_codex_prints_a_code_this_parser_reads() {
+        let home = crate::cache::home_dir().unwrap();
+        let launchd_path = std::ffi::OsString::from("/usr/bin:/bin:/usr/sbin:/sbin");
+        let program = find_cli("codex", &launchd_path, &home).expect("codex is installed");
+        let codex_home = tempfile::TempDir::new().unwrap();
+        let facts = shared();
+        let handle = start_with(
+            &facts,
+            &json!({"cmd": "start-sign-in", "id": "openai", "seq": 1}),
+            |flow| {
+                Ok(Runner::Cli(CliLogin {
+                    flow,
+                    env: vec![
+                        ("CODEX_HOME".into(), codex_home.path().into()),
+                        ("PATH".into(), child_path(&program, &launchd_path, &home)),
+                        ("NO_COLOR".into(), "1".into()),
+                    ],
+                    program,
+                    args: vec!["login".into(), "--device-auth".into()],
+                    code_wait: Duration::from_secs(60),
+                }))
+            },
+            quiet(),
+        )
+        .unwrap();
+        let shown = wait_for(&facts, |f| {
+            f.is_some_and(|f| f.state != SignInState::Starting)
+        })
+        .unwrap();
+        assert_eq!(shown.state, SignInState::Waiting, "{shown:?}");
+        assert!(is_code(&shown.code), "{shown:?}");
+        assert!(Flow::Codex.page_allowed(&shown.url), "{}", shown.url);
+        assert!(cancel(&facts, &json!({"seq": 1})));
+        handle.join().unwrap();
+        assert!(!codex_home.path().join("auth.json").exists());
+    }
+
+    #[cfg(unix)]
+    fn read_pid(file: &Path) -> i32 {
+        let until = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(pid) = std::fs::read_to_string(file)
+                .ok()
+                .and_then(|text| text.trim().parse().ok())
+            {
+                return pid;
+            }
+            assert!(Instant::now() < until, "the script never wrote {file:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_descendant_that_keeps_writing_cannot_hold_the_flow() {
+        // The CLI exits at once and leaves a child writing to its pipes: the
+        // last lines are read for a bounded time, and the child goes with it.
+        let root = tempfile::TempDir::new().unwrap();
+        let pid_file = root.path().join("writer.pid");
+        let program = script(
+            root.path(),
+            &format!(
+                "{}\n(while :; do echo tick; sleep 0.05; done) &\necho $! > '{}'\nexit 0",
+                printf_codex_prompt(),
+                pid_file.display()
+            ),
+        );
+        let facts = shared();
+        let started = Instant::now();
+        start_with(
+            &facts,
+            &json!({"cmd": "start-sign-in", "id": "openai", "seq": 1}),
+            |flow| Ok(cli(flow, program)),
+            quiet(),
+        )
+        .unwrap()
+        .join()
+        .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(fact(&facts).unwrap().state, SignInState::Ok);
+        assert!(gone(read_pid(&pid_file)), "the writer outlived its CLI");
+        assert!(
+            !running()
+                .iter()
+                .any(|pid| *pid as i32 == read_pid(&pid_file))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_descendant_left_behind_goes_with_the_cli() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pid_file = root.path().join("child.pid");
+        let program = script(
+            root.path(),
+            &format!(
+                "sleep 60 >/dev/null 2>&1 &\necho $! > '{}'\nexit 0",
+                pid_file.display()
+            ),
+        );
+        let facts = shared();
+        start_with(
+            &facts,
+            &json!({"cmd": "start-sign-in", "id": "openai", "seq": 1}),
+            |flow| Ok(cli(flow, program)),
+            quiet(),
+        )
+        .unwrap()
+        .join()
+        .unwrap();
+        assert!(gone(read_pid(&pid_file)), "the CLI's child outlived it");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_absurd_expiry_is_capped_instead_of_overflowing() {
+        let root = tempfile::TempDir::new().unwrap();
+        let program = script(
+            root.path(),
+            "echo 'Opening browser for Kimi device login: https://www.kimi.com/device'\necho 'If the browser did not open, paste the URL above and enter code: WXYZ-1234'\necho 'Code expires in 18446744073709551615s.'\nexec sleep 60",
+        );
+        let facts = shared();
+        let handle = start_with(
+            &facts,
+            &json!({"cmd": "start-sign-in", "id": "kimi", "seq": 1}),
+            |flow| Ok(cli(flow, program)),
+            quiet(),
+        )
+        .unwrap();
+        let shown = wait_for(&facts, |f| {
+            f.is_some_and(|f| f.state == SignInState::Waiting)
+        })
+        .unwrap();
+        assert!(
+            shown.expires_at <= now_ms() + duration_ms(MAX_EXPIRY),
+            "{}",
+            shown.expires_at
+        );
+        assert!(cancel(&facts, &json!({"seq": 1})));
+        handle.join().expect("the flow did not panic");
+    }
+
+    #[test]
+    fn a_cancel_after_the_approval_is_too_late_and_says_so() {
+        let facts = shared();
+        waiting(&facts, 3, "https://portal.nousresearch.com/device");
+        let job = Job {
+            facts: Arc::clone(&facts),
+            seq: 3,
+        };
+        assert!(job.begin_commit());
+        assert!(
+            !cancel(&facts, &json!({"seq": 3})),
+            "a granted login is past cancelling"
+        );
+        assert!(fact(&facts).is_some_and(|fact| fact.committing));
+        // A flow already replaced cannot claim the save.
+        let replaced = Job {
+            facts: Arc::clone(&facts),
+            seq: 2,
+        };
+        assert!(!replaced.begin_commit());
+    }
+
+    #[test]
+    fn only_a_codes_shape_is_copied() {
+        let facts = shared();
+        waiting(&facts, 3, "https://auth.openai.com/codex/device");
+        with_facts(&facts, |f| {
+            f.sign_in.as_mut().unwrap().code = "NOT A CODE".into()
+        });
+        assert_eq!(code_to_copy(&facts, &json!({"seq": 3})), None);
+    }
+
+    #[test]
+    fn a_nous_code_of_another_shape_is_refused() {
+        let mut server = mockito::Server::new();
+        let _device = server
+            .mock("POST", "/device")
+            .with_status(200)
+            .with_body(nous_device_body(60).replace("NOUS-CODE", "NOT A CODE"))
+            .create();
+        let root = tempfile::TempDir::new().unwrap();
+        let store = root.path().join("credentials.json");
+        let facts = shared();
+        start_with(
+            &facts,
+            &json!({"cmd": "start-sign-in", "id": "nous", "seq": 1}),
+            |_| Ok(nous(&server, &store)),
+            quiet(),
+        )
+        .unwrap()
+        .join()
+        .unwrap();
+        let done = fact(&facts).unwrap();
+        assert_eq!(done.state, SignInState::Failed);
+        assert!(done.code.is_empty());
+        assert!(!store.exists());
     }
 
     fn nous_device_body(expires_in: u64) -> String {

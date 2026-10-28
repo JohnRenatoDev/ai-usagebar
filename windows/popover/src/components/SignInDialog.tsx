@@ -287,7 +287,7 @@ export function SignInDialogView({
       <p className="m-0 text-[length:var(--sz-support)]">{m.sign_in_enter_code(locale)}</p>
       <div className="sign-in-code">
         <span className="sign-in-code-text select-all">{code}</span>
-        <button type="button" className="action-btn gap-1.5 [&_svg]:size-[var(--icon-note)]" onClick={onCopy}>
+        <button type="button" className="action-btn gap-1.5 [&_svg]:size-[var(--icon-note)]" disabled={!code} onClick={onCopy}>
           <MdiContentCopy aria-hidden />
           {copied ? m.sign_in_copied(locale) : m.sign_in_copy(locale)}
         </button>

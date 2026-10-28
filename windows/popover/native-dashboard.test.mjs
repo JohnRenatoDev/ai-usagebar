@@ -564,6 +564,9 @@ try {
   // The page address is never in the markup: the host opens it by seq.
   assert.doesNotMatch(waiting, /https?:\/\/(?!www\.w3\.org\/)/);
   assert.match(signInView({ phase: 'waiting', code: 'WXYZ-1234', copied: true }), />Copied<\/button>/);
+  // Without a code there is nothing to copy.
+  assert.match(signInView({ phase: 'waiting', code: '' }), /<button[^>]*disabled=""[^>]*>.*?Copy<\/button>/s);
+  assert.doesNotMatch(waiting, /<button[^>]*disabled=""[^>]*>.*?Copy<\/button>/s);
   // Approved: the check, the title and the fetching line, no buttons.
   const done = signInView({ phase: 'ok' });
   assert.match(done, /class="sign-in-done"/);

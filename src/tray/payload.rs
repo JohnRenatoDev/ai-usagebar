@@ -107,6 +107,27 @@ pub struct KeyCheckFact {
     pub error: String,
 }
 
+/// The payload keys a facts-only push refreshes: every fact the popover
+/// watches change between two reports. Both hosts copy exactly these from a
+/// fresh [`wrap_report`] into the payload they hold, so a new fact is listed
+/// once, here, and reaches both.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+pub const STAMPED_FACTS: &[&str] = &[
+    "shortcut",
+    "shortcut_error",
+    "refresh_minutes",
+    "updates",
+    "update",
+    "update_checked_at",
+    "repository",
+    "version",
+    "accounts",
+    "providers",
+    "providers_error",
+    "key_check",
+    "sign_in",
+];
+
 /// Where one device-code sign-in stands; see [`super::device_login`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignInState {
@@ -161,6 +182,10 @@ pub struct SignInFact {
     /// the host to open it by `seq`, so a page address never comes from the
     /// webview, and only an address the flow's allowlist accepted is kept.
     pub url: String,
+    /// The approval arrived and the login is being saved. Never serialized:
+    /// from here a cancel is too late, so it leaves the fact alone, and the
+    /// verdict that follows is the login's.
+    pub committing: bool,
 }
 
 /// State of a newer release as the popover renders it.
@@ -927,6 +952,20 @@ mod tests {
         let error = payload["key_check"]["error"].as_str().unwrap();
         assert!(!error.contains('\u{1b}'), "{error:?}");
         assert!(error.contains("HTTP 401"), "{error:?}");
+    }
+
+    #[test]
+    fn a_facts_only_push_carries_both_popover_dialogs() {
+        // The key dialog and the sign-in sheet wait on facts that change
+        // between reports; a push that left either out showed the popover
+        // `null` until the next full report.
+        for key in ["key_check", "sign_in", "providers"] {
+            assert!(STAMPED_FACTS.contains(&key), "{key}");
+        }
+        let payload = wrap_report("{}", &HostFacts::default(), 0, None);
+        for key in STAMPED_FACTS {
+            assert!(payload.get(*key).is_some(), "{key} is not in the payload");
+        }
     }
 
     #[test]
