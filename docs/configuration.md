@@ -383,6 +383,9 @@ refill times — never a burn-rate estimate. For a partially refilling window
 such as Synthetic's weekly budget, the alert names the regeneration amount
 (for example, `regenerates 2% in 3h 00m`) rather than promising a full reset.
 
+Credit-expiry alerts include the configured account label for named accounts,
+so the reminder identifies which account needs to redeem the credit.
+
 Delivery is best-effort: a missing or failing notifier, an unwritable state
 file, or lock contention is a silent skip that never affects the bar, the
 report, or any exit code. Both fields are also editable in the TUI Settings
