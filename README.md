@@ -692,6 +692,10 @@ ai-usagebar --json
 ai-usagebar usage
 ai-usagebar usage --json | jq '.entries[] | {id, metrics, sections}'
 
+# Opt-in: rank providers by the weekly quota projected to reset unused, using
+# the recent pace (1-24h window) from a small local history of percentages.
+ai-usagebar usage --json --priorities | jq '.ranking[] | {name, status, urgent, unused_percent}'
+
 # Turn on every vendor that already has a credential on this machine
 # (local files, keychains, saved keys, env vars — never the network).
 # Only vendors never checked before are probed; --all re-checks everything.

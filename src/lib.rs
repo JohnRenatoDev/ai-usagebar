@@ -78,3 +78,5 @@ pub mod widget;
 pub mod zai;
 
 pub use error::{AppError, Result};
+
+pub mod recommendation;

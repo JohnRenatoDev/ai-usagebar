@@ -426,7 +426,9 @@ async fn entry_for_report_target(
     }
 }
 
-pub async fn run(json: bool) -> i32 {
+/// `priorities` adds the opt-in ranking (`usage --json --priorities`); `None`
+/// prints the report unchanged.
+pub async fn run(json: bool, priorities: Option<crate::recommendation::Options>) -> i32 {
     let (entries, primary, overview) = match collect_entries().await {
         Ok(collected) => collected,
         Err(message) => {
@@ -436,10 +438,17 @@ pub async fn run(json: bool) -> i32 {
     };
 
     if json {
-        println!(
-            "{}",
-            render_json_document(&entries, primary, overview.as_deref())
-        );
+        let history_dir = priorities.and_then(|_| crate::recommendation::default_history_dir());
+        let document = usage_json(
+            &entries,
+            primary,
+            overview.as_deref(),
+            priorities,
+            history_dir,
+            Utc::now(),
+        )
+        .await;
+        println!("{document}");
     } else {
         print!("{}", render_text(&entries));
     }
@@ -986,6 +995,14 @@ fn render_json_document(
     primary: Option<&str>,
     overview: Option<&[&str]>,
 ) -> String {
+    render_json_value(entries, primary, overview).to_string()
+}
+
+fn render_json_value(
+    entries: &[Entry],
+    primary: Option<&str>,
+    overview: Option<&[&str]>,
+) -> serde_json::Value {
     let mut value = json!({
         "schema_version": USAGE_SCHEMA_VERSION,
         "primary": resolve_primary(primary, entries),
@@ -994,7 +1011,31 @@ fn render_json_document(
     if let Some(order) = overview {
         value["overview_vendors"] = json!(order);
     }
-    value.to_string()
+    value
+}
+
+/// What `usage --json` prints. Without `priorities` it is exactly
+/// `render_json_document`; with them the ranking is added to the same
+/// in-memory document, recording readings in `history_dir`.
+async fn usage_json(
+    entries: &[Entry],
+    primary: Option<&str>,
+    overview: Option<&[&str]>,
+    priorities: Option<crate::recommendation::Options>,
+    history_dir: Option<std::path::PathBuf>,
+    now: DateTime<Utc>,
+) -> String {
+    match priorities {
+        None => render_json_document(entries, primary, overview),
+        Some(options) => crate::recommendation::attach_priorities(
+            render_json_value(entries, primary, overview),
+            options,
+            history_dir,
+            now,
+        )
+        .await
+        .to_string(),
+    }
 }
 
 /// The single-entry shape: the same rows, without a `primary` the caller
@@ -3369,5 +3410,141 @@ mod tests {
         // Additive fields are absent, not null, when there is nothing to say.
         assert!(value["entries"][1].get("activity").is_none());
         assert!(render_text(&entries).contains("1 working · 2 waiting"));
+    }
+
+    fn weekly_metric(percent: u16, reset_at: DateTime<Utc>) -> ReportSection {
+        let mut section = metric("Weekly (7d)", percent, &format!("{percent}%"), "");
+        if let ReportSection::Metric {
+            reset_at: at,
+            window_secs,
+            ..
+        } = &mut section
+        {
+            *at = Some(reset_at);
+            *window_secs = Some(7 * 86_400);
+        }
+        section
+    }
+
+    fn priorities_fixture() -> (Vec<Entry>, DateTime<Utc>) {
+        let now = DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let mut claude = entry(
+            "anthropic",
+            vec![weekly_metric(20, now + chrono::Duration::days(3))],
+        );
+        claude.fetched_at = Some(now);
+        (vec![claude], now)
+    }
+
+    #[tokio::test]
+    async fn usage_json_with_priorities_adds_the_ranking_to_the_same_document() {
+        let (entries, now) = priorities_fixture();
+        let dir = tempfile::tempdir().unwrap();
+        let options = crate::recommendation::Options {
+            recent_hours: 3,
+            alert: crate::recommendation::Alert::default(),
+        };
+        let out = usage_json(
+            &entries,
+            None,
+            None,
+            Some(options),
+            Some(dir.path().to_path_buf()),
+            now,
+        )
+        .await;
+        let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+
+        // The plain report is still all there.
+        let plain: serde_json::Value =
+            serde_json::from_str(&render_json_document(&entries, None, None)).unwrap();
+        assert_eq!(doc["entries"], plain["entries"]);
+        assert_eq!(doc["schema_version"], plain["schema_version"]);
+
+        assert_eq!(doc["priority_recent_hours"], 3);
+        assert_eq!(
+            doc["priority_alert"],
+            json!({"unused_percent": 50, "hours": 24})
+        );
+        assert_eq!(doc["priority_history_available"], true);
+        let ranking = doc["ranking"].as_array().unwrap();
+        assert_eq!(ranking.len(), 1);
+        let row = &ranking[0];
+        let mut keys: Vec<&str> = row
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "alert_hours",
+                "alert_unused_percent",
+                "cycle_percent_per_hour",
+                "entry_id",
+                "fetched_at",
+                "name",
+                "pace_percent_per_hour",
+                "reason",
+                "reason_code",
+                "recent_hours",
+                "recent_percent_per_hour",
+                "remaining_percent",
+                "required_percent_per_hour",
+                "reset_at",
+                "session_exhausted",
+                "stale",
+                "status",
+                "unused_percent",
+                "urgent",
+                "window",
+            ]
+        );
+        assert_eq!(row["entry_id"], "anthropic");
+        assert_eq!(row["window"], "Weekly (7d)");
+        assert_eq!(row["status"], "priority");
+        assert_eq!(row["remaining_percent"], 80.0);
+        // The recommendation is the first row worth using first.
+        assert_eq!(doc["recommendation"], *row);
+        assert!(dir.path().join("history.json").exists());
+    }
+
+    #[tokio::test]
+    async fn usage_json_without_priorities_is_byte_for_byte_the_plain_report() {
+        let (entries, now) = priorities_fixture();
+        let dir = tempfile::tempdir().unwrap();
+        let overview = ["anthropic"];
+        let out = usage_json(
+            &entries,
+            Some("anthropic"),
+            Some(&overview),
+            None,
+            Some(dir.path().to_path_buf()),
+            now,
+        )
+        .await;
+        assert_eq!(
+            out,
+            render_json_document(&entries, Some("anthropic"), Some(&overview))
+        );
+        let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+        for key in [
+            "ranking",
+            "recommendation",
+            "priority_recent_hours",
+            "priority_alert",
+            "priority_history_available",
+        ] {
+            assert!(
+                doc.get(key).is_none(),
+                "{key} only appears with --priorities"
+            );
+        }
+        assert!(
+            !dir.path().join("history.json").exists(),
+            "nothing is recorded without --priorities"
+        );
     }
 }
