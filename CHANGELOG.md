@@ -24,6 +24,13 @@
   banked reset credit now include the account label, like quota alerts do,
   so users with several accounts can tell where to redeem it.
 
+- **GNOME extension and KDE plasmoid render live countdowns for regenerating quotas.**
+  Refilling metric rows (Synthetic's weekly credit budget) report a regeneration
+  amount and static detail starting with "Regenerates <amount> in ...". Both the
+  GNOME menu and the KDE plasmoid now strip that prefix from the metric detail,
+  matching the Omarchy panel, and format their live countdowns with the
+  regeneration amount instead of repeating the static string next to "Resets in ...".
+
 ## [1.45.0] — 2026-10-27
 
 ### Added

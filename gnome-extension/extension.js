@@ -294,7 +294,11 @@ class AiUsageBarIndicator extends PanelMenu.Button {
                     box.add_child(barWidget(row.percent, PANEL_BAR_W, 5,
                         colors[row.severity] || colors.low, row.elapsed));
                 }
-                const reset = row.reset === 'now' ? 'Resets now' : row.reset ? `Resets in ${row.reset}` : '';
+                const reset = row.reset === 'now'
+                    ? 'Resets now'
+                    : row.reset
+                        ? (row.regen ? `Regenerates ${row.regen} in ${row.reset}` : `Resets in ${row.reset}`)
+                        : '';
                 const detail = [reset, row.detail].filter(Boolean).join(' · ');
                 if (detail)
                     box.add_child(wrappedLabel(detail, 'aiub-detail'));

@@ -112,12 +112,16 @@ PlasmoidItem {
     // --- words -------------------------------------------------------------
     // The pure layer returns milliseconds; the sentences are built here so they
     // go through i18n() like the rest of the applet's chrome.
-    function resetText(resetAt) {
+    function resetText(resetAt, regen) {
         const ms = Logic.resetRemainingMs(resetAt, root.nowMs);
         if (ms === null)
             return "";
-        return ms > 0 ? i18n("Resets in %1", Logic.formatDuration(ms))
-                      : i18n("Reset due");
+        if (ms > 0) {
+            const duration = Logic.formatDuration(ms);
+            return regen ? i18n("Regenerates %1 in %2", regen, duration)
+                         : i18n("Resets in %1", duration);
+        }
+        return i18n("Reset due");
     }
 
     function updatedText() {

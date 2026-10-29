@@ -187,7 +187,7 @@ Item {
                 Layout.fillWidth: true
                 row: modelData
                 colors: full.applet.colors
-                resetText: full.applet.resetText(modelData.resetAt)
+                resetText: full.applet.resetText(modelData.resetAt, modelData.regen)
                 showBar: full.applet.showBars
             }
         }
