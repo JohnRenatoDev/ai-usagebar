@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type ComponentType, type MouseEvent, type ReactNode } from "react";
 import MdiAlert from "~icons/mdi/alert";
 import MdiChevronRight from "~icons/mdi/chevron-right";
 import MdiConsole from "~icons/mdi/console";
@@ -18,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { Card, Layout, ProviderInfo, ProviderListRow } from "@/lib/types";
+import { handFocusOnRemoval, usePopoverActions } from "@/lib/popoverActions";
 import { m } from "@/paraglide/messages.js";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -53,6 +54,8 @@ export function ProviderList({ cards, error, headerExtra, layout, onOpen, onReor
   useEffect(() => {
     sendCommand("providers");
   }, []);
+  const actions = usePopoverActions();
+  const onAddKey = (row: ProviderListRow, trigger: HTMLElement) => actions.addKey(row.id, trigger);
   const { enabled, disabled } = providerListRows(providers, cards, layout);
   return (
     <div className="flex flex-col gap-[var(--header-card-gap)]">
@@ -75,7 +78,7 @@ export function ProviderList({ cards, error, headerExtra, layout, onOpen, onReor
               if (!row) return null;
               return (
                 <div className="lifted-surface">
-                  <ProviderRow onOpen={onOpen} onToggle={onToggle} row={row} />
+                  <ProviderRow onAddKey={onAddKey} onOpen={onOpen} onToggle={onToggle} row={row} />
                 </div>
               );
             }}
@@ -83,12 +86,12 @@ export function ProviderList({ cards, error, headerExtra, layout, onOpen, onReor
             {enabled.map((row) => (
               <SortableItem key={row.id} id={row.id}>
                 {({ attributes, listeners }) => (
-                  <ProviderRow handle={{ attributes, listeners }} onOpen={onOpen} onToggle={onToggle} row={row} />
+                  <ProviderRow handle={{ attributes, listeners }} onAddKey={onAddKey} onOpen={onOpen} onToggle={onToggle} row={row} />
                 )}
               </SortableItem>
             ))}
             {disabled.map((row) => (
-              <ProviderRow key={row.id} off onOpen={onOpen} onToggle={onToggle} row={row} />
+              <ProviderRow key={row.id} off onAddKey={onAddKey} onOpen={onOpen} onToggle={onToggle} row={row} />
             ))}
           </VerticalDnd>
         </div>
@@ -104,6 +107,8 @@ interface ProviderRowProps {
   handle?: Parameters<typeof DragHandle>[0];
   /** Drawn in the disabled block: faded, no drag handle, an inert chevron. */
   off?: boolean;
+  /** Opens the key dialog for a key-only provider's "Add key". */
+  onAddKey: (row: ProviderListRow, trigger: HTMLElement) => void;
   onOpen: (id: string) => void;
   onToggle: (id: string, on: boolean) => void;
   row: ProviderListRow;
@@ -120,7 +125,7 @@ interface ProviderRowProps {
  * hint rides an alert icon next to the name, and the action takes the "+"
  * column as an icon, so the name never cuts.
  */
-function ProviderRow({ row, handle, off = false, onOpen, onToggle }: ProviderRowProps) {
+function ProviderRow({ row, handle, off = false, onAddKey, onOpen, onToggle }: ProviderRowProps) {
   const { language } = useI18n();
   const first = !off && row.cards.length > 0 ? row.cards[0] : null;
   const needs = row.state === "needs";
@@ -139,13 +144,17 @@ function ProviderRow({ row, handle, off = false, onOpen, onToggle }: ProviderRow
       ? multiAccountSubtitle(row.cards, row.metrics, row.name, language)
       : statusText;
   // The credential's action wears the "+" column as an icon, and while it is
-  // there the add-account "+" stands down for the row.
+  // there the add-account "+" stands down for the row. A key-only provider's
+  // "Add key" opens the key dialog; the others still go through the host.
   const action = needs && row.action
     ? row.action === "settings" ? { icon: MdiKeyPlus, label: m.provider_add_key() }
       : row.action === "terminal" ? { icon: MdiConsole, label: m.provider_sign_in() }
         : { icon: MdiOpenInApp, label: m.provider_open_app() }
     : null;
   const add = addAccountDecision(row);
+  // The host's hint names the TUI ("Add an API key in Settings"); a key-only
+  // provider takes its key here, so its hint points at the key button.
+  const hint = row.action === "settings" && row.keyLabel ? m.needs_api_key_hint() : row.signIn;
   const identity = (
     <>
       <ProviderIcon className="text-label-2" size="var(--row-icon-box)" slug={row.icon} title={row.name} />
@@ -155,9 +164,9 @@ function ProviderRow({ row, handle, off = false, onOpen, onToggle }: ProviderRow
           <span className="text-[length:var(--sz-badge)] break-words text-label-2">{subtitle}</span>
         ) : null}
       </span>
-      {needs && row.signIn ? (
-        <Hint content={row.signIn}>
-          <span tabIndex={0} role="img" aria-label={row.signIn}>
+      {needs && hint ? (
+        <Hint content={hint}>
+          <span tabIndex={0} role="img" aria-label={hint}>
             <MdiAlert className="size-[var(--icon-mark)] shrink-0 text-notice" />
           </span>
         </Hint>
@@ -184,11 +193,12 @@ function ProviderRow({ row, handle, off = false, onOpen, onToggle }: ProviderRow
           <div className="flex min-w-0 flex-1 items-center gap-[var(--row-gap)]">{identity}</div>
         )}
         {action ? (
-          <Hint content={action.label}>
-            <button type="button" aria-label={action.label} className="plain-btn hover-icon grid size-[var(--row-icon-box)] place-items-center" onClick={() => sendCommand("sign-in-provider", { id: row.id })}>
-              <action.icon className="size-[var(--icon-row)] text-label-2" />
-            </button>
-          </Hint>
+          <CredentialAction
+            icon={action.icon}
+            label={action.label}
+            rowId={row.id}
+            onClick={(event) => (row.action === "settings" && row.keyLabel ? onAddKey(row, event.currentTarget) : sendCommand("sign-in-provider", { id: row.id }))}
+          />
         ) : add ? (
           add.kind === "direct" ? (
             <button type="button" aria-label={m.add_account()} className="plain-btn hover-icon grid size-[var(--row-icon-box)] place-items-center" onClick={() => sendCommand("add-account", { kind: add.value })}>
@@ -240,5 +250,42 @@ function ProviderRow({ row, handle, off = false, onOpen, onToggle }: ProviderRow
         )}
       </div>
     </div>
+  );
+}
+
+interface CredentialActionProps {
+  icon: ComponentType<{ className?: string }>;
+  label: string;
+  onClick: (event: MouseEvent<HTMLButtonElement>) => void;
+  rowId: string;
+}
+
+/**
+ * The credential's action in the "+" column. It disappears once the provider
+ * has its credential — often while it still holds focus, after the key
+ * dialog handed focus back to it and the next catalog arrived. Removed while
+ * focused, it passes focus to its row's switch instead of dropping it on the
+ * body, where Enter would act on the whole screen.
+ */
+function CredentialAction({ icon: Icon, label, onClick, rowId }: CredentialActionProps) {
+  const button = useRef<HTMLButtonElement | null>(null);
+  useLayoutEffect(() => {
+    const node = button.current;
+    // A layout cleanup on removal runs while the node is still in the document.
+    return () => handFocusOnRemoval(node, rowId);
+  }, [rowId]);
+  return (
+    <Hint content={label}>
+      <button
+        ref={button}
+        type="button"
+        aria-label={label}
+        data-key-row={rowId}
+        className="plain-btn hover-icon grid size-[var(--row-icon-box)] place-items-center"
+        onClick={onClick}
+      >
+        <Icon className="size-[var(--icon-row)] text-label-2" />
+      </button>
+    </Hint>
   );
 }

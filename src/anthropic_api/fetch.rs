@@ -879,4 +879,70 @@ mod tests {
         }
         assert!(!cache.dir().exists());
     }
+
+    /// The end-to-end regression for the Admin key: a non-401/403 error whose
+    /// body quotes the key the fetch was sent with used to persist the key in
+    /// `.last_error` and hand the key-carrying error back to the report. The
+    /// seam `build_outcome` uses — a `Cache::at` attached to the key via
+    /// `redacting`, plus the real fetch under the same single error wrap —
+    /// must leave the key in neither place.
+    #[tokio::test]
+    async fn error_response_quoting_the_admin_key_redacts_the_diagnostic_and_the_error() {
+        let key = "test-key-value";
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/v1/organizations/cost_report")
+            .match_query(mockito::Matcher::Any)
+            .with_status(500)
+            .with_body(format!(
+                r#"{{"error":{{"message":"invalid admin key {key}"}}}}"#
+            ))
+            .create_async()
+            .await;
+
+        let (_td, cache) = cache_fixture();
+        let cache = cache.redacting(key);
+
+        let client = reqwest::Client::new();
+        let endpoints = Endpoints {
+            cost_report: format!("{}/v1/organizations/cost_report", server.url()),
+        };
+        let err = crate::outcome::fetch_api_keyed(
+            async {
+                fetch_snapshot_at(
+                    &client,
+                    key,
+                    &cache,
+                    &endpoints,
+                    Duration::ZERO,
+                    None,
+                    at(2026, 7, 19),
+                )
+                .await
+                .map(crate::vendor::VendorOutcome::from)
+            },
+            key,
+        )
+        .await
+        .unwrap_err();
+
+        // The cache's first point of writing never held the key.
+        let persisted = std::fs::read_to_string(cache.last_error_path()).unwrap();
+        assert!(
+            !persisted.contains(key),
+            "the key reached .last_error: {persisted}"
+        );
+        assert!(persisted.contains("[key]"), "{persisted}");
+        assert!(
+            persisted.starts_with("500\n"),
+            "the code line must survive: {persisted}"
+        );
+        // Neither does the error the report shows.
+        let rendered = err.user_message();
+        assert!(
+            !rendered.contains(key),
+            "the key reached the report error: {rendered}"
+        );
+        assert!(rendered.contains("[key]"), "{rendered}");
+    }
 }

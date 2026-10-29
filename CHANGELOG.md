@@ -80,6 +80,61 @@
   `--alert-unused-percent` and `--alert-hours` tune it. Without the flag the
   report is byte-for-byte unchanged and nothing is recorded.
 
+### Added
+
+- **Add an API key from the tray popover.** A provider that needs only an
+  API key sent you to the TUI in a terminal; its key icon in the provider
+  list now opens a dialog for the key. The tray saves it to `config.toml`
+  with the same writer the Settings overlay uses (mode 600), fetches that
+  provider alone while the dialog shows a spinner, and keeps the key only
+  when the provider accepts it. A refused key puts the previous value back
+  and the dialog says why, so you can paste another. A provider card that
+  reads "No API key" opens the same dialog instead of pointing at the TUI,
+  and "No providers enabled" opens Customize.
+
+### Fixed
+
+- **Saving `config.toml` from the tray, the TUI, and the CLI waits for the
+  other instead of overwriting it.** Their saves are read-modify-writes of
+  the same file, and a save that landed between another process's read and
+  write used to be silently lost — including the TUI's key, which the tray's
+  key check could replace with the candidate it was checking. Every save
+  now takes an exclusive `config.toml.lock` beside the config for the whole
+  read-modify-write, and the key check's snapshot, "no key yet" condition,
+  and conditional write happen under that same lock. A save that cannot get
+  the lock within five seconds fails with "config.toml is being saved by
+  another process; try again." instead of writing.
+
+### Security
+
+- **A provider's answer that quotes the API key is no longer written to the
+  cache or shown in the report, the widget, or the CLI.** A provider that
+  echoes the key a fetch was sent with in its answer (Z.AI puts the reason in
+  `msg` inside an HTTP 200 with `success: false`) used to leave the key in
+  the vendor cache's `.last_error` and in the error the report shows; the
+  widget and the CLI built their caches without that protection at all, and
+  a successful answer that quoted the key was written to the payload as it
+  arrived. The key is now removed before the first point of writing on every
+  path: the failure diagnostic is redacted as the cache records it, the
+  error that reaches the report, the bar, or the terminal is redacted with
+  the same key, and a successful answer is redacted on its decoded JSON
+  strings before it is persisted (an escaped echo counts; numbers and
+  structure are left alone), while an answer that is not JSON and quotes the
+  key is not persisted at all. The key check's final scrub stays as a second
+  layer.
+
+- **The tray's IPC bridge only answers the popover's own page, and the
+  WebView no longer navigates outside it.** The tray hosts accepted any
+  message on the `window.ipc` bridge regardless of who sent it and let the
+  WebView navigate anywhere. Now that the bridge writes keys to
+  `config.toml` (`set-api-key`), a message is only served when it comes from
+  the popover's own origin — `aiub://localhost` on macOS, `http://aiub.localhost`
+  on Windows — and any other origin is dropped before it is parsed, without
+  a reply. The WebView stays pinned to that origin too: navigation to a
+  `http`/`https` URL outside it is handed to the default browser (the same
+  path as the `open-url` command) and denied in place, and anything else —
+  `file://`, `javascript:`, a new window from `window.open` — is refused.
+
 ## [1.45.0] — 2026-10-27
 
 ### Added

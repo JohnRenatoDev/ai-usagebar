@@ -1,5 +1,5 @@
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import MdiAlert from "~icons/mdi/alert";
 import MdiChevronDown from "~icons/mdi/chevron-down";
 import MdiChevronUp from "~icons/mdi/chevron-up";
@@ -35,6 +35,7 @@ import type {
 import { m } from "@/paraglide/messages.js";
 import { translateUsage, useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { handFocusOnRemoval, usePopoverActions } from "@/lib/popoverActions";
 import {
   cardHasExtras,
   condensedTextRowIndexes,
@@ -586,10 +587,20 @@ interface ErrorRowProps {
 }
 
 /**
- * A provider with nothing to show: the verdict, the one-line hint, and — when the fix is a host
- * command — a small action button. Terminal-side fixes (sign-in) and waits (429) get no button.
+ * A provider with nothing to show: the verdict, the one-line hint, and — when there is a fix to
+ * offer — a small action button. A missing key opens the key dialog and no provider switched on
+ * opens Customize, both inside the popover; the rest are host commands. Terminal-side fixes
+ * (sign-in) and waits (429) get no button.
  */
 export function ErrorRow({ explained }: ErrorRowProps) {
+  const actions = usePopoverActions();
+  function run(trigger: HTMLElement) {
+    const action = explained.action;
+    if (!action) return;
+    if (action.cmd === "add-key" && action.id) actions.addKey(action.id, trigger);
+    else if (action.cmd === "customize") actions.openCustomize();
+    else sendCommand(action.cmd);
+  }
   return (
     <div className="flex flex-col gap-[var(--gap-stack)] px-[var(--card-pad)] py-[var(--pad-text-row)]">
       <span className="text-[length:var(--sz-support)] font-semibold">{explained.title || m.couldn_t_update()}</span>
@@ -597,15 +608,48 @@ export function ErrorRow({ explained }: ErrorRowProps) {
         <span className="text-[length:var(--sz-badge)] leading-[var(--leading-note)] text-label-2">{explained.hint}</span>
       ) : null}
       {explained.action ? (
-        <button
-          type="button"
-          className="action-btn mt-[var(--gap-stack)] w-fit"
-          onClick={() => sendCommand(explained.action?.cmd)}
-        >
-          {explained.action.label}
-        </button>
+        <ErrorActionButton
+          label={explained.action.label}
+          providerId={explained.action.cmd === "add-key" ? explained.action.id : undefined}
+          onClick={run}
+        />
       ) : null}
     </div>
+  );
+}
+
+interface ErrorActionButtonProps {
+  label: string;
+  /** Set for "Add key": the provider whose card this row stands in for. */
+  providerId?: string;
+  onClick: (trigger: HTMLElement) => void;
+}
+
+/**
+ * The error row's one action. "Add key" goes away once the key is accepted,
+ * often after the key dialog has handed focus back to it and the next report
+ * arrives with the card's metrics: removed while focused, it passes focus to
+ * the card's header action instead of leaving it on the body.
+ */
+function ErrorActionButton({ label, providerId, onClick }: ErrorActionButtonProps) {
+  const button = useRef<HTMLButtonElement | null>(null);
+  useLayoutEffect(() => {
+    const node = button.current;
+    // A layout cleanup on removal runs while the node is still in the document.
+    return () => {
+      if (providerId) handFocusOnRemoval(node, providerId);
+    };
+  }, [providerId]);
+  return (
+    <button
+      ref={button}
+      type="button"
+      className="action-btn mt-[var(--gap-stack)] w-fit"
+      data-key-row={providerId}
+      onClick={(event) => onClick(event.currentTarget)}
+    >
+      {label}
+    </button>
   );
 }
 

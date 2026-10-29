@@ -453,6 +453,83 @@ try {
   assert.match(readyRow, />2 metrics</);
   assert.match(readyRow, /<button[^>]*aria-label="Add account"/);
   assert.doesNotMatch(readyRow, /text-notice/);
+  // The key dialog. Radix keeps portaled content out of static markup (as it
+  // does the menus), so the contract is tested on `ApiKeyDialogView`, the
+  // content the dialog renders, under a `Dialog` root whose context
+  // `DialogTitle` and `DialogDescription` read; the wrapper is checked closed.
+  const { ApiKeyDialog, ApiKeyDialogView } = await server.ssrLoadModule('/src/components/ApiKeyDialog.tsx');
+  const { Dialog } = await server.ssrLoadModule('/src/components/ui/dialog.tsx');
+  const keyProvider = { icon: 'zai', id: 'zai', name: 'Z.AI', keyLabel: 'API key', keyNote: 'coding-plan usage' };
+  const keyView = (props) => renderToStaticMarkup(React.createElement(LanguageProvider, { language: 'en' },
+    React.createElement(Dialog, { open: true, onOpenChange() {} },
+      React.createElement(ApiKeyDialogView, {
+        checking: false, error: '', keyDraft: '', language: 'en', noAnswer: false,
+        provider: keyProvider, revealed: false,
+        onKeyChange() {}, onRevealToggle() {}, onCancel() {}, onSave() {},
+        ...props,
+      }))));
+  const enabledButtons = (markup) => (markup.match(/<button[^>]*>/g) ?? []).filter((b) => !/\sdisabled=""/.test(b));
+  // The approved layout: the provider's mark beside "<provider> key" and the
+  // host's note (first letter raised); the field is masked, with the reveal
+  // toggle inside its ring.
+  const keyIdle = keyView({});
+  assert.match(keyIdle, /class="key-dialog-mark"/);
+  assert.match(keyIdle, />Z\.AI key</);
+  assert.match(keyIdle, />Coding-plan usage</);
+  assert.match(keyIdle, /<div class="key-field"><input[^>]*>.*?aria-label="Show key"/s);
+  assert.match(keyIdle, /Saved in config\.toml, readable only by you\./);
+  assert.match(keyIdle, /<input[^>]*type="password"/);
+  assert.doesNotMatch(keyIdle, /<input[^>]*\sdisabled=""/);
+  // A form: Enter in the field submits, the same as Save.
+  assert.match(keyIdle, /<form[^>]*>/);
+  assert.match(keyIdle, /<button type="submit"[^>]*disabled=""/);
+  // With a draft, Save is live.
+  assert.doesNotMatch(keyView({ keyDraft: 'x' }), /<button type="submit"[^>]*disabled=""/);
+  // Checking: the spinner and the line, the field and Save wait; only Cancel stays live.
+  const keyChecking = keyView({ checking: true, keyDraft: 'x' });
+  assert.match(keyChecking, /animate-spin/);
+  assert.match(keyChecking, /Checking the key with Z\.AI/);
+  assert.match(keyChecking, /<input[^>]*\sdisabled=""/);
+  assert.equal(enabledButtons(keyChecking).length, 1);
+  assert.match(keyChecking, /<button type="button"[^>]*>Cancel<\/button>/);
+  // The field stands in for the key with dots, and Save says it is checking.
+  assert.match(keyChecking, /<input[^>]*placeholder="\u2022+"/);
+  assert.match(keyChecking, /<button type="submit"[^>]*disabled=""[^>]*>.*animate-spin.*Checking…<\/button>/s);
+  // Failed: a rejection names the key, the field is empty and live again.
+  const keyFailed = keyView({ error: 'HTTP 401: invalid key' });
+  assert.match(keyFailed, /text-meter-red[^>]*>Z\.AI rejected this key\.</);
+  assert.doesNotMatch(keyFailed, /Sign-in expired/);
+  // The refusal rings the field red and reads right under it.
+  assert.match(keyFailed, /<div class="key-field" data-invalid="">/);
+  assert.ok(keyFailed.indexOf('key-field') < keyFailed.indexOf('rejected this key'));
+  assert.doesNotMatch(keyFailed, /<input[^>]*\sdisabled=""/);
+  // No answer: the fixed line, the field live.
+  const keyNoAnswer = keyView({ noAnswer: true });
+  assert.match(keyNoAnswer, /No answer from Z\.AI yet/);
+  assert.doesNotMatch(keyNoAnswer, /<input[^>]*\sdisabled=""/);
+  // Closed renders nothing.
+  assert.equal(renderToStaticMarkup(React.createElement(LanguageProvider, { language: 'en' },
+    React.createElement(ApiKeyDialog, { provider: null, keyCheck: null, nowMs: 1, onClose() {} }))), '');
+  // A card that has no key offers "Add key", which opens the key dialog inside
+  // the popover (the button carries the provider for focus to come back to);
+  // nothing in it points at the TUI.
+  const { ErrorRow } = await server.ssrLoadModule('/src/components/ProviderSection.tsx');
+  const { explainError } = await server.ssrLoadModule('/src/model.js');
+  const noKeyRow = renderToStaticMarkup(React.createElement(LanguageProvider, { language: 'en' },
+    React.createElement(ErrorRow, { explained: explainError('no API key', 'zai', 'en') })));
+  assert.match(noKeyRow, /<button[^>]*data-key-row="zai"[^>]*>Add key<\/button>/);
+  assert.doesNotMatch(noKeyRow, /TUI/);
+  // In the list, a key-only provider's alert says to use the key button
+  // instead of the host's "in Settings" hint.
+  const keyOnlyList = renderToStaticMarkup(React.createElement(TooltipProvider, {},
+    React.createElement(LanguageProvider, { language: 'en' },
+      React.createElement(ProviderList, {
+        cards: [], error: '', layout: emptyLayout(),
+        providers: [{ id: 'zai', name: 'Z.AI', enabled: true, configured: false, env: '', signIn: 'Add an API key in Settings, then Refresh.', action: 'settings', addAccounts: [], keyLabel: 'API key', keyNote: '' }],
+        onOpen() {}, onReorder() {}, onToggle() {},
+      }))));
+  assert.match(keyOnlyList, /aria-label="Needs an API key: add it with the key button\."/);
+  assert.doesNotMatch(keyOnlyList, /in Settings, then Refresh/);
   console.log('native dashboard: ok');
 } finally {
   await server.close();

@@ -37,11 +37,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 use windows_sys::w;
 use wry::http::{Request, Response, StatusCode, header::CONTENT_TYPE};
-use wry::{WebContext, WebView, WebViewBuilder};
+use wry::{NewWindowResponse, WebContext, WebView, WebViewBuilder};
 
 use super::blur::{self, Blur, Foreground, PressHide, Verdict};
+use super::browse;
 use super::hotkey::{self, HotkeyBinding};
 use super::icon::{Ink, Severity, apply_ink, tray_icon_rgba};
+use super::ipc_origin;
 use super::options_menu::{self, OptionsAction, OptionsLabels};
 use super::payload::{
     HostFacts, SharedFacts, facts_snapshot, host_payload, with_facts, worst_severity, wrap_report,
@@ -583,6 +585,7 @@ fn stamp_facts(state: &mut TrayState) {
         "refresh_minutes",
         "repository",
         "version",
+        "key_check",
     ] {
         obj.insert(key.into(), stamped[key].clone());
     }
@@ -883,6 +886,21 @@ fn handle_ipc(state: &mut TrayState, body: &str, control_flow: &mut ControlFlow)
             let _ = state.worker.send(WorkerCmd::Refresh);
         }
         "sign-in-provider" => super::providers::sign_in(&value),
+        "set-api-key" => {
+            let proxy = state.proxy.clone();
+            let worker = state.worker.clone();
+            match super::providers::request_key_check(&state.facts, &value, move || {
+                let _ = proxy.send_event(UserEvent::Facts);
+                let _ = worker.send(WorkerCmd::Refresh);
+            }) {
+                // `Ok(None)` is an ignored request: nothing to publish.
+                Ok(_) => apply_facts(state),
+                Err(fact) => {
+                    with_facts(&state.facts, |f| f.key_check = Some(fact));
+                    apply_facts(state);
+                }
+            }
+        }
         "open-tui" => tui_launch::open(),
         "close" => {
             trace("ipc close → hide");
@@ -1462,12 +1480,46 @@ fn build_webview(
         })
         .with_url("http://aiub.localhost/index.html")
         .with_ipc_handler(move |request| {
+            // The bridge now writes to `config.toml` (`set-api-key`), so only
+            // the popover's own frame may use it. wry stamps the message with
+            // the sending script's absolute URL (`request.uri()`); any other
+            // origin is dropped before the parse, without a reply.
+            let uri = request.uri().to_string();
+            if !ipc_origin::is_popover_origin(&uri, ipc_origin::Os::Windows) {
+                return;
+            }
             let body = request.body().clone();
             let _ = proxy.send_event(UserEvent::Ipc(body));
+        })
+        // The WebView never leaves the popover's origin: other web URLs go to
+        // the default browser (the `open-url` command's path), the rest is
+        // denied.
+        .with_navigation_handler(|url| navigation_allowed(&url))
+        .with_new_window_req_handler(|url, _features| {
+            if navigation_allowed(&url) {
+                NewWindowResponse::Allow
+            } else {
+                NewWindowResponse::Deny
+            }
         })
         .with_transparent(true)
         .build(window)
         .map_err(|error| error.to_string())
+}
+
+/// What the WebView may do with a navigation or a `window.open` to `url`:
+/// the popover's own origin loads in place; another web URL is handed to
+/// `browse::open` (the `open-url` command's path) and denied in place; anything
+/// else is denied.
+fn navigation_allowed(url: &str) -> bool {
+    match ipc_origin::navigation(url, ipc_origin::Os::Windows) {
+        ipc_origin::Navigation::Allow => true,
+        ipc_origin::Navigation::OpenExternal => {
+            browse::open(url);
+            false
+        }
+        ipc_origin::Navigation::Deny => false,
+    }
 }
 
 fn protocol_response(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {

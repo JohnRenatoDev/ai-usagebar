@@ -609,9 +609,18 @@ body:has(.native-panel[data-os="macos"]) :is([data-slot="chip"], [data-slot="sel
 }
 
 /* Text fields: an opaque field inside a hairline ring. */
-body:has(.native-panel[data-os="macos"]) :is(.recorder, .threshold-input) {
+body:has(.native-panel[data-os="macos"]) :is(.recorder, .threshold-input, .key-field) {
   background: var(--field-fill);
   box-shadow: 0 0 0 1px var(--field-ring);
+}
+
+/* The key field keeps its focus and refusal rings over the hairline. */
+body:has(.native-panel[data-os="macos"]) .key-field:focus-within {
+  box-shadow: 0 0 0 var(--focus-ring) var(--accent);
+}
+
+body:has(.native-panel[data-os="macos"]) .key-field[data-invalid] {
+  box-shadow: 0 0 0 1.5px var(--color-meter-red);
 }
 
 /* Menus and pickers: rows inset in the glass, the highlighted one filled with the menu tint. */
@@ -1136,6 +1145,55 @@ body:has(.native-panel[data-os="windows"]) {
 .threshold-input:focus-visible {
   outline: var(--focus-ring) solid var(--accent);
   outline-offset: 2px;
+}
+
+/* The key dialog: the provider's mark in a tile beside the title, and the key
+   field — the input and its reveal toggle inside one ring, red when the
+   provider refused the key. */
+.key-dialog-mark {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--control-fill);
+}
+
+.key-field {
+  display: flex;
+  height: calc(var(--control-h) + 6px);
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 var(--control-px);
+  border-radius: var(--radius-sm);
+  background: var(--control-fill);
+  box-shadow: 0 0 0 1px var(--separator);
+}
+
+.key-field:focus-within {
+  box-shadow: 0 0 0 var(--focus-ring) var(--accent);
+}
+
+.key-field[data-invalid] {
+  box-shadow: 0 0 0 1.5px var(--color-meter-red);
+}
+
+.key-field input {
+  min-width: 0;
+  height: 100%;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--label-1);
+  font: inherit;
+  font-size: var(--sz-control);
+  outline: none;
+}
+
+.key-field input::placeholder,
+.key-field input:disabled {
+  color: var(--label-3);
 }
 
 .threshold-input::-webkit-inner-spin-button,

@@ -23,7 +23,7 @@ use serde_json::json;
 use crate::config::Config;
 use crate::context::activity::{ProcessProbe, SessionActivity, SystemProbe};
 use crate::context::{ContextScan, ContextSession, ContextUsage};
-use crate::tui::app::{TabId, TabSource, TabState, refresh_one, tabs_with_desktop};
+use crate::tui::app::{Freshness, TabId, TabSource, TabState, refresh_one, tabs_with_desktop};
 use crate::tui::context::format_tokens;
 use crate::tui::panels::{Section, sections_with_metadata_for};
 
@@ -253,6 +253,25 @@ pub async fn collect_filtered_json(
     provider: Option<&str>,
     account: Option<&str>,
 ) -> std::result::Result<String, String> {
+    collect_filtered_json_with(provider, account, Freshness::Cached).await
+}
+
+/// [`collect_filtered_json`] with the wire-only read the key check needs:
+/// every builtin fetch runs with a zero TTL, so a payload another producer
+/// left in the vendor's cache — a refresh that started under a different
+/// key — cannot answer for the key just written. The verdict rests on a
+/// reading made now, or on the fetch's error.
+pub async fn collect_filtered_json_from_wire(
+    provider: Option<&str>,
+) -> std::result::Result<String, String> {
+    collect_filtered_json_with(provider, None, Freshness::Wire).await
+}
+
+async fn collect_filtered_json_with(
+    provider: Option<&str>,
+    account: Option<&str>,
+    freshness: Freshness,
+) -> std::result::Result<String, String> {
     if provider.is_none() {
         if account.is_some() {
             return Err("account requires provider".into());
@@ -291,7 +310,7 @@ pub async fn collect_filtered_json(
         let suffix = account.map_or(String::new(), |label| format!(" account {label}"));
         return Err(format!("no enabled provider matches {provider}{suffix}"));
     }
-    let entries = collect_report_targets_for(&client, &config, &targets).await;
+    let entries = collect_report_targets_for(&client, &config, &targets, freshness).await;
     let overview = config.ui.overview_vendors.as_ref().map(|vendors| {
         vendors
             .iter()
@@ -334,7 +353,7 @@ pub async fn collect_entry_json(entry_id: &str) -> std::result::Result<String, S
     if targets.is_empty() {
         return Err(format!("no enabled provider matches {entry_id}"));
     }
-    let entries = collect_report_targets_for(&client, &config, &targets).await;
+    let entries = collect_report_targets_for(&client, &config, &targets, Freshness::Cached).await;
     Ok(render_json_entries(&entries))
 }
 
@@ -360,7 +379,7 @@ async fn collect_entries()
             crate::config::config_path_hint()
         ));
     }
-    let entries = collect_entries_for(&client, &config, &tabs).await;
+    let entries = collect_entries_for(&client, &config, &tabs, Freshness::Cached).await;
     let overview = config
         .ui
         .overview_vendors
@@ -377,6 +396,7 @@ async fn collect_entries_for(
     client: &reqwest::Client,
     config: &Config,
     tabs: &[TabId],
+    freshness: Freshness,
 ) -> Vec<Entry> {
     let accounts = if tabs
         .iter()
@@ -387,20 +407,21 @@ async fn collect_entries_for(
         Vec::new()
     };
     let targets = expand_antigravity_tabs(tabs, &accounts);
-    collect_report_targets_for(client, config, &targets).await
+    collect_report_targets_for(client, config, &targets, freshness).await
 }
 
 async fn collect_report_targets_for(
     client: &reqwest::Client,
     config: &Config,
     targets: &[ReportTarget],
+    freshness: Freshness,
 ) -> Vec<Entry> {
     // Sequential on purpose: several of these share a per-vendor cache lock,
     // and firing every account at Anthropic at once is a good way to get
     // rate-limited for no gain on a handful of entries.
     let mut entries = Vec::with_capacity(targets.len());
     for target in targets {
-        entries.push(entry_for_report_target(client, config, target).await);
+        entries.push(entry_for_report_target(client, config, target, freshness).await);
     }
     // #356: what each Claude account's live sessions are doing, ahead of the
     // #255 session list. Both are best-effort local reads: nothing to read adds
@@ -417,9 +438,10 @@ async fn entry_for_report_target(
     client: &reqwest::Client,
     config: &Config,
     target: &ReportTarget,
+    freshness: Freshness,
 ) -> Entry {
     match target {
-        ReportTarget::Tab(tab) => entry_for(client, config, tab).await,
+        ReportTarget::Tab(tab) => entry_for(client, config, tab, freshness).await,
         ReportTarget::AntigravityAccount(tab, account) => {
             entry_from_antigravity_account(tab, account, Utc::now())
         }
@@ -455,8 +477,13 @@ pub async fn run(json: bool, priorities: Option<crate::recommendation::Options>)
     report_exit_code(&entries)
 }
 
-async fn entry_for(client: &reqwest::Client, config: &Config, tab: &TabId) -> Entry {
-    let state = refresh_one(client, config, tab).await;
+async fn entry_for(
+    client: &reqwest::Client,
+    config: &Config,
+    tab: &TabId,
+    freshness: Freshness,
+) -> Entry {
+    let state = refresh_one(client, config, tab, freshness).await;
     entry_from_state_with_config(config, tab, &state, Utc::now())
 }
 

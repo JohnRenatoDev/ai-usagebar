@@ -32,6 +32,7 @@ use crate::ollama;
 use crate::openai;
 use crate::openrouter;
 use crate::orcarouter;
+use crate::outcome::fetch_api_keyed;
 use crate::pango::escape;
 use crate::supergrok;
 use crate::synthetic;
@@ -265,14 +266,20 @@ async fn opencode_go_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> 
         config.opencode_go.auth_paths.as_deref(),
     )?;
     let client = http_client()?;
-    let cache = vendor_cache(cli, "opencode-go")?;
+    let cache = vendor_cache(cli, "opencode-go")?.redacting(&api_key);
     let endpoints = crate::opencode_go::fetch::Endpoints::default();
-    let outcome = match crate::opencode_go::fetch::fetch_snapshot(
-        &client,
+    let outcome = match fetch_api_keyed(
+        async {
+            crate::opencode_go::fetch::fetch_snapshot(
+                &client,
+                &api_key,
+                &cache,
+                &endpoints,
+                DEFAULT_TTL,
+            )
+            .await
+        },
         &api_key,
-        &cache,
-        &endpoints,
-        DEFAULT_TTL,
     )
     .await
     {
@@ -376,15 +383,21 @@ async fn ollama_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
         config.ollama.api_key.as_deref(),
     )?;
     let client = http_client()?;
-    let cache = vendor_cache(cli, "ollama")?;
+    let cache = vendor_cache(cli, "ollama")?.redacting(&api_key);
     let endpoints = ollama::fetch::Endpoints::default();
-    let outcome = match ollama::fetch_snapshot(
-        &client,
+    let outcome = match fetch_api_keyed(
+        async {
+            ollama::fetch_snapshot(
+                &client,
+                &api_key,
+                &config.ollama.plan,
+                &cache,
+                &endpoints,
+                DEFAULT_TTL,
+            )
+            .await
+        },
         &api_key,
-        &config.ollama.plan,
-        &cache,
-        &endpoints,
-        DEFAULT_TTL,
     )
     .await
     {
@@ -411,12 +424,11 @@ async fn orcarouter_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let (api_key, cache) = api_key_target(cli, config, VendorId::OrcaRouter)?;
     let client = http_client()?;
     let endpoints = orcarouter::fetch::Endpoints::default();
-    let outcome = match orcarouter::fetch_snapshot(
-        &client,
+    let outcome = match fetch_api_keyed(
+        async {
+            orcarouter::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL).await
+        },
         &api_key,
-        &cache,
-        &endpoints,
-        DEFAULT_TTL,
     )
     .await
     {
@@ -553,13 +565,19 @@ async fn grok_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let (key, cache) = api_key_target(cli, config, VendorId::Grok)?;
     let client = http_client()?;
     let endpoints = grok::fetch::Endpoints::default();
-    let outcome = match grok::fetch_snapshot(
-        &client,
+    let outcome = match fetch_api_keyed(
+        async {
+            grok::fetch_snapshot(
+                &client,
+                &key,
+                &cache,
+                &endpoints,
+                DEFAULT_TTL,
+                config.grok.team_id.as_deref(),
+            )
+            .await
+        },
         &key,
-        &cache,
-        &endpoints,
-        DEFAULT_TTL,
-        config.grok.team_id.as_deref(),
     )
     .await
     {
@@ -620,13 +638,12 @@ async fn moonshot_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let (api_key, cache) = api_key_target(cli, config, VendorId::Moonshot)?;
     let client = http_client()?;
     let (endpoints, currency) = moonshot::fetch::Endpoints::for_region(&config.moonshot.region);
-    let outcome = match moonshot::fetch_snapshot(
-        &client,
+    let outcome = match fetch_api_keyed(
+        async {
+            moonshot::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL, currency)
+                .await
+        },
         &api_key,
-        &cache,
-        &endpoints,
-        DEFAULT_TTL,
-        currency,
     )
     .await
     {
@@ -652,12 +669,16 @@ async fn minimax_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let (api_key, cache) = api_key_target(cli, config, VendorId::Minimax)?;
     let client = http_client()?;
     let endpoints = minimax::fetch::Endpoints::for_region(&config.minimax.region);
-    let outcome =
-        match minimax::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL).await {
-            Ok(o) => o,
-            Err(e) if e.is_transient() => return Ok(WaybarOutput::loading(cli.icon.as_deref())),
-            Err(e) => return Err(e),
-        };
+    let outcome = match fetch_api_keyed(
+        async { minimax::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL).await },
+        &api_key,
+    )
+    .await
+    {
+        Ok(o) => o,
+        Err(e) if e.is_transient() => return Ok(WaybarOutput::loading(cli.icon.as_deref())),
+        Err(e) => return Err(e),
+    };
 
     let theme = theme_from_cli(cli);
     let snap = outcome.snapshot.clone();
@@ -676,12 +697,16 @@ async fn novita_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let (api_key, cache) = api_key_target(cli, config, VendorId::Novita)?;
     let client = http_client()?;
     let endpoints = novita::fetch::Endpoints::default();
-    let outcome =
-        match novita::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL).await {
-            Ok(o) => o,
-            Err(e) if e.is_transient() => return Ok(WaybarOutput::loading(cli.icon.as_deref())),
-            Err(e) => return Err(e),
-        };
+    let outcome = match fetch_api_keyed(
+        async { novita::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL).await },
+        &api_key,
+    )
+    .await
+    {
+        Ok(o) => o,
+        Err(e) if e.is_transient() => return Ok(WaybarOutput::loading(cli.icon.as_deref())),
+        Err(e) => return Err(e),
+    };
 
     let theme = theme_from_cli(cli);
     let snap = outcome.snapshot.clone();
@@ -700,13 +725,19 @@ async fn synthetic_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let (api_key, cache) = api_key_target(cli, config, VendorId::Synthetic)?;
     let client = http_client()?;
     let endpoints = synthetic::fetch::Endpoints::default();
-    let outcome = match synthetic::fetch_snapshot(
-        &client,
+    let outcome = match fetch_api_keyed(
+        async {
+            synthetic::fetch_snapshot(
+                &client,
+                &api_key,
+                &cache,
+                &endpoints,
+                DEFAULT_TTL,
+                config.synthetic.plan_tier.as_deref(),
+            )
+            .await
+        },
         &api_key,
-        &cache,
-        &endpoints,
-        DEFAULT_TTL,
-        config.synthetic.plan_tier.as_deref(),
     )
     .await
     {
@@ -730,7 +761,11 @@ async fn synthetic_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
 async fn lyceum_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let (api_key, cache) = api_key_target(cli, config, VendorId::Lyceum)?;
     let client = http_client()?;
-    let outcome = match lyceum::fetch::fetch_snapshot(&client, &api_key, &cache, DEFAULT_TTL).await
+    let outcome = match fetch_api_keyed(
+        async { lyceum::fetch::fetch_snapshot(&client, &api_key, &cache, DEFAULT_TTL).await },
+        &api_key,
+    )
+    .await
     {
         Ok(outcome) => outcome,
         Err(error) if error.is_transient() => {
@@ -753,13 +788,19 @@ async fn kilo_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let (api_key, cache) = api_key_target(cli, config, VendorId::Kilo)?;
     let client = http_client()?;
     let endpoints = kilo::fetch::Endpoints::default();
-    let outcome = match kilo::fetch_snapshot(
-        &client,
+    let outcome = match fetch_api_keyed(
+        async {
+            kilo::fetch_snapshot(
+                &client,
+                &api_key,
+                &cache,
+                &endpoints,
+                DEFAULT_TTL,
+                config.kilo.organization_id.as_deref(),
+            )
+            .await
+        },
         &api_key,
-        &cache,
-        &endpoints,
-        DEFAULT_TTL,
-        config.kilo.organization_id.as_deref(),
     )
     .await
     {
@@ -788,15 +829,21 @@ async fn anthropic_api_output(cli: &Cli, config: &Config) -> Result<WaybarOutput
         config.anthropic_api.api_key.as_deref(),
     )?;
     let client = http_client()?;
-    let cache = vendor_cache(cli, "anthropic_api")?;
+    let cache = vendor_cache(cli, "anthropic_api")?.redacting(&key);
     let endpoints = anthropic_api::fetch::Endpoints::default();
-    let outcome = match anthropic_api::fetch_snapshot(
-        &client,
+    let outcome = match fetch_api_keyed(
+        async {
+            anthropic_api::fetch_snapshot(
+                &client,
+                &key,
+                &cache,
+                &endpoints,
+                DEFAULT_TTL,
+                config.anthropic_api.monthly_limit,
+            )
+            .await
+        },
         &key,
-        &cache,
-        &endpoints,
-        DEFAULT_TTL,
-        config.anthropic_api.monthly_limit,
     )
     .await
     {
@@ -906,16 +953,31 @@ async fn copilot_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
 }
 
 async fn zai_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
+    zai_output_with(cli, config, &zai::fetch::Endpoints::default()).await
+}
+
+/// [`zai_output`] with the endpoints redirected — the seam a hermetic test
+/// points at a mock server, the way `nous_output_with` does.
+async fn zai_output_with(
+    cli: &Cli,
+    config: &Config,
+    endpoints: &zai::fetch::Endpoints,
+) -> Result<WaybarOutput> {
     let (api_key, cache) = api_key_target(cli, config, VendorId::Zai)?;
     let client = http_client()?;
-    let endpoints = zai::fetch::Endpoints::default();
-    let outcome = match zai::fetch_snapshot(
-        &client,
+    let outcome = match fetch_api_keyed(
+        async {
+            zai::fetch_snapshot(
+                &client,
+                &api_key,
+                &cache,
+                endpoints,
+                DEFAULT_TTL,
+                config.zai.plan_tier.as_deref(),
+            )
+            .await
+        },
         &api_key,
-        &cache,
-        &endpoints,
-        DEFAULT_TTL,
-        config.zai.plan_tier.as_deref(),
     )
     .await
     {
@@ -942,13 +1004,19 @@ async fn openrouter_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let management_key = config.openrouter_management_key(cli.account.as_deref());
     let client = http_client()?;
     let endpoints = openrouter::fetch::Endpoints::default();
-    let outcome = match openrouter::fetch_snapshot(
-        &client,
+    let outcome = match fetch_api_keyed(
+        async {
+            openrouter::fetch_snapshot(
+                &client,
+                &api_key,
+                management_key.as_deref(),
+                &cache,
+                &endpoints,
+                DEFAULT_TTL,
+            )
+            .await
+        },
         &api_key,
-        management_key.as_deref(),
-        &cache,
-        &endpoints,
-        DEFAULT_TTL,
     )
     .await
     {
@@ -986,7 +1054,11 @@ fn api_key_target(cli: &Cli, config: &Config, vendor: VendorId) -> Result<(Strin
         (Some(root), None) => Cache::at(root.join(slug)),
         (None, Some(label)) => Cache::for_vendor_account(slug, label)?,
         (None, None) => Cache::for_vendor(slug)?,
-    };
+    }
+    // The fetch goes out with this key and a provider's answer can quote it
+    // back: the cache redacts it at the first point of writing, so the key
+    // never reaches `.last_error` or the payload a successful answer writes.
+    .redacting(&api_key);
     Ok((api_key, cache))
 }
 
@@ -994,12 +1066,18 @@ async fn deepseek_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let (api_key, cache) = api_key_target(cli, config, VendorId::Deepseek)?;
     let client = http_client()?;
     let endpoints = deepseek::fetch::Endpoints::default();
-    let outcome =
-        match deepseek::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL).await {
-            Ok(o) => o,
-            Err(e) if e.is_transient() => return Ok(WaybarOutput::loading(cli.icon.as_deref())),
-            Err(e) => return Err(e),
-        };
+    let outcome = match fetch_api_keyed(
+        async {
+            deepseek::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL).await
+        },
+        &api_key,
+    )
+    .await
+    {
+        Ok(o) => o,
+        Err(e) if e.is_transient() => return Ok(WaybarOutput::loading(cli.icon.as_deref())),
+        Err(e) => return Err(e),
+    };
 
     let theme = theme_from_cli(cli);
     let snap = outcome.snapshot.clone();
@@ -1018,16 +1096,21 @@ async fn deepinfra_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let (api_key, cache) = api_key_target(cli, config, VendorId::Deepinfra)?;
     let client = http_client()?;
     let endpoints = deepinfra::fetch::Endpoints::default();
-    let outcome =
-        match deepinfra::fetch::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL)
-            .await
-        {
-            Ok(outcome) => outcome,
-            Err(error) if error.is_transient() => {
-                return Ok(WaybarOutput::loading(cli.icon.as_deref()));
-            }
-            Err(error) => return Err(error),
-        };
+    let outcome = match fetch_api_keyed(
+        async {
+            deepinfra::fetch::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL)
+                .await
+        },
+        &api_key,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) if error.is_transient() => {
+            return Ok(WaybarOutput::loading(cli.icon.as_deref()));
+        }
+        Err(error) => return Err(error),
+    };
 
     let theme = theme_from_cli(cli);
     let snapshot = outcome.snapshot.clone();
@@ -1044,14 +1127,22 @@ async fn deepinfra_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
 
 async fn kimi_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let (auth, endpoints) = kimi::resolve_auth(&config.kimi)?;
+    // The API key is the value the user entered and the only one a provider
+    // answer could echo back. The Kimi Code CLI's OAuth token is not exposed
+    // by `Auth` — `bearer_token` resolves it at fetch time and refreshes
+    // rotate it — so that variant carries an empty (no-op) secret.
+    let secret = match &auth {
+        kimi::fetch::Auth::ApiKey(key) => key.clone(),
+        kimi::fetch::Auth::KimiCode(_) => String::new(),
+    };
     let client = http_client()?;
-    let cache = vendor_cache(cli, "kimi")?;
-    let outcome = match kimi::fetch::fetch_snapshot_with_auth(
-        &client,
-        &auth,
-        &cache,
-        &endpoints,
-        DEFAULT_TTL,
+    let cache = vendor_cache(cli, "kimi")?.redacting(&secret);
+    let outcome = match fetch_api_keyed(
+        async {
+            kimi::fetch::fetch_snapshot_with_auth(&client, &auth, &cache, &endpoints, DEFAULT_TTL)
+                .await
+        },
+        &secret,
     )
     .await
     {
@@ -1840,5 +1931,52 @@ mod tests {
         assert!(!err.is_transient(), "{err:?}");
         assert_eq!(fallback(&err, &cli).text, "⚠");
         auth_mock.assert_async().await;
+    }
+
+    /// The widget-side twin of the report's regression (review F1-A): the
+    /// widget builds its own cache and runs its own fetch, so a Z.AI in-band
+    /// failure — a 200 whose `msg` quotes the key — must leave the key in
+    /// neither the cache's `.last_error` nor the text the widget prints. The
+    /// seams: `--cache-dir` relocates the cache, and `zai_output_with`
+    /// points the fetch at the mock server.
+    #[tokio::test]
+    async fn zai_in_band_failure_quoting_the_key_leaves_no_key_in_the_widget() {
+        let key = "test-key-value";
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/api/monitor/usage/quota/limit")
+            .with_status(200)
+            .with_body(format!(
+                r#"{{"code":401,"msg":"bad key {key}","data":null,"success":false}}"#
+            ))
+            .create_async()
+            .await;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let mut config = Config::default();
+        config.zai.api_key_env.clear();
+        config.zai.api_key = Some(key.into());
+        let cli = cli_with(None, None, Some(root.path().to_str().unwrap()));
+
+        let endpoints = zai::fetch::Endpoints {
+            quota: format!("{}/api/monitor/usage/quota/limit", server.url()),
+        };
+        let err = zai_output_with(&cli, &config, &endpoints)
+            .await
+            .unwrap_err();
+
+        // The cache's first point of writing never held the key.
+        let persisted =
+            std::fs::read_to_string(root.path().join("zai").join(".last_error")).unwrap();
+        assert!(
+            !persisted.contains(key),
+            "the key reached .last_error: {persisted}"
+        );
+        assert!(persisted.contains("[key]"), "{persisted}");
+        // Neither does the text the widget prints for that error.
+        let out = fallback(&err, &cli);
+        assert!(!out.text.contains(key), "{}", out.text);
+        assert!(!out.tooltip.contains(key), "{}", out.tooltip);
+        assert!(out.tooltip.contains("[key]"), "{}", out.tooltip);
     }
 }

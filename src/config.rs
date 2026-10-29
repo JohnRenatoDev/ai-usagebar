@@ -21,6 +21,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -739,13 +740,7 @@ pub(crate) fn set_value(
 /// (`"notify"` stays a string, `5` stays an integer). The tray host is the
 /// only writer.
 pub fn set_tray_value(path: &Path, key: &str, value: Option<toml_edit::Value>) -> Result<()> {
-    let mut doc = read_config_document(path)?;
-    let before = doc.to_string();
-    set_value(&mut doc, "tray", key, value)?;
-    if doc.to_string() == before {
-        return Ok(());
-    }
-    write_config_document(path, &doc)
+    edit_config_document(path, |doc| set_value(doc, "tray", key, value))
 }
 
 /// Persist one validated notification preference without disturbing other
@@ -760,13 +755,9 @@ pub fn set_notification_value(path: &Path, key: &str, value: toml_edit::Value) -
             )));
         }
     }
-    let mut doc = read_config_document(path)?;
-    let before = doc.to_string();
-    set_value(&mut doc, "notifications", key, Some(value))?;
-    if doc.to_string() == before {
-        return Ok(());
-    }
-    write_config_document(path, &doc)
+    edit_config_document(path, |doc| {
+        set_value(doc, "notifications", key, Some(value))
+    })
 }
 
 /// Flip one provider's `enabled` switch in the config at `path`, creating the
@@ -777,13 +768,7 @@ pub fn set_notification_value(path: &Path, key: &str, value: toml_edit::Value) -
 /// [`set_vendor_enabled_in_doc`], so no caller can create an arbitrary
 /// section or reach a `[[custom]]` entry from here.
 pub fn set_vendor_enabled(path: &Path, slug: &str, enabled: bool) -> Result<()> {
-    let mut doc = read_config_document(path)?;
-    let before = doc.to_string();
-    set_vendor_enabled_in_doc(&mut doc, slug, enabled)?;
-    if doc.to_string() == before {
-        return Ok(());
-    }
-    write_config_document(path, &doc)
+    edit_config_document(path, |doc| set_vendor_enabled_in_doc(doc, slug, enabled))
 }
 
 /// The validated core of [`set_vendor_enabled`], over an already-open
@@ -845,7 +830,9 @@ pub(crate) fn read_config_document(path: &Path) -> Result<toml_edit::DocumentMut
 
 /// Persist an edited config document: parent dir created, atomic
 /// tempfile-and-rename write, and `chmod 600` on Unix because the file may
-/// carry inline credentials. The one write path for every config editor.
+/// carry inline credentials. The one write path for every config editor;
+/// production writers reach it only through [`edit_config_document`], which
+/// holds the cross-process lock across the read-modify-write.
 pub(crate) fn write_config_document(path: &Path, doc: &toml_edit::DocumentMut) -> Result<()> {
     let bytes = doc.to_string();
     crate::cache::atomic_write(path, bytes.as_bytes())?;
@@ -861,6 +848,96 @@ pub(crate) fn write_config_document(path: &Path, doc: &toml_edit::DocumentMut) -
     Ok(())
 }
 
+/// How long a config edit waits for another process's save before failing:
+/// long enough to ride out a normal save (milliseconds), short enough that a
+/// wedged lock never makes a settings surface hang.
+pub(crate) const CONFIG_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The file every config save locks: `<config>.lock` beside the config
+/// itself (`~/.config/ai-usagebar/config.toml.lock`), the same sibling-lock
+/// pattern the vendor caches use for their `.fetch.lock`. Its content is
+/// unused — only the flock matters.
+pub(crate) fn config_lock_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("config.toml");
+    path.with_file_name(format!("{name}.lock"))
+}
+
+/// One cross-process-locked read-modify-write of the config at `path`: take
+/// the exclusive flock on [`config_lock_path`], read the document, run
+/// `edit`, and — only when `edit` returned `Ok` and the document actually
+/// changed — persist it through [`write_config_document`]. A failed `edit`
+/// writes nothing, and the lock is released on the guard's drop, success or
+/// failure.
+///
+/// Every config writer goes through here — the tray's key check, the TUI's
+/// settings save, the CLI's `settings` commands — so their read-modify-write
+/// cycles queue on the same lock instead of clobbering each other: a save
+/// that lands between another writer's read and its rename used to be
+/// silently overwritten by that writer's stale document. When the wait
+/// outlives [`CONFIG_LOCK_TIMEOUT`] the edit fails with "config.toml is
+/// being saved by another process; try again." and the file is left
+/// untouched.
+///
+/// The lock is held only across the read-modify-write, never across a fetch
+/// or other long work, and `edit` must not take the lock again (no
+/// reentrance — the exclusive flock would block the caller until its own
+/// timeout). An edit that leaves the document empty removes the file:
+/// [`read_config_document`] maps a missing file to the empty document, so
+/// the two are the same config, and persisting "nothing" leaves nothing
+/// behind — the key check's restore relies on it to take back a file the
+/// check created.
+pub(crate) fn edit_config_document<T>(
+    path: &Path,
+    edit: impl FnOnce(&mut toml_edit::DocumentMut) -> Result<T>,
+) -> Result<T> {
+    edit_config_document_within(path, CONFIG_LOCK_TIMEOUT, edit)
+}
+
+/// [`edit_config_document`] with the lock timeout injected — the seam the
+/// tests use to exercise the timeout without waiting five seconds.
+fn edit_config_document_within<T>(
+    path: &Path,
+    timeout: Duration,
+    edit: impl FnOnce(&mut toml_edit::DocumentMut) -> Result<T>,
+) -> Result<T> {
+    // `acquire_lock`'s I/O failures carry their path; it reports only the
+    // lock timeout as `AppError::Other`. That timeout is this operation's
+    // "another process is saving right now".
+    let _guard = match crate::cache::acquire_lock(&config_lock_path(path), timeout) {
+        Ok(guard) => guard,
+        Err(AppError::Other(message)) if message.starts_with("cache lock timeout") => {
+            return Err(AppError::Other(
+                "config.toml is being saved by another process; try again.".to_string(),
+            ));
+        }
+        Err(error) => return Err(error),
+    };
+    let mut doc = read_config_document(path)?;
+    let before = doc.to_string();
+    let value = edit(&mut doc)?;
+    if doc.to_string() != before {
+        if doc.to_string().trim().is_empty() {
+            // Nothing is left in the config, not even a comment: remove the
+            // file. A missing file and an empty one load identically, so a
+            // reader sees nothing change — but the file the edit's own earlier
+            // write created is gone, which is what the key check's restore
+            // wants. A file that still holds the user's comments is written.
+            match std::fs::remove_file(path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(error.into());
+                }
+                _ => {}
+            }
+        } else {
+            write_config_document(path, &doc)?;
+        }
+    }
+    Ok(value)
+}
+
 /// Flip `enabled = true` for each vendor's section in the config at `path`,
 /// creating the file when it doesn't exist and leaving every other line —
 /// comments, keys, unrelated sections — exactly as it was. Never writes
@@ -869,21 +946,17 @@ pub(crate) fn write_config_document(path: &Path, doc: &toml_edit::DocumentMut) -
 /// already enabled) is not rewritten, so an idempotent call doesn't touch the
 /// file's mtime or race a concurrent editor.
 pub fn enable_vendors_in(path: &Path, vendors: &[VendorId]) -> Result<Vec<VendorId>> {
-    let mut doc = read_config_document(path)?;
-    let before = doc.to_string();
-    let written: Vec<VendorId> = vendors
-        .iter()
-        .copied()
-        .filter(|vendor| !is_explicitly_disabled(&doc, *vendor))
-        .collect();
-    for vendor in &written {
-        set_bool(&mut doc, vendor.config_section(), "enabled", true)?;
-    }
-    if doc.to_string() == before {
-        return Ok(written);
-    }
-    write_config_document(path, &doc)?;
-    Ok(written)
+    edit_config_document(path, |doc| {
+        let written: Vec<VendorId> = vendors
+            .iter()
+            .copied()
+            .filter(|vendor| !is_explicitly_disabled(doc, *vendor))
+            .collect();
+        for vendor in &written {
+            set_bool(doc, vendor.config_section(), "enabled", true)?;
+        }
+        Ok(written)
+    })
 }
 
 /// Whether the config *says* `enabled = false` for this vendor, as opposed to
@@ -6721,5 +6794,175 @@ enabled = true
         enable_vendors_in(&path, &[]).unwrap();
 
         assert!(!path.exists());
+    }
+
+    /// The whole point of the lock: two processes (here, threads) doing
+    /// read-modify-write on the same file must serialize, so no increment is
+    /// lost. Fifty increments each, one hundred in the end — an unlocked
+    /// read-modify-write races and comes up short.
+    #[test]
+    fn edit_config_document_serializes_concurrent_increments_without_loss() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[counter]\ncount = 0\n").unwrap();
+
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || -> Result<()> {
+                    for _ in 0..50 {
+                        edit_config_document(&path, |doc| {
+                            let count = doc
+                                .get("counter")
+                                .and_then(|table| table.get("count"))
+                                .and_then(|value| value.as_integer())
+                                .unwrap_or(0);
+                            set_value(
+                                doc,
+                                "counter",
+                                "count",
+                                Some(toml_edit::Value::from(count + 1)),
+                            )
+                        })?;
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+
+        let doc = read_config_document(&path).unwrap();
+        let count = doc
+            .get("counter")
+            .and_then(|table| table.get("count"))
+            .and_then(|value| value.as_integer())
+            .unwrap();
+        assert_eq!(count, 100, "no increment may be lost");
+    }
+
+    /// A lock held past the timeout (100 ms here; the production timeout is
+    /// [`CONFIG_LOCK_TIMEOUT`]) fails with the retry message and leaves the
+    /// file byte-for-byte untouched — and the next edit after the holder
+    /// drops the lock goes through.
+    #[test]
+    fn edit_config_document_times_out_and_leaves_the_file_untouched() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = "[ui]\nprimary = \"zai\"\n";
+        std::fs::write(&path, original).unwrap();
+        let lock_path = config_lock_path(&path);
+
+        let held = crate::cache::acquire_lock(&lock_path, Duration::from_secs(30)).unwrap();
+        let error = edit_config_document_within(&path, Duration::from_millis(100), |doc| {
+            set_value(doc, "tray", "updates", Some(toml_edit::Value::from("auto")))
+        })
+        .expect_err("a lock held past the timeout must fail the edit");
+        assert_eq!(
+            error.user_message(),
+            "config.toml is being saved by another process; try again."
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        drop(held);
+
+        edit_config_document(&path, |doc| {
+            set_value(doc, "tray", "updates", Some(toml_edit::Value::from("auto")))
+        })
+        .unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains(r#"updates = "auto""#)
+        );
+        assert!(lock_path.exists(), "the lock file lives beside the config");
+    }
+
+    /// A failed edit writes nothing: the file keeps its original bytes, and
+    /// the lock is released so the next edit goes through.
+    #[test]
+    fn edit_config_document_writes_nothing_when_the_edit_fails() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = "[ui]\nprimary = \"zai\"\n";
+        std::fs::write(&path, original).unwrap();
+
+        let error = edit_config_document(&path, |_doc| -> Result<()> {
+            Err(AppError::Other("the edit refused".into()))
+        })
+        .expect_err("a failed edit must fail the call");
+        assert_eq!(error.user_message(), "the edit refused");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+        // The lock did not stick: a follow-up edit under the lock succeeds.
+        set_vendor_enabled(&path, "deepseek", true).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("enabled = true")
+        );
+    }
+
+    /// An edit that leaves the document empty removes the file: the empty
+    /// document is the missing file's twin, and the key check's restore uses
+    /// this to take back a file the check created.
+    #[test]
+    fn edit_config_document_removes_the_file_when_the_document_is_left_empty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ui]\nprimary = \"zai\"\n").unwrap();
+
+        edit_config_document(&path, |doc| {
+            doc.clear();
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            !path.exists(),
+            "an emptied config must not linger as an empty file"
+        );
+    }
+
+    /// A config that holds only the user's comments is not an empty one: an
+    /// edit that adds a section and takes it back (the key check's write and
+    /// restore) leaves the file in place, byte for byte.
+    #[test]
+    fn edit_config_document_keeps_a_file_that_still_holds_comments() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = "# my notes\n# [zai]\n# enabled = true\n";
+        std::fs::write(&path, original).unwrap();
+
+        edit_config_document(&path, |doc| {
+            doc["zai"] = toml_edit::table();
+            doc["zai"]["api_key"] = toml_edit::value("candidate");
+            Ok(())
+        })
+        .unwrap();
+        edit_config_document(&path, |doc| {
+            doc.remove("zai");
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    /// An unchanged document is not rewritten (the writers' old
+    /// before/after rule, now inside the lock): the file's mtime is
+    /// untouched.
+    #[test]
+    fn edit_config_document_skips_the_write_when_the_document_is_unchanged() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[deepseek]\nenabled = true\n").unwrap();
+        let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        set_vendor_enabled(&path, "deepseek", true).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            before,
+            "an unchanged document must not be rewritten"
+        );
     }
 }

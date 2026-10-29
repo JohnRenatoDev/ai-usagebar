@@ -45,6 +45,9 @@ pub struct HostFacts {
     /// began under an older generation is dropped rather than published, so
     /// it cannot put back the state the switch replaced.
     pub providers_generation: u64,
+    /// The in-flight or finished `set-api-key` check; `None` before the
+    /// first send.
+    pub key_check: Option<KeyCheckFact>,
 }
 
 /// One vendor's switchable logins, as the popover renders them beside each
@@ -72,6 +75,33 @@ pub struct AccountSwitchFact {
     pub prepare_error: String,
     /// Server-confirmed reset, never a local five-hour estimate.
     pub prepared_reset: String,
+}
+
+/// State of the popover's API-key check, one fact per `set-api-key` send.
+/// The key itself never reaches a fact: only the verdict and its error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyCheckState {
+    /// The check's thread is writing the key and fetching the provider.
+    Checking,
+    /// The provider accepted the key; the config keeps it.
+    Ok,
+    /// The provider refused it (or the fetch failed); the previous value is
+    /// back in the config.
+    Failed,
+}
+
+/// The popover's API-key check, published by the host when a `set-api-key`
+/// request lands. `seq` is the popover's send number: a check that finishes
+/// after a newer send has replaced the fact must not write its verdict over
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyCheckFact {
+    /// The vendor slug the check ran for; from `KEY_VENDORS`, so trusted.
+    pub id: String,
+    pub seq: u64,
+    pub state: KeyCheckState,
+    /// Why the check failed (sanitized on the way out), or empty.
+    pub error: String,
 }
 
 /// State of a newer release as the popover renders it.
@@ -133,6 +163,7 @@ impl Default for HostFacts {
             providers: Vec::new(),
             providers_error: String::new(),
             providers_generation: 0,
+            key_check: None,
         }
     }
 }
@@ -227,6 +258,19 @@ pub fn wrap_report(
         "accounts": accounts,
         "providers": super::providers::rows_json(&facts.providers, host_os() == "macos"),
         "providers_error": sanitize_untrusted_field(&facts.providers_error),
+        "key_check": facts.key_check.as_ref().map(|fact| {
+            let state = match fact.state {
+                KeyCheckState::Checking => "checking",
+                KeyCheckState::Ok => "ok",
+                KeyCheckState::Failed => "failed",
+            };
+            json!({
+                "id": fact.id,
+                "seq": fact.seq,
+                "state": state,
+                "error": sanitize_untrusted_field(&fact.error),
+            })
+        }),
         "accent": accent,
         "host_error": host_error.map(sanitize_untrusted_field),
         "primary": Value::Null,
@@ -772,5 +816,51 @@ mod tests {
     fn no_switchable_accounts_is_an_empty_object() {
         let payload = wrap_report(&sample_report(), &facts("1.10.0", false), 0, None);
         assert_eq!(payload["accounts"], json!({}));
+    }
+
+    #[test]
+    fn key_check_fact_serializes_its_state_and_sanitizes_the_error() {
+        let mut host = facts("1.44.0", false);
+        host.key_check = Some(KeyCheckFact {
+            id: "zai".into(),
+            seq: 7,
+            state: KeyCheckState::Checking,
+            error: String::new(),
+        });
+        let payload = wrap_report(&sample_report(), &host, 0, None);
+        assert_eq!(payload["key_check"]["id"], "zai");
+        assert_eq!(payload["key_check"]["seq"], 7);
+        assert_eq!(payload["key_check"]["state"], "checking");
+        assert_eq!(payload["key_check"]["error"], "");
+
+        host.key_check = Some(KeyCheckFact {
+            id: "zai".into(),
+            seq: 8,
+            state: KeyCheckState::Ok,
+            error: String::new(),
+        });
+        let payload = wrap_report(&sample_report(), &host, 0, None);
+        assert_eq!(payload["key_check"]["state"], "ok");
+        assert_eq!(payload["key_check"]["seq"], 8);
+
+        host.key_check = Some(KeyCheckFact {
+            id: "openrouter".into(),
+            seq: 9,
+            state: KeyCheckState::Failed,
+            error: "HTTP 401\u{1b}[31m invalid key".into(),
+        });
+        let payload = wrap_report(&sample_report(), &host, 0, None);
+        assert_eq!(payload["key_check"]["state"], "failed");
+        // The error is untrusted text: it leaves through the same sanitizer
+        // as `providers_error`.
+        let error = payload["key_check"]["error"].as_str().unwrap();
+        assert!(!error.contains('\u{1b}'), "{error:?}");
+        assert!(error.contains("HTTP 401"), "{error:?}");
+    }
+
+    #[test]
+    fn key_check_is_null_before_the_first_send() {
+        let payload = wrap_report(&sample_report(), &facts("1.44.0", false), 0, None);
+        assert!(payload["key_check"].is_null());
     }
 }

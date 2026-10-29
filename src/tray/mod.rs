@@ -8,6 +8,11 @@ mod accent;
 mod browse;
 pub mod hotkey;
 mod icon;
+// Which origin the tray's IPC bridge and the WebView accept. Pure decisions, compiled
+// everywhere like `blur` so the tests run on every OS; only the macOS and Windows hosts
+// apply them (the guard + navigation handlers of their WebView builders).
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+mod ipc_origin;
 mod marks;
 #[cfg(any(target_os = "macos", test))]
 mod menu_bar;

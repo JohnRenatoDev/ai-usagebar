@@ -10,6 +10,7 @@ use reqwest::Client;
 use crate::cache::DEFAULT_TTL;
 use crate::config::{Config, CustomProviderConfig};
 use crate::error::{AppError, Result};
+use crate::outcome::fetch_api_keyed;
 use crate::theme::Theme;
 use crate::tui::settings::SettingsRow;
 use crate::vendor::{VendorId, VendorOutcome};
@@ -575,9 +576,39 @@ impl App {
     }
 }
 
+/// How fresh a tab's snapshot may be.
+///
+/// `Cached` is the catalog's ordinary read: a payload inside the default
+/// TTL answers without the network. `Wire` is the key check's read, where
+/// a payload left by another producer — a refresh that started under a
+/// different key — is not an answer about the key just written, so the
+/// TTL is zero and no cached payload is ever "fresh", even a same-millisecond
+/// one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Freshness {
+    Cached,
+    Wire,
+}
+
+impl Freshness {
+    /// The cache TTL this mode grants: zero for `Wire`, which the cache's
+    /// pre-network hook treats as "never fresh" in every branch.
+    pub fn ttl(self) -> Duration {
+        match self {
+            Freshness::Cached => DEFAULT_TTL,
+            Freshness::Wire => Duration::ZERO,
+        }
+    }
+}
+
 /// Fetch and render one tab — returns a `TabState`.
-pub async fn refresh_one(client: &Client, config: &Config, tab: &TabId) -> TabState {
-    match build_outcome(client, config, tab).await {
+pub async fn refresh_one(
+    client: &Client,
+    config: &Config,
+    tab: &TabId,
+    freshness: Freshness,
+) -> TabState {
+    match build_outcome(client, config, tab, freshness).await {
         Ok(outcome) => {
             // Resolve the cache age (a duration from "now" at fetch time) into an
             // absolute instant ONCE. Without this, sections_for would recompute
@@ -634,11 +665,23 @@ fn api_key_and_cache(
     let cache = match account {
         Some(label) => crate::cache::Cache::for_vendor_account(vendor.slug(), label)?,
         None => crate::cache::Cache::for_vendor(vendor.slug())?,
-    };
+    }
+    // The fetch goes out with this key and a provider's answer can quote it
+    // back: the cache redacts it at the first point of writing, so the key
+    // never reaches `.last_error` (nor the pair the fetch returns with it).
+    .redacting(&api_key);
     Ok((api_key, cache))
 }
 
-async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<VendorOutcome> {
+// The key-based vendors' fetch wrap is `crate::outcome::fetch_api_keyed`,
+// shared with the widget/CLI; the cache side is attached by `api_key_and_cache`.
+
+async fn build_outcome(
+    client: &Client,
+    config: &Config,
+    tab: &TabId,
+    freshness: Freshness,
+) -> Result<VendorOutcome> {
     let vendor = match &tab.source {
         TabSource::Builtin(vendor) => *vendor,
         TabSource::Custom { id, .. } => {
@@ -655,6 +698,10 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
             return Ok(outcome.into());
         }
     };
+    // The built-in vendors share one TTL; a wire-only read (the key check)
+    // grants none. A vendor that owns its TTL (the custom branch above) is
+    // already out of this match.
+    let ttl = freshness.ttl();
     match vendor {
         VendorId::Anthropic => {
             // A named account resolves to its own file + `anthropic/<label>`
@@ -673,14 +720,9 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
                 ),
             };
             let endpoints = crate::anthropic::fetch::Endpoints::default();
-            let outcome = crate::anthropic::fetch_snapshot(
-                client,
-                &creds_target,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
-            )
-            .await?;
+            let outcome =
+                crate::anthropic::fetch_snapshot(client, &creds_target, &cache, &endpoints, ttl)
+                    .await?;
             Ok(outcome.map(crate::usage::VendorSnapshot::Anthropic))
         }
         VendorId::AnthropicApi => {
@@ -689,47 +731,68 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
                 &config.anthropic_api.api_key_env,
                 config.anthropic_api.api_key.as_deref(),
             )?;
-            let cache = crate::cache::Cache::for_vendor("anthropic_api")?;
+            let cache = crate::cache::Cache::for_vendor("anthropic_api")?.redacting(&key);
             let endpoints = crate::anthropic_api::fetch::Endpoints::default();
-            let outcome = crate::anthropic_api::fetch_snapshot(
-                client,
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::anthropic_api::fetch_snapshot(
+                        client,
+                        &key,
+                        &cache,
+                        &endpoints,
+                        ttl,
+                        config.anthropic_api.monthly_limit,
+                    )
+                    .await
+                    .map(Into::into)
+                },
                 &key,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
-                config.anthropic_api.monthly_limit,
             )
             .await?;
-            Ok(outcome.into())
+            Ok(outcome)
         }
         VendorId::Openrouter => {
             let (api_key, cache) = api_key_and_cache(config, vendor, tab.account.as_deref())?;
             let management_key = config.openrouter_management_key(tab.account.as_deref());
             let endpoints = crate::openrouter::fetch::Endpoints::default();
-            let outcome = crate::openrouter::fetch_snapshot(
-                client,
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::openrouter::fetch_snapshot(
+                        client,
+                        &api_key,
+                        management_key.as_deref(),
+                        &cache,
+                        &endpoints,
+                        ttl,
+                    )
+                    .await
+                    .map(Into::into)
+                },
                 &api_key,
-                management_key.as_deref(),
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
             )
             .await?;
-            Ok(outcome.into())
+            Ok(outcome)
         }
         VendorId::Zai => {
             let (api_key, cache) = api_key_and_cache(config, vendor, tab.account.as_deref())?;
             let endpoints = crate::zai::fetch::Endpoints::default();
-            let outcome = crate::zai::fetch_snapshot(
-                client,
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::zai::fetch_snapshot(
+                        client,
+                        &api_key,
+                        &cache,
+                        &endpoints,
+                        ttl,
+                        config.zai.plan_tier.as_deref(),
+                    )
+                    .await
+                    .map(Into::into)
+                },
                 &api_key,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
-                config.zai.plan_tier.as_deref(),
             )
             .await?;
-            Ok(outcome.into())
+            Ok(outcome)
         }
         VendorId::Openai => {
             let label = tab.account.as_deref();
@@ -739,14 +802,9 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
             };
             let route = || config.openai.fetch_auth_path(label);
             let endpoints = crate::openai::fetch::Endpoints::default();
-            let outcome = crate::openai::fetch_snapshot_routed(
-                client,
-                route,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
-            )
-            .await?;
+            let outcome =
+                crate::openai::fetch_snapshot_routed(client, route, &cache, &endpoints, ttl)
+                    .await?;
             Ok(outcome.into())
         }
         VendorId::Copilot => {
@@ -758,108 +816,157 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
             };
             let endpoints = crate::copilot::fetch::Endpoints::default();
             let outcome =
-                crate::copilot::fetch_snapshot(client, &token, &cache, &endpoints, DEFAULT_TTL)
-                    .await?;
+                crate::copilot::fetch_snapshot(client, &token, &cache, &endpoints, ttl).await?;
             Ok(outcome.into())
         }
         VendorId::Deepseek => {
             let (api_key, cache) = api_key_and_cache(config, vendor, tab.account.as_deref())?;
             let endpoints = crate::deepseek::fetch::Endpoints::default();
-            let outcome =
-                crate::deepseek::fetch_snapshot(client, &api_key, &cache, &endpoints, DEFAULT_TTL)
-                    .await?;
-            Ok(outcome.into())
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::deepseek::fetch_snapshot(client, &api_key, &cache, &endpoints, ttl)
+                        .await
+                        .map(Into::into)
+                },
+                &api_key,
+            )
+            .await?;
+            Ok(outcome)
         }
         VendorId::Deepinfra => {
             let (api_key, cache) = api_key_and_cache(config, vendor, tab.account.as_deref())?;
             let endpoints = crate::deepinfra::fetch::Endpoints::default();
-            let outcome = crate::deepinfra::fetch::fetch_snapshot(
-                client,
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::deepinfra::fetch::fetch_snapshot(
+                        client, &api_key, &cache, &endpoints, ttl,
+                    )
+                    .await
+                    .map(Into::into)
+                },
                 &api_key,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
             )
             .await?;
-            Ok(outcome.into())
+            Ok(outcome)
         }
         VendorId::Kimi => {
             let (auth, endpoints) = crate::kimi::resolve_auth(&config.kimi)?;
-            let cache = crate::cache::Cache::for_vendor("kimi")?;
-            let outcome = crate::kimi::fetch::fetch_snapshot_with_auth(
-                client,
-                &auth,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
+            // The API key is the value the user entered and the only one a
+            // provider answer could echo back. The Kimi Code CLI's OAuth
+            // token is not exposed by `Auth` — `bearer_token` resolves it at
+            // fetch time and refreshes rotate it — so that variant carries
+            // an empty (no-op) secret.
+            let secret = match &auth {
+                crate::kimi::fetch::Auth::ApiKey(key) => key.clone(),
+                crate::kimi::fetch::Auth::KimiCode(_) => String::new(),
+            };
+            let cache = crate::cache::Cache::for_vendor("kimi")?.redacting(&secret);
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::kimi::fetch::fetch_snapshot_with_auth(
+                        client, &auth, &cache, &endpoints, ttl,
+                    )
+                    .await
+                    .map(Into::into)
+                },
+                &secret,
             )
             .await?;
-            Ok(outcome.into())
+            Ok(outcome)
         }
         VendorId::Kilo => {
             let (api_key, cache) = api_key_and_cache(config, vendor, tab.account.as_deref())?;
             let endpoints = crate::kilo::fetch::Endpoints::default();
-            let outcome = crate::kilo::fetch_snapshot(
-                client,
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::kilo::fetch_snapshot(
+                        client,
+                        &api_key,
+                        &cache,
+                        &endpoints,
+                        ttl,
+                        config.kilo.organization_id.as_deref(),
+                    )
+                    .await
+                    .map(Into::into)
+                },
                 &api_key,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
-                config.kilo.organization_id.as_deref(),
             )
             .await?;
-            Ok(outcome.into())
+            Ok(outcome)
         }
         VendorId::Novita => {
             let (api_key, cache) = api_key_and_cache(config, vendor, tab.account.as_deref())?;
             let endpoints = crate::novita::fetch::Endpoints::default();
-            let outcome =
-                crate::novita::fetch_snapshot(client, &api_key, &cache, &endpoints, DEFAULT_TTL)
-                    .await?;
-            Ok(outcome.into())
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::novita::fetch_snapshot(client, &api_key, &cache, &endpoints, ttl)
+                        .await
+                        .map(Into::into)
+                },
+                &api_key,
+            )
+            .await?;
+            Ok(outcome)
         }
         VendorId::Synthetic => {
             let (api_key, cache) = api_key_and_cache(config, vendor, tab.account.as_deref())?;
             let endpoints = crate::synthetic::fetch::Endpoints::default();
-            let outcome = crate::synthetic::fetch_snapshot(
-                client,
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::synthetic::fetch_snapshot(
+                        client,
+                        &api_key,
+                        &cache,
+                        &endpoints,
+                        ttl,
+                        config.synthetic.plan_tier.as_deref(),
+                    )
+                    .await
+                    .map(Into::into)
+                },
                 &api_key,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
-                config.synthetic.plan_tier.as_deref(),
             )
             .await?;
-            Ok(outcome.into())
+            Ok(outcome)
         }
         VendorId::Moonshot => {
             let (api_key, cache) = api_key_and_cache(config, vendor, tab.account.as_deref())?;
             let (endpoints, currency) =
                 crate::moonshot::fetch::Endpoints::for_region(&config.moonshot.region);
-            let outcome = crate::moonshot::fetch_snapshot(
-                client,
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::moonshot::fetch_snapshot(
+                        client, &api_key, &cache, &endpoints, ttl, currency,
+                    )
+                    .await
+                    .map(Into::into)
+                },
                 &api_key,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
-                currency,
             )
             .await?;
-            Ok(outcome.into())
+            Ok(outcome)
         }
         VendorId::Grok => {
             let (key, cache) = api_key_and_cache(config, vendor, tab.account.as_deref())?;
             let endpoints = crate::grok::fetch::Endpoints::default();
-            let outcome = crate::grok::fetch_snapshot(
-                client,
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::grok::fetch_snapshot(
+                        client,
+                        &key,
+                        &cache,
+                        &endpoints,
+                        ttl,
+                        config.grok.team_id.as_deref(),
+                    )
+                    .await
+                    .map(Into::into)
+                },
                 &key,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
-                config.grok.team_id.as_deref(),
             )
             .await?;
-            Ok(outcome.into())
+            Ok(outcome)
         }
         VendorId::Supergrok => {
             let cache = crate::cache::Cache::for_vendor("supergrok")?;
@@ -871,7 +978,7 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
                 &config.supergrok.grok_binary,
                 &scope_paths,
                 &cache,
-                DEFAULT_TTL,
+                ttl,
             )
             .await?;
             Ok(outcome.into())
@@ -887,7 +994,7 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
             let outcome = crate::antigravity::fetch_snapshot(
                 client,
                 &cache,
-                DEFAULT_TTL,
+                ttl,
                 oauth.as_ref(),
                 config.antigravity.agy_binary.as_deref(),
                 config.antigravity.ide_language_server,
@@ -901,14 +1008,9 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
             let creds = crate::grokbot::resolve_credentials(&config.grokbot)?;
             let cache = crate::cache::Cache::for_vendor("grokbot")?;
             let endpoints = crate::grokbot::fetch::Endpoints::default();
-            let outcome = crate::grokbot::fetch::fetch_snapshot_with(
-                client,
-                &creds,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
-            )
-            .await?;
+            let outcome =
+                crate::grokbot::fetch::fetch_snapshot_with(client, &creds, &cache, &endpoints, ttl)
+                    .await?;
             Ok(outcome.into())
         }
         VendorId::ModelStudio => {
@@ -918,14 +1020,9 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
             let cache = crate::cache::Cache::for_vendor("modelstudio")?;
             let endpoints =
                 crate::modelstudio::fetch::Endpoints::for_gateway(creds.region, creds.site);
-            let outcome = crate::modelstudio::fetch_snapshot_with(
-                client,
-                &creds,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
-            )
-            .await?;
+            let outcome =
+                crate::modelstudio::fetch_snapshot_with(client, &creds, &cache, &endpoints, ttl)
+                    .await?;
             Ok(outcome.into())
         }
         VendorId::MuseCode => {
@@ -948,23 +1045,27 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
                     crate::cache::Cache::for_vendor("devin")?,
                 ),
             };
-            let outcome =
-                crate::devin::fetch::fetch_snapshot(&creds_cfg, &cache, DEFAULT_TTL).await?;
+            let outcome = crate::devin::fetch::fetch_snapshot(&creds_cfg, &cache, ttl).await?;
             Ok(outcome.into())
         }
         VendorId::Droid => {
             let cache = crate::cache::Cache::for_vendor("droid")?;
-            let outcome =
-                crate::droid::fetch::fetch_snapshot(&config.droid, &cache, DEFAULT_TTL).await?;
+            let outcome = crate::droid::fetch::fetch_snapshot(&config.droid, &cache, ttl).await?;
             Ok(outcome.into())
         }
         VendorId::Minimax => {
             let (api_key, cache) = api_key_and_cache(config, vendor, tab.account.as_deref())?;
             let endpoints = crate::minimax::fetch::Endpoints::for_region(&config.minimax.region);
-            let outcome =
-                crate::minimax::fetch_snapshot(client, &api_key, &cache, &endpoints, DEFAULT_TTL)
-                    .await?;
-            Ok(outcome.into())
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::minimax::fetch_snapshot(client, &api_key, &cache, &endpoints, ttl)
+                        .await
+                        .map(Into::into)
+                },
+                &api_key,
+            )
+            .await?;
+            Ok(outcome)
         }
         VendorId::Cursor => {
             let cache = crate::cache::Cache::for_vendor("cursor")?;
@@ -987,7 +1088,7 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
                 &agent_auth_path,
                 &cache,
                 &endpoints,
-                DEFAULT_TTL,
+                ttl,
             )
             .await?;
             Ok(outcome.into())
@@ -1000,8 +1101,7 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
                 .clone()
                 .map(Ok)
                 .unwrap_or_else(crate::kiro::db::default_db_path)?;
-            let outcome =
-                crate::kiro::fetch_snapshot(client, &db_path, &cache, DEFAULT_TTL).await?;
+            let outcome = crate::kiro::fetch_snapshot(client, &db_path, &cache, ttl).await?;
             Ok(outcome.into())
         }
         VendorId::NousResearch => {
@@ -1025,17 +1125,20 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
                 config.opencode_go.api_key.as_deref(),
                 config.opencode_go.auth_paths.as_deref(),
             )?;
-            let cache = crate::cache::Cache::for_vendor("opencode-go")?;
+            let cache = crate::cache::Cache::for_vendor("opencode-go")?.redacting(&api_key);
             let endpoints = crate::opencode_go::fetch::Endpoints::default();
-            let outcome = crate::opencode_go::fetch::fetch_snapshot(
-                client,
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::opencode_go::fetch::fetch_snapshot(
+                        client, &api_key, &cache, &endpoints, ttl,
+                    )
+                    .await
+                    .map(Into::into)
+                },
                 &api_key,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
             )
             .await?;
-            Ok(outcome.into())
+            Ok(outcome)
         }
         VendorId::Cline => {
             let credential = crate::cline::creds::resolve(
@@ -1050,7 +1153,7 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
                 &credential,
                 &cache,
                 &endpoints,
-                DEFAULT_TTL,
+                ttl,
                 Utc::now(),
             )
             .await?;
@@ -1066,7 +1169,7 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
                 &credential.token,
                 &cache,
                 &endpoints,
-                DEFAULT_TTL,
+                ttl,
             )
             .await?;
             Ok(outcome.into())
@@ -1077,37 +1180,52 @@ async fn build_outcome(client: &Client, config: &Config, tab: &TabId) -> Result<
                 &config.ollama.api_key_env,
                 config.ollama.api_key.as_deref(),
             )?;
-            let cache = crate::cache::Cache::for_vendor("ollama")?;
+            let cache = crate::cache::Cache::for_vendor("ollama")?.redacting(&api_key);
             let endpoints = crate::ollama::fetch::Endpoints::default();
-            let outcome = crate::ollama::fetch_snapshot(
-                client,
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::ollama::fetch_snapshot(
+                        client,
+                        &api_key,
+                        &config.ollama.plan,
+                        &cache,
+                        &endpoints,
+                        ttl,
+                    )
+                    .await
+                    .map(Into::into)
+                },
                 &api_key,
-                &config.ollama.plan,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
             )
             .await?;
-            Ok(outcome.into())
+            Ok(outcome)
         }
         VendorId::OrcaRouter => {
             let (api_key, cache) = api_key_and_cache(config, vendor, tab.account.as_deref())?;
             let endpoints = crate::orcarouter::fetch::Endpoints::default();
-            let outcome = crate::orcarouter::fetch_snapshot(
-                client,
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::orcarouter::fetch_snapshot(client, &api_key, &cache, &endpoints, ttl)
+                        .await
+                        .map(Into::into)
+                },
                 &api_key,
-                &cache,
-                &endpoints,
-                DEFAULT_TTL,
             )
             .await?;
-            Ok(outcome.into())
+            Ok(outcome)
         }
         VendorId::Lyceum => {
             let (api_key, cache) = api_key_and_cache(config, vendor, tab.account.as_deref())?;
-            let outcome =
-                crate::lyceum::fetch::fetch_snapshot(client, &api_key, &cache, DEFAULT_TTL).await?;
-            Ok(outcome.into())
+            let outcome = fetch_api_keyed(
+                async {
+                    crate::lyceum::fetch::fetch_snapshot(client, &api_key, &cache, ttl)
+                        .await
+                        .map(Into::into)
+                },
+                &api_key,
+            )
+            .await?;
+            Ok(outcome)
         }
     }
 }

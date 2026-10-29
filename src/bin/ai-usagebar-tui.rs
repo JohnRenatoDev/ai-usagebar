@@ -17,8 +17,8 @@ use std::time::{Duration, SystemTime};
 
 use ai_usagebar::config::Config;
 use ai_usagebar::tui::app::{
-    ANTHROPIC_REFRESH_STAGGER, App, FooterAction, REFRESH_INTERVAL, TabId, TabState, refresh_one,
-    refresh_stagger, tabs_with_desktop,
+    ANTHROPIC_REFRESH_STAGGER, App, FooterAction, Freshness, REFRESH_INTERVAL, TabId, TabState,
+    refresh_one, refresh_stagger, tabs_with_desktop,
 };
 use ai_usagebar::tui::view::draw;
 use ai_usagebar::vendor::HTTP_CLIENT_TIMEOUT;
@@ -543,7 +543,7 @@ fn spawn_one(
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
-        let state = refresh_one(&client, &cfg, &tab).await;
+        let state = refresh_one(&client, &cfg, &tab, Freshness::Cached).await;
         let _ = tx.send((generation, tab, state));
     });
 }
