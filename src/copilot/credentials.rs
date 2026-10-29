@@ -194,7 +194,6 @@ async fn run_system_async(
     }
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
         process.creation_flags(crate::process::CREATE_NO_WINDOW);
     }
     let mut child = process.spawn()?;
