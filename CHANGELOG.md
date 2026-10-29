@@ -2,6 +2,17 @@
 
 ### Fixed
 
+- **Cursor opaque IDE sessions can fall back to `cursor-agent`.** When Cursor
+  3.27.12's `curs…` token is rejected with HTTP 401, usage retries once with an
+  independently signed-in `cursor-agent` session. Decodable IDE JWTs remain
+  authoritative, and a WAF-style 403 never switches accounts (#503).
+
+- **GitHub Copilot credential lookup no longer freezes the TUI.** The
+  `gh auth token` helper now runs asynchronously with a five-second deadline;
+  a stalled helper is killed and reaped, while a timeout is reported as a
+  transient lookup failure instead of claiming the saved login is invalid
+  (#530).
+
 - **Rejected quota caches no longer bypass an active HTTP 429 backoff.**
   SuperGrok and Antigravity's remote fallback keep the five-minute wait after
   a cached window ends, and Synthetic keeps it when upgrading from its old

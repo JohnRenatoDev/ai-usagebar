@@ -216,11 +216,52 @@ pub fn read_agent_keychain_token() -> Option<String> {
 /// location: a config override (or a test's temp file) names a specific
 /// source and must not be widened to the machine's own login.
 pub fn resolve_access_token(db_path: &Path, agent_auth_path: &Path) -> Result<String> {
+    Ok(resolve_access_tokens(db_path, agent_auth_path)?.primary)
+}
+
+/// Primary token plus an optional `cursor-agent` fallback. The IDE remains
+/// authoritative for normal operation; the fallback is exposed so the fetch
+/// layer can retry only after Cursor rejects an opaque IDE token (#503).
+pub struct AccessTokens {
+    pub primary: String,
+    pub agent_fallback: Option<String>,
+}
+
+pub fn resolve_access_tokens(db_path: &Path, agent_auth_path: &Path) -> Result<AccessTokens> {
     let default_agent = default_agent_auth_path().ok();
     let ambient = default_agent.as_deref() == Some(agent_auth_path);
-    resolve_access_token_with(db_path, agent_auth_path, || {
-        ambient.then(read_agent_keychain_token).flatten()
-    })
+    match read_access_token(db_path) {
+        Ok(primary) => {
+            let agent_fallback = read_agent_access_token(agent_auth_path)
+                .ok()
+                .or_else(|| ambient.then(read_agent_keychain_token).flatten())
+                .filter(|token| token != &primary);
+            Ok(AccessTokens {
+                primary,
+                agent_fallback,
+            })
+        }
+        Err(ide_err) if !db_path.exists() => {
+            let primary = if agent_auth_path.exists() {
+                read_agent_access_token(agent_auth_path).or_else(|agent_err| {
+                    ambient
+                        .then(read_agent_keychain_token)
+                        .flatten()
+                        .ok_or(agent_err)
+                })?
+            } else {
+                ambient
+                    .then(read_agent_keychain_token)
+                    .flatten()
+                    .ok_or(ide_err)?
+            };
+            Ok(AccessTokens {
+                primary,
+                agent_fallback: None,
+            })
+        }
+        Err(ide_err) => Err(ide_err),
+    }
 }
 
 /// [`resolve_access_token`] with the Keychain reader injected.

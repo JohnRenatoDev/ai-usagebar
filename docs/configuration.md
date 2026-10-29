@@ -252,7 +252,9 @@ enabled = true             # disabled by default; enable once you've signed in t
 # No API key: reads the session token the Cursor IDE already wrote to its own
 # state.vscdb after you signed in there. No desktop IDE (headless machine)?
 # Sign in to the cursor-agent CLI once instead — its own auth.json is the
-# fallback when the IDE database is absent.
+# fallback when the IDE database is absent. It is also retried when Cursor
+# rejects a 3.27.12+ opaque IDE token with HTTP 401; ordinary IDE JWTs remain
+# authoritative.
 # db_path = "/home/you/.config/Cursor/User/globalStorage/state.vscdb"
 # agent_auth_path = "/home/you/.config/cursor/auth.json"
 
@@ -468,6 +470,8 @@ in the Omarchy settings form and save; this enables `[copilot]` and sets it as
 the primary provider. The normal fetch path runs only the fixed structured
 command `gh auth token`. ai-usagebar never parses GitHub CLI configuration or
 credential stores and never writes the OAuth token to its config or cache.
+The helper runs asynchronously with a five-second deadline, so a slow or
+wedged OS credential store cannot freeze the TUI.
 
 `GITHUB_COPILOT_TOKEN` is an optional explicit environment override. It takes
 precedence over `gh auth token`, which can be useful for a managed runtime that

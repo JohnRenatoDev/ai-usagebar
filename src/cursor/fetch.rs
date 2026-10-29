@@ -94,7 +94,8 @@ async fn fetch_snapshot_at(
     // Resolve the local identity before accepting a cache hit. Cursor can switch
     // accounts in-place in this database; returning the cache first would show
     // the previous account's private usage until the TTL elapsed.
-    let token = db::resolve_access_token(db_path, agent_auth_path)?;
+    let tokens = db::resolve_access_tokens(db_path, agent_auth_path)?;
+    let token = tokens.primary;
     let auth = db::session_auth_for(db_path, &token)?;
 
     // A payload written before credit grants existed has no `credits` key.
@@ -122,19 +123,34 @@ async fn fetch_snapshot_at(
         });
     }
 
-    match fetch_live(client, endpoints, &auth, &token).await {
+    let mut live = fetch_live(client, endpoints, &auth, &token).await;
+    let mut accepted_auth = auth.clone();
+    // Cursor 3.27.12's opaque IDE token supplies an identity locally but the
+    // dashboard rejects its legacy cookie with 401. If cursor-agent has its
+    // own JWT login, retry once with that independently valid session. Never
+    // switch accounts pre-emptively, on a WAF 403, or for a decodable IDE JWT.
+    if matches!(live, Err(AppError::Http { status: 401, .. }))
+        && crate::jwt::claims(&token).is_none()
+        && let Some(agent_token) = tokens.agent_fallback
+        && let Ok(agent_auth) = db::session_auth(&agent_token)
+    {
+        live = fetch_live(client, endpoints, &agent_auth, &agent_token).await;
+        accepted_auth = agent_auth;
+    }
+
+    match live {
         Ok(snap) => {
-            let bytes = serde_json::to_vec(&snap_to_json(&snap, &auth.account_key))?;
+            let bytes = serde_json::to_vec(&snap_to_json(&snap, &accepted_auth.account_key))?;
             cache.write_payload(&bytes)?;
             Ok(crate::outcome::Outcome::fresh(snap))
         }
-        Err(e) if e.is_transient() => fallback_silent(cache, &auth.account_key, now, e),
+        Err(e) if e.is_transient() => fallback_silent(cache, &accepted_auth.account_key, now, e),
         Err(e) => {
             cache.mark_stale();
             if let Some((code, msg)) = error_to_pair(&e) {
                 cache.write_last_error(code, &msg);
             }
-            fallback_with_error(cache, &auth.account_key, now, e)
+            fallback_with_error(cache, &accepted_auth.account_key, now, e)
         }
     }
 }
@@ -448,6 +464,15 @@ mod tests {
         path
     }
 
+    fn seed_profile(path: &Path, user_id: &str) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute(
+            "INSERT INTO ItemTable (key, value) VALUES ('cursorAuth/cachedScopedProfile', ?1)",
+            [serde_json::json!({"authId": format!("grok|{user_id}")}).to_string()],
+        )
+        .unwrap();
+    }
+
     fn account_key(token: &str) -> String {
         db::session_auth(token).unwrap().account_key
     }
@@ -602,6 +627,62 @@ mod tests {
         m.assert_async().await;
         assert_eq!(out.snapshot.plan, "Ultra");
         assert!(!out.stale);
+    }
+
+    #[tokio::test]
+    async fn rejected_opaque_ide_token_falls_back_to_cursor_agent() {
+        let mut server = mockito::Server::new_async().await;
+        let opaque = "curs_opaque_ide_token";
+        let agent = fake_token("agent_user");
+        let rejected = server
+            .mock("GET", "/api/usage-summary")
+            .match_header(
+                "cookie",
+                format!("WorkosCursorSessionToken=ide_user%3A%3A{opaque}").as_str(),
+            )
+            .with_status(401)
+            .expect(1)
+            .create_async()
+            .await;
+        let accepted = server
+            .mock("GET", "/api/usage-summary")
+            .match_header(
+                "cookie",
+                format!("WorkosCursorSessionToken=agent_user%3A%3A{agent}").as_str(),
+            )
+            .with_status(200)
+            .with_body(sample_json())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let dir = TempDir::new().unwrap();
+        let db_path = seed_state_db(&dir, opaque);
+        seed_profile(&db_path, "ide_user");
+        let agent_path = dir.path().join("auth.json");
+        std::fs::write(
+            &agent_path,
+            serde_json::json!({"accessToken": agent}).to_string(),
+        )
+        .unwrap();
+        let (_cache_dir, cache) = cache_fixture();
+
+        let out = fetch_snapshot(
+            &reqwest::Client::new(),
+            &db_path,
+            &agent_path,
+            &cache,
+            &endpoints_for(&server),
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
+        rejected.assert_async().await;
+        accepted.assert_async().await;
+        assert_eq!(out.snapshot.plan, "Ultra");
+        let cached: serde_json::Value =
+            serde_json::from_slice(&cache.maybe_payload().unwrap().unwrap()).unwrap();
+        assert_eq!(cached["account"], account_key(&agent));
     }
 
     #[tokio::test]
