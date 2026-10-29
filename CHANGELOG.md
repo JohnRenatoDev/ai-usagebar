@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Fixed
+
+- **`--account` error message lists Lyceum.** The validation error for
+  unsupported `--account` providers now includes Lyceum among the
+  accepted API-key account vendors (#545).
+
 ## [1.46.0] — 2026-10-29
 
 ### Added
