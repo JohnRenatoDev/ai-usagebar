@@ -148,7 +148,7 @@ fn push_product_row(
     let label = crate::display::pad_end(&product.label, label_width);
     let pct = format!("{:>4}%", product.percent);
     lines.push(TooltipLine::Body(format!(
-        " <span foreground='{dim}'>  󰚩  {}  </span><span foreground='{dim}' font_weight='bold'>{pct}</span>",
+        " <span foreground='{dim}'>  󰇷  {}  </span><span foreground='{dim}' font_weight='bold'>{pct}</span>",
         escape(&label)
     )));
 }
@@ -387,6 +387,19 @@ mod tests {
         let out = render(&o, &snap, &Theme::default(), &opts(), now());
         assert!(out.tooltip.contains("Grok&lt;b&gt;"), "{}", out.tooltip);
         assert!(!out.tooltip.contains("<b>Build"), "{}", out.tooltip);
+    }
+
+    #[test]
+    fn tooltip_product_row_uses_supergrok_glyph() {
+        let mut snap = sample_snap();
+        snap.products = vec![crate::usage::SuperGrokProduct {
+            label: "Grok".into(),
+            percent: 7,
+        }];
+        let o = sample_outcome(snap.clone());
+        let out = render(&o, &snap, &Theme::default(), &opts(), now());
+        assert!(out.tooltip.contains("󰇷"), "{}", out.tooltip);
+        assert!(!out.tooltip.contains("󰚩"), "{}", out.tooltip);
     }
 
     /// The prepaid line appears only when there is credit to show — a $0.00
