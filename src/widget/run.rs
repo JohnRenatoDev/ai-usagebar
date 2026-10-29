@@ -1841,6 +1841,21 @@ mod tests {
     }
 
     #[test]
+    fn account_flag_error_lists_every_api_key_account_vendor() {
+        let cli = cli_with(Some("work"), None, Some("/tmp/cache"));
+        let err = validate_vendor_options(&cli, Vendor::Ollama)
+            .unwrap_err()
+            .to_string();
+        for vendor in Config::API_KEY_ACCOUNT_VENDORS {
+            assert!(
+                err.contains(vendor.display_name()),
+                "expected {err} to list {}",
+                vendor.display_name()
+            );
+        }
+    }
+
+    #[test]
     fn deepseek_named_account_uses_its_key_and_cache_subdir() {
         let mut config = Config::default();
         config.deepseek.api_key_env.clear();
