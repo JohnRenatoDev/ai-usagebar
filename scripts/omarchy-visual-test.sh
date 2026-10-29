@@ -38,7 +38,8 @@ timeout 15 quickshell -p "$scratch" --no-color \
   --log-rules 'qt.qml.connections=false'
 
 for image in settings-display-dark.png settings-credentials-light.png \
-  notices-dark.png notices-light-pt-BR.png; do
+  notices-dark.png notices-light-pt-BR.png settings-priorities-dark.png \
+  priorities-dark.png priorities-light-pt-BR.png; do
   if [[ ! -s "$capture_dir/$image" ]]; then
     echo "Visual scenario did not produce $image" >&2
     exit 1

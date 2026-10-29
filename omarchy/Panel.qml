@@ -8,6 +8,7 @@ import qs.Ui
 import "Model.js" as Model
 import "I18n.js" as I18n
 import "Notice.js" as Notice
+import "Priority.js" as Priority
 
 // Native Omarchy Quattro popup. BarWidget.qml owns the bar slot and injects
 // its button as this panel's anchor; collection stays in the Rust binary.
@@ -50,6 +51,96 @@ Panel {
   property double nowMs: Date.now()
   property bool cursorActive: false
   property bool settingsOpen: false
+
+  readonly property int recentHours: Priority.normalizeHours(setting("recentHours", 3))
+  property bool priorityHistoryAvailable: true
+  readonly property bool priorityAlert: Model.booleanSetting(setting("priorityAlert", true), true)
+  readonly property int alertUnusedPercent: Priority.normalizeAlertPercent(setting("alertUnusedPercent", 50))
+  readonly property int alertHours: Priority.normalizeAlertHours(setting("alertHours", 24))
+  // A ranking computed with other parameters is dropped, never shown as current.
+  function resetPriorities() {
+    ranking = []
+    if (lastSuccessfulMs > 0) startRefresh()
+  }
+  onRecentHoursChanged: resetPriorities()
+  onAlertUnusedPercentChanged: resetPriorities()
+  onAlertHoursChanged: resetPriorities()
+  function setRecentHours(value) {
+    var next = Priority.normalizeHours(value)
+    if (next !== recentHours) persistWidgetSettings({recentHours: next})
+  }
+  property var ranking: []
+  property bool priorityOpen: false
+  readonly property bool showPriorities: Model.booleanSetting(setting("showPriorities", false), false)
+  readonly property bool showPriorityShortcut: showPriorities && Model.booleanSetting(setting("showPriorityShortcut", false), false)
+  // Quota at risk of being lost at its reset; the bar paints it red even when
+  // the optional shortcut is off. Rust owns the urgency rule.
+  readonly property var urgentPriority: {
+    if (!showPriorities || !priorityAlert) return null
+    for (var i = 0; i < ranking.length; i++)
+      if (Priority.stateKey(ranking[i]) === "urgent" && !hiddenFromBar(ranking[i].entry_id)) return ranking[i]
+    return null
+  }
+  // The bar follows "show in the bar" (hiddenBarEntries) for priorities too:
+  // a provider hidden from the bar neither alerts nor is recommended there.
+  // The panel's own list still shows every provider.
+  function hiddenFromBar(id) {
+    return Array.isArray(hiddenBarEntries) && hiddenBarEntries.indexOf(id) >= 0
+  }
+  readonly property var barRecommendation: {
+    for (var i = 0; i < ranking.length; i++)
+      if (ranking[i].status === "priority" && !hiddenFromBar(ranking[i].entry_id)) return ranking[i]
+    return null
+  }
+  onShowPrioritiesChanged: {
+    if (!showPriorities) priorityOpen = false
+    resetPriorities()
+  }
+  function openPriorities() {
+    if (!showPriorities) return
+    settingsOpen = false
+    priorityOpen = true
+    if (!opened) open()
+    if (panelFlick) panelFlick.contentY = 0
+  }
+  // The bar's priority chip toggles like a provider chip: a second press on the
+  // view already showing closes the panel.
+  function togglePriorities() {
+    if (opened && priorityOpen) close()
+    else openPriorities()
+  }
+  function priorityTr() { return function(key, params) { return root.tr(key, params) } }
+  function priorityRow(row) {
+    return Object.assign({}, row, {window: I18n.displayLabel(uiLocale, row.window)})
+  }
+  function priorityFacts(row) {
+    return Priority.facts(priorityRow(row), nowMs, priorityHistoryAvailable, priorityTr())
+  }
+  // An unavailable card names the provider's own reason after the conclusion.
+  function priorityNotes(row) {
+    var out = Priority.notes(row, nowMs, priorityTr())
+    if (row && row.status === "unavailable") {
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].id !== row.entry_id || !entries[i].error) continue
+        var why = Notice.build(entries[i].error, "error")
+        if (why) out.push(root.tr("notice." + why.category) + ": " + why.body)
+      }
+    }
+    return out
+  }
+  // Plain-text form of a card for its accessible name: facts, then notes.
+  function priorityDetail(row) {
+    var lines = priorityFacts(row).map(function(f) { return f.label + ": " + f.value })
+    return lines.concat(priorityNotes(row)).join("\n")
+  }
+  function prioritySummary(row) {
+    return Priority.summary(row, nowMs, priorityTr())
+  }
+  function selectPriority(id) {
+    for (var i = 0; i < visibleEntries.length; i++) {
+      if (visibleEntries[i].id === id) { selectEntry(i); priorityOpen = false; return }
+    }
+  }
 
   readonly property int refreshIntervalSec: Math.max(30, Math.min(3600,
     Number(setting("refreshIntervalSec", 300)) || 300))
@@ -512,10 +603,11 @@ Panel {
     var wanted = String(entryId || "")
     for (var i = 0; i < visibleEntries.length; i++) {
       if (visibleEntries[i].id !== wanted) continue
-      if (opened && i === entryIndex) {
+      if (opened && i === entryIndex && !priorityOpen) {
         close()
         return
       }
+      priorityOpen = false
       selectEntry(i)
       open()
       return
@@ -538,12 +630,19 @@ Panel {
   function finishRefresh() {
     var parsed = Model.parseReport(commandStdout)
     if (parsed.ok) {
+      var priorityReport = JSON.parse(commandStdout)
+      var alert = priorityReport.priority_alert || {}
+      var current = priorityReport.priority_recent_hours === recentHours
+        && alert.unused_percent === alertUnusedPercent && alert.hours === alertHours
+      ranking = current ? (priorityReport.ranking || []) : []
+      priorityHistoryAvailable = priorityReport.priority_history_available !== false
       primaryProvider = parsed.primary
       entries = parsed.entries
       loadError = ""
       lastSuccessfulMs = Date.now()
       syncSelection()
     } else {
+      ranking = []
       var detail = commandStderr.trim()
       loadError = lastExitCode === 127
         ? Model.launchErrorMessage(lastExitCode, detail)
@@ -941,6 +1040,7 @@ Panel {
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     } else {
       settingsOpen = false
+      priorityOpen = false
     }
   }
 
@@ -964,7 +1064,12 @@ Panel {
     running: false
     // /usr/bin/env always starts on Omarchy and reports a missing ai-usagebar
     // as exit 127. Keep the command as structured argv: no shell is needed.
-    command: ["/usr/bin/env", root.reportBinary, "usage", "--json"]
+    // Priorities are opt-in on the CLI too: without them the report (and the
+    // local history it would record) is exactly what every other reader sees.
+    command: ["/usr/bin/env", root.reportBinary, "usage", "--json"].concat(root.showPriorities
+      ? ["--priorities", "--recent-hours", String(root.recentHours),
+        "--alert-unused-percent", String(root.alertUnusedPercent), "--alert-hours", String(root.alertHours)]
+      : [])
 
     stdout: StdioCollector {
       waitForEnd: true
@@ -993,16 +1098,16 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(390))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(640))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight + viewFooter.reserved, Style.space(640))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
       // Native form controls own Tab/Enter/Esc while settings are open.
-      blocked: root.settingsOpen
+      blocked: root.settingsOpen || root.priorityOpen
 
       onMoveRequested: function(dx, dy) {
-        if (!root.settingsOpen && dx !== 0) {
+        if (!root.settingsOpen && !root.priorityOpen && dx !== 0) {
           root.cursorActive = true
           root.selectEntry(root.entryIndex + dx)
         }
@@ -1011,16 +1116,59 @@ Panel {
             Math.max(0, panelFlick.contentHeight - panelFlick.height))
       }
       onActivateRequested: if (!root.settingsOpen) root.refresh()
-      onCloseRequested: root.settingsOpen ? root.closeSettings() : root.close()
+      onCloseRequested: root.settingsOpen ? root.closeSettings() : (root.priorityOpen ? root.priorityOpen = false : root.close())
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         if (!root.settingsOpen && (text === "r" || text === "R")) root.refresh()
         else if (!root.settingsOpen && (text === "s" || text === "S")) root.openSettings()
+        else if (!root.settingsOpen && (text === "p" || text === "P")) root.openPriorities()
+      }
+
+      // The optional priorities module is a second view of the same data, not
+      // an action: a native view switcher pinned to the panel's bottom edge,
+      // outside the scrolling content, so it stays visible on long reports.
+      // The header keeps refresh/settings untouched; the footer disappears
+      // with the module.
+      Column {
+        id: viewFooter
+        readonly property real reserved: visible ? implicitHeight : 0
+        visible: root.showPriorities && !root.settingsOpen
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        topPadding: Style.space(10)
+        spacing: Style.space(10)
+
+        PanelSeparator {
+          foreground: root.foreground
+        }
+
+        ButtonGroup {
+          id: viewSwitcher
+          anchors.horizontalCenter: parent.horizontalCenter
+          focusable: false
+          value: root.priorityOpen ? "priorities" : "usage"
+          // Only an urgent quota marks the priorities option, with the bar's
+          // own alert glyph.
+          options: [
+            { value: "usage", label: root.tr("view.usage") },
+            { value: "priorities", label: root.tr("priority.title"),
+              icon: root.urgentPriority ? "󰀦" : "",
+              tooltip: root.urgentPriority ? root.tr("priority.alert_tip", { name: root.urgentPriority.name }) : "" }
+          ]
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          fontSize: Style.font.bodySmall
+          onChanged: function(view) { view === "priorities" ? root.openPriorities() : root.priorityOpen = false }
+        }
       }
 
       Flickable {
         id: panelFlick
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: viewFooter.visible ? viewFooter.top : parent.bottom
         contentWidth: width
         contentHeight: column.implicitHeight
         clip: true
@@ -1062,15 +1210,15 @@ Panel {
 
           PanelHero {
             width: parent.width
-            title: root.settingsOpen ? root.tr("hero.settings")
+            title: root.priorityOpen ? root.tr("priority.title") : root.settingsOpen ? root.tr("hero.settings")
               : (root.entry ? Model.providerName(root.entry) : root.tr("app.name"))
-            meta: root.settingsOpen ? root.tr("hero.settings_meta") : root.heroMeta()
+            meta: root.priorityOpen ? root.tr("priority.meta") : root.settingsOpen ? root.tr("hero.settings_meta") : root.heroMeta()
             // Long settings copy must not live in the hero detail pill — that
             // control is a single-line chip and overflows in RU/pt-BR. The
             // sentence renders as a wrapped caption under the hero instead.
             // An error has no figure: the badge beside refresh names it instead
             // of an untranslated "Error" pill.
-            detail: root.settingsOpen ? ""
+            detail: root.settingsOpen || root.priorityOpen ? ""
               : (root.entry && root.entry.error === "" && root.summary.text !== "Ready" && root.summary.text !== root.tr("ready")
                 ? Model.autoTextSafe(root.panelHeadline(root.shapedEntry)) : "")
             foreground: root.foreground
@@ -1078,8 +1226,8 @@ Panel {
 
             iconComponent: Component {
               BrandMark {
-                brand: root.settingsOpen || !root.brandIcons ? "" : Model.brandIconFile(root.entry)
-                fallback: root.settingsOpen ? "󰒓"
+                brand: root.priorityOpen || root.settingsOpen || !root.brandIcons ? "" : Model.brandIconFile(root.entry)
+                fallback: root.priorityOpen ? "󰉻" : root.settingsOpen ? "󰒓"
                   : (root.brandIcons ? Model.providerIcon(root.entry) : "󰚩")
                 // Colour-coding: full RAG from worst pool. Off: same aggregate,
                 // binary foreground vs urgent when worst is critical.
@@ -1102,7 +1250,7 @@ Panel {
                 BorderSurface {
                   id: errorBadge
                   readonly property var notice: root.statusNotice()
-                  visible: !root.settingsOpen && notice !== null && notice.kind === "error"
+                  visible: !root.settingsOpen && !root.priorityOpen && notice !== null && notice.kind === "error"
                   anchors.verticalCenter: parent.verticalCenter
                   implicitWidth: badgeRow.implicitWidth + Style.space(14)
                   implicitHeight: Style.spacing.controlHeight
@@ -1158,7 +1306,7 @@ Panel {
                   tooltipText: root.settingsOpen ? root.tr("action.back") : root.tr("action.settings")
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  onClicked: root.settingsOpen ? root.closeSettings() : root.openSettings()
+                  onClicked: { root.priorityOpen = false; root.settingsOpen ? root.closeSettings() : root.openSettings() }
                 }
               }
             }
@@ -1183,6 +1331,19 @@ Panel {
             urgent: root.urgent
             fontFamily: root.fontFamily
             binaryPath: root.reportBinary
+            recentHours: root.recentHours
+            onRecentHoursRequested: function(hours) { root.setRecentHours(hours) }
+            priorityAlert: root.priorityAlert
+            alertUnusedPercent: root.alertUnusedPercent
+            alertHours: root.alertHours
+            onPriorityAlertRequested: function(enabled) { root.persistWidgetSettings({priorityAlert: enabled}) }
+            onAlertUnusedPercentRequested: function(value) { root.persistWidgetSettings({alertUnusedPercent: Priority.normalizeAlertPercent(value)}) }
+            onAlertHoursRequested: function(value) { root.persistWidgetSettings({alertHours: Priority.normalizeAlertHours(value)}) }
+            showPriorities: root.showPriorities
+            showPriorityShortcut: root.showPriorityShortcut
+            onShowPrioritiesRequested: function(enabled) { root.persistWidgetSettings({showPriorities: enabled}) }
+            onShowPriorityShortcutRequested: function(enabled) { root.persistWidgetSettings({showPriorityShortcut: enabled}) }
+            onOpenPrioritiesRequested: root.openPriorities()
             showValue: root.showValue
             showProvider: root.showProvider
             showAll: root.showAll
@@ -1211,13 +1372,54 @@ Panel {
             onCloseRequested: root.closeSettings()
           }
 
+          Column {
+            id: prioritySection
+            focus: visible
+            Keys.onEscapePressed: root.priorityOpen = false
+            onVisibleChanged: if (visible) Qt.callLater(function() { prioritySection.forceActiveFocus() })
+            visible: root.priorityOpen && !root.settingsOpen
+            width: parent.width
+            spacing: Style.space(8)
+            Repeater {
+              model: root.ranking
+              PriorityCard {
+                required property var modelData
+                required property int index
+                width: prioritySection.width
+                row: modelData
+                rank: index + 1
+                summary: root.prioritySummary(modelData)
+                facts: root.priorityFacts(modelData)
+                notes: root.priorityNotes(modelData)
+                rationale: root.priorityDetail(modelData)
+                statusText: root.tr("priority." + Priority.stateKey(modelData))
+                limitsText: root.tr("priority.view_limits")
+                urgent: Priority.stateKey(modelData) === "urgent"
+                urgentColor: root.themeRed
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onLimitsRequested: root.selectPriority(modelData.entry_id)
+              }
+            }
+            Text {
+              width: parent.width
+              text: root.ranking.length > 0 ? root.tr("priority.hint")
+                : root.tr(root.loading ? "priority.loading" : "priority.empty")
+              textFormat: Text.PlainText
+              wrapMode: Text.WordWrap
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
           // Providers wrap into additional rows instead of being clipped by
           // the panel edge once there are more configured entries than fit
           // on one line — a fixed-width ListView silently hid entries past
           // the visible edge, with no way to reach them (see #173).
           Flow {
             id: providerList
-            visible: !root.settingsOpen && root.visibleEntries.length > 1
+            visible: !root.settingsOpen && !root.priorityOpen && root.visibleEntries.length > 1
             width: parent.width
             height: visible ? implicitHeight : 0
             flow: Flow.LeftToRight
@@ -1251,7 +1453,7 @@ Panel {
 
           Flow {
             id: cursorPoolToggles
-            visible: !root.settingsOpen && (root.cursorEntry || root.antigravityEntry)
+            visible: !root.settingsOpen && !root.priorityOpen && (root.cursorEntry || root.antigravityEntry)
             width: parent.width
             height: visible ? implicitHeight : 0
             flow: Flow.LeftToRight
@@ -1280,7 +1482,7 @@ Panel {
 
           NoticeCard {
             readonly property var current: root.statusNotice()
-            visible: !root.settingsOpen && current !== null
+            visible: !root.settingsOpen && !root.priorityOpen && current !== null
             width: parent.width
             notice: current
             title: current ? root.tr("notice." + current.category) : ""
@@ -1295,7 +1497,7 @@ Panel {
           }
 
           Column {
-            visible: !root.settingsOpen && root.loading && root.entries.length === 0
+            visible: !root.settingsOpen && !root.priorityOpen && root.loading && root.entries.length === 0
             width: parent.width
             spacing: Style.space(8)
 
@@ -1317,7 +1519,7 @@ Panel {
 
           Column {
             id: usageSection
-            visible: !root.settingsOpen && root.entrySections.length > 0
+            visible: !root.settingsOpen && !root.priorityOpen && root.entrySections.length > 0
             width: parent.width
             spacing: Style.space(8)
 
@@ -1372,7 +1574,7 @@ Panel {
           }
 
           Text {
-            visible: !root.settingsOpen && !root.loading && !root.entry && root.statusMessage() === ""
+            visible: !root.settingsOpen && !root.priorityOpen && !root.loading && !root.entry && root.statusMessage() === ""
             width: parent.width
             topPadding: Style.space(20)
             text: root.tr("empty.no_usage")
@@ -1384,7 +1586,7 @@ Panel {
           }
 
           Text {
-            visible: !root.settingsOpen && root.entryFetchedAt !== ""
+            visible: !root.settingsOpen && !root.priorityOpen && root.entryFetchedAt !== ""
             width: parent.width
             topPadding: Style.space(2)
             text: I18n.formatUpdated(root.entryFetchedAt, root.nowMs, root.uiLocale)

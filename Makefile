@@ -76,6 +76,7 @@ popover-ssr-test:
 
 plugin-test:
 	node omarchy/model.test.mjs
+	node omarchy/priority.test.mjs
 	node omarchy/notice.test.mjs
 
 # Renders the real SettingsView twice through Quickshell's offscreen backend.
