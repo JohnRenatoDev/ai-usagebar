@@ -929,7 +929,7 @@ async fn openai_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
 
 async fn copilot_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let label = cli.account.as_deref();
-    let token = config.copilot.resolve_token(label)?;
+    let token = config.copilot.resolve_token_async(label).await?;
     let client = http_client()?;
     let cache = copilot_cache(cli)?;
     let endpoints = copilot::fetch::Endpoints::default();

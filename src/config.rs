@@ -1195,6 +1195,30 @@ impl CopilotConfig {
         )
     }
 
+    /// Async report path: environment overrides remain immediate; the `gh`
+    /// credential helper has its own deadline and never blocks the reactor.
+    pub async fn resolve_token_async(&self, label: Option<&str>) -> Result<String> {
+        let user = self.resolve_user(label)?;
+        if let Some(value) = std::env::var_os("GITHUB_COPILOT_TOKEN") {
+            let token = value.into_string().map_err(|_| {
+                AppError::Credentials(
+                    "GitHub Copilot: GITHUB_COPILOT_TOKEN is not valid UTF-8.".into(),
+                )
+            })?;
+            if !token.is_empty() {
+                if let Some(label) = label {
+                    return Err(AppError::Credentials(format!(
+                        "GitHub Copilot: GITHUB_COPILOT_TOKEN is set, so it is unclear whether \
+                         --account {label:?} should use that token or {user:?}'s `gh` login. \
+                         Unset the variable to use named accounts."
+                    )));
+                }
+                return Ok(token);
+            }
+        }
+        crate::copilot::credentials::resolve_async(self.gh_binary.as_deref(), user).await
+    }
+
     fn resolve_token_with(
         &self,
         environment: impl Fn(&str) -> Option<std::ffi::OsString>,

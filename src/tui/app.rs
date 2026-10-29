@@ -809,7 +809,7 @@ async fn build_outcome(
         }
         VendorId::Copilot => {
             let label = tab.account.as_deref();
-            let token = config.copilot.resolve_token(label)?;
+            let token = config.copilot.resolve_token_async(label).await?;
             let cache = match label {
                 Some(label) => crate::cache::Cache::for_vendor_account("copilot", label)?,
                 None => crate::cache::Cache::for_vendor("copilot")?,
