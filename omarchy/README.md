@@ -81,7 +81,15 @@ The panel keeps the last successful report visible when a refresh fails and
 labels it accordingly. Provider-level stale cache responses and hard errors
 are shown inline, and unlike the bar's alert state they do not turn that bar
 red: only the highest-percent visible window decides whether it is alarming, and a
-refresh that yields no report at all still marks it. Absolute reset timestamps
+refresh that yields no report at all still marks it. An inline error reads as a
+notice: a translated title for its kind (sign-in needed, connection problem,
+rate limited, refresh failed, not installed), the message without its internal
+`credentials error:` / `HTTP error:` prefix, and, when the message names a fix
+(``Run `codex login` ``, ``sign in with `droid` ``), that command with a Copy
+button. Connection problems and rate limits also offer Try again. A command is
+only ever copied to the clipboard (`wl-copy`), never run. While a provider is
+in error, a red badge with the same icon and a one-word label sits beside
+refresh and settings in place of the value pill. Absolute reset timestamps
 are rendered as live countdowns, so an open panel stays accurate between
 network refreshes.
 
@@ -260,17 +268,39 @@ Against an `ai-usagebar` older than the `short_name` field the tag falls
 back to the entry id's provider half (`anthropic 29%`) until the binary is
 updated.
 
+### Local builds
+
+Two settings point the plugin at a build other than the binaries on `PATH`.
+They are meant for development, so Settings has no control for them on
+purpose; set them from a shell, and set them back to the default to undo:
+
+- `reportBinary` (default `ai-usagebar`) runs `usage --json`, `settings
+  show`/`settings apply` and the Nous login.
+- `tuiBinary` (default `ai-usagebar-tui`) opens the dashboard on right-click
+  and from the dashboard action.
+
+```bash
+omarchy bar set akitaonrails.ai-usagebar reportBinary ~/src/ai-usagebar/target/release/ai-usagebar
+omarchy bar set akitaonrails.ai-usagebar tuiBinary ~/src/ai-usagebar/target/release/ai-usagebar-tui
+omarchy bar set akitaonrails.ai-usagebar reportBinary ai-usagebar
+```
+
+The report command stays a structured argument list (no shell), and the
+dashboard and Nous login commands quote the path with `Util.shellQuote`.
+
 ## Development checks
 
 On an Omarchy 4 machine:
 
 ```bash
 omarchy plugin validate .
-node omarchy/model.test.mjs
+make plugin-test
 make omarchy-visual-test
 ```
 
-The visual test renders the real settings component in dark and light fixture
+`make plugin-test` runs `omarchy/model.test.mjs` and the notice tests in
+`omarchy/notice.test.mjs`. The visual test renders the real settings component
+and the usage view's notices (English and pt-BR) in dark and light fixture
 themes through Quickshell's offscreen backend. It does not open a window or
 read credentials. Review the generated PNGs under
 `target/omarchy-visual-scenarios/`; they are local test artifacts, not golden

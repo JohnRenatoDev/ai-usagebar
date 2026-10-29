@@ -35,6 +35,38 @@
   rows in the Waybar tooltip displayed the Claude icon glyph (`󰚩`) instead of
   the provider's mark (`󰇷`).
 
+### Added
+
+- **Omarchy: run a local build.** `reportBinary` (default `ai-usagebar`)
+  and `tuiBinary` (default `ai-usagebar-tui`) point the plugin at a build
+  other than the binaries on `PATH`: the first runs the report, settings
+  and the Nous login, the second opens the dashboard. They are set with
+  `omarchy bar set`; Settings has no control for them on purpose
+  (`omarchy/README.md`, Local builds).
+
+### Changed
+
+- **Omarchy: a provider error reads as a notice with its fix.** The inline
+  status box shows an icon and a translated title for the kind of problem
+  (sign-in needed, connection problem, rate limited, refresh failed, not
+  installed), then the message. When the message names a command
+  (``Run `codex login` ``), the command is shown with a Copy button; it is
+  copied with `wl-copy`, never run. Connection problems and rate limits
+  offer Try again.
+
+### Fixed
+
+- **Omarchy: no untranslated "Error" pill.** A provider in error showed a grey
+  `Error` pill in every language beside refresh and settings. A red badge
+  with the problem's icon and a one-word translated label replaces it, and
+  the subtitle under the provider name names the problem instead of a
+  generic "provider unavailable".
+- **Omarchy: notices drop internal prefixes.** `credentials error:`,
+  `auth error:`, `HTTP error:` and `network error:` no longer lead the
+  message the panel shows.
+- **Omarchy: window names follow the interface language.** Generic windows
+  (`Session (5h)`, `Weekly (7d)`, `Weekly`, `Monthly`) stayed in English in
+  the usage rows; they now use the catalog's names in all five locales.
 ## [1.45.0] — 2026-10-27
 
 ### Added

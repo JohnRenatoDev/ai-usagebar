@@ -3,9 +3,11 @@ import QtQuick.Window
 import Quickshell
 import qs.Commons as Commons
 import "Usage"
+import "Usage/Notice.js" as Notice
+import "Usage/I18n.js" as I18n
 
 // Deterministic, offscreen visual scenarios for the real Quattro settings
-// component. scripts/omarchy-visual-test.sh supplies the shell modules and
+// component and the usage view's status notices. scripts/omarchy-visual-test.sh supplies the shell modules and
 // output directory, then launches this config with Qt's offscreen backend.
 ShellRoot {
   id: root
@@ -13,6 +15,19 @@ ShellRoot {
   readonly property string outputDir: Quickshell.env("AI_USAGEBAR_VISUAL_OUTPUT_DIR")
   property int scenario: 0
   property color scenarioBackground: "#1e1e2e"
+  readonly property var scenarioNames: [
+    "settings-display-dark.png", "settings-credentials-light.png",
+    "notices-dark.png", "notices-light-pt-BR.png"
+  ]
+  readonly property bool showNotices: scenario >= 2
+  property string noticeLocale: "en"
+  // The same messages the report produces: a sign-in error naming its fix, a
+  // transient failure that offers a retry, and a cached-data note.
+  readonly property var noticeFixtures: [
+    Notice.build("credentials error: OpenCode Go is not signed in. Run `opencode auth login` and choose OpenCode, or set OPENCODE_GO_API_KEY.", "error"),
+    Notice.build("HTTP error: 503 Service Unavailable", "error"),
+    Notice.build(I18n.t(noticeLocale, "status.cached"), "info", "cached")
+  ]
 
   function applyTheme(foreground, background, accent, urgent, muted) {
     // FileView may finish loading the user's current theme after startup.
@@ -50,23 +65,33 @@ ShellRoot {
       settings.urgent = "#f38ba8"
       settings.openSection = "display"
       viewport.contentY = 0
-    } else {
+    } else if (scenario === 1) {
       applyTheme("#1f2328", "#f6f8fa", "#0969da", "#cf222e", "#656d76")
       scenarioBackground = "#f6f8fa"
       settings.foreground = "#1f2328"
       settings.urgent = "#cf222e"
       settings.openSection = "credentials"
       viewport.contentY = 0
+    } else if (scenario === 2) {
+      applyTheme("#cdd6f4", "#1e1e2e", "#89b4fa", "#f38ba8", "#6c7086")
+      scenarioBackground = "#1e1e2e"
+      noticeLocale = "en"
+      viewport.contentY = 0
+    } else {
+      applyTheme("#1f2328", "#f6f8fa", "#0969da", "#cf222e", "#656d76")
+      scenarioBackground = "#f6f8fa"
+      noticeLocale = "pt-BR"
+      viewport.contentY = 0
     }
-    settings.forceActiveFocus()
-    Qt.callLater(function() { root.focusFirst(settings) })
+    if (!showNotices) {
+      settings.forceActiveFocus()
+      Qt.callLater(function() { root.focusFirst(settings) })
+    }
     captureDelay.restart()
   }
 
   function capture() {
-    var name = scenario === 0
-      ? "settings-display-dark.png"
-      : "settings-credentials-light.png"
+    var name = scenarioNames[scenario]
     window.contentItem.grabToImage(function(result) {
       if (!result.saveToFile(outputDir + "/" + name)) {
         console.error("VISUAL SCENARIO FAIL: could not write " + name)
@@ -75,7 +100,7 @@ ShellRoot {
       }
       console.log("VISUAL SCENARIO OK: " + name)
       scenario++
-      if (scenario < 2) prepareScenario()
+      if (scenario < scenarioNames.length) prepareScenario()
       else Qt.quit()
     }, Qt.size(window.width, window.height))
   }
@@ -98,10 +123,35 @@ ShellRoot {
       anchors.margins: 24
       clip: true
       contentWidth: width
-      contentHeight: settings.implicitHeight
+      contentHeight: root.showNotices ? notices.implicitHeight : settings.implicitHeight
+
+      Column {
+        id: notices
+        visible: root.showNotices
+        width: viewport.width
+        spacing: 12
+
+        Repeater {
+          model: root.noticeFixtures
+
+          NoticeCard {
+            required property var modelData
+            width: notices.width
+            notice: modelData
+            title: I18n.t(root.noticeLocale, "notice." + modelData.category)
+            copyText: I18n.t(root.noticeLocale, "notice.copy")
+            copiedText: I18n.t(root.noticeLocale, "notice.copied")
+            retryText: I18n.t(root.noticeLocale, "notice.retry")
+            foreground: Commons.Color.foreground
+            urgentColor: Commons.Color.urgent
+            fontFamily: "monospace"
+          }
+        }
+      }
 
       SettingsView {
         id: settings
+        visible: !root.showNotices
         width: viewport.width
         fontFamily: "monospace"
         showValue: true

@@ -40,7 +40,9 @@
       "showCursorOnDemand": true,
       "showCursorCredits": true,
       "showAntigravityGemini": true,
-      "showAntigravityClaudeGpt": true
+      "showAntigravityClaudeGpt": true,
+      "reportBinary": "ai-usagebar",
+      "tuiBinary": "ai-usagebar-tui"
     },
     "schema": [
       {
@@ -174,6 +176,20 @@
         "label": "Show Claude & GPT OSS",
         "description": "Show the Claude & GPT OSS pool in the top bar and tooltip. The panel list drops its Session and Weekly rows too. At least one Antigravity pool stays visible.",
         "defaultValue": true
+      },
+      {
+        "key": "reportBinary",
+        "type": "string",
+        "label": "Report command",
+        "description": "Executable the plugin runs for usage --json, settings show/apply and Nous login. Leave as ai-usagebar unless you run a local build. Set with omarchy bar set; there is no control for it in Settings.",
+        "defaultValue": "ai-usagebar"
+      },
+      {
+        "key": "tuiBinary",
+        "type": "string",
+        "label": "Dashboard command",
+        "description": "Executable opened by right-click and the dashboard action. Leave as ai-usagebar-tui unless you run a local build. Set with omarchy bar set; there is no control for it in Settings.",
+        "defaultValue": "ai-usagebar-tui"
       }
     ]
   }
