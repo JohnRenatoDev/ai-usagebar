@@ -330,7 +330,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn a_slow_helper_does_not_stall_the_reactor_and_is_timed_out() {
-        let (_dir, helper) = executable_script("exec /bin/sleep 30");
+        // Use shell builtins only: hermetic builders such as Nix do not
+        // expose `/bin/sleep`, which would make this fixture exit immediately
+        // and test the non-zero-status path instead of the deadline.
+        let (_dir, helper) = executable_script("while :; do :; done");
         let command = GhAuthTokenCommand::standard(Some(&helper));
         let start = std::time::Instant::now();
         let (timer_elapsed, result) = tokio::join!(
