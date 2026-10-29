@@ -1,5 +1,65 @@
 ## [Unreleased]
 
+### Added
+
+- **Omarchy: run a local build.** `reportBinary` (default `ai-usagebar`)
+  and `tuiBinary` (default `ai-usagebar-tui`) point the plugin at a build
+  other than the binaries on `PATH`: the first runs the report, settings
+  and the Nous login, the second opens the dashboard. They are set with
+  `omarchy bar set`; Settings has no control for them on purpose
+  (`omarchy/README.md`, Local builds).
+
+- **Usage priorities: which AI to use first.** `usage --json --priorities`
+  adds a `ranking` of every configured provider, ordered by the weekly quota
+  projected to reset unused, and the first row worth using as
+  `recommendation`. Each provider is measured on its weekly window (the most
+  used one when there are several), so a 5-hour session never drives it; the
+  cycle average spans at least a day, and the recent pace from a local history
+  (provider and metric ids, percentages and timestamps for 25 hours, in the
+  cache directory) weighs only on the next 24 hours. `--recent-hours`,
+  `--alert-unused-percent` and `--alert-hours` tune it. Without the flag the
+  report is byte-for-byte unchanged and nothing is recorded.
+
+- **Add an API key from the tray popover.** A provider that needs only an
+  API key sent you to the TUI in a terminal; its key icon in the provider
+  list now opens a dialog for the key. The tray saves it to `config.toml`
+  with the same writer the Settings overlay uses (mode 600), fetches that
+  provider alone while the dialog shows a spinner, and keeps the key only
+  when the provider accepts it. A refused key puts the previous value back
+  and the dialog says why, so you can paste another. A provider card that
+  reads "No API key" opens the same dialog instead of pointing at the TUI,
+  and "No providers enabled" opens Customize.
+
+- **Sign in to Codex, Kimi and Nous Research from the tray popover, with a
+  device code.** These three sign in by typing a one-time code on their own
+  page, so they no longer need a terminal. Their sign-in icon in the provider
+  list, and "Sign in" on a card that reads "Not signed in", open a sheet that
+  shows the code with Copy, the time it has left, and "Open page". The tray
+  runs the provider's own login: `codex login --device-auth` (with
+  `CODEX_HOME` set to the login the Codex card reads), `kimi login` (in the
+  region `config.toml` names), or this project's Nous device flow. The sheet
+  shows a check once the login is saved, and the card fetches the new login
+  right away. An expired code offers a new one. When device sign-in cannot
+  run, the sheet says why and offers the terminal:
+  - the CLI is not installed;
+  - `config.toml` points the provider at a login file of its own;
+  - device sign-in is off for the ChatGPT account.
+
+  Cancelling, or closing the sheet, stops the CLI and everything it started.
+  Quitting the tray does too. The page's address never reaches the popover:
+  the tray opens it, and only on the provider's own hosts. Claude and Copilot
+  keep their terminal sign-in.
+
+### Changed
+
+- **Omarchy: a provider error reads as a notice with its fix.** The inline
+  status box shows an icon and a translated title for the kind of problem
+  (sign-in needed, connection problem, rate limited, refresh failed, not
+  installed), then the message. When the message names a command
+  (``Run `codex login` ``), the command is shown with a Copy button; it is
+  copied with `wl-copy`, never run. Connection problems and rate limits
+  offer Try again.
+
 ### Fixed
 
 - **Cursor opaque IDE sessions can fall back to `cursor-agent`.** When Cursor
@@ -50,27 +110,6 @@
   Moonshot, and Z.AI no longer inherit Claude's glyph; providers without a
   distinct Nerd Font mark use their documented short name (#523).
 
-### Added
-
-- **Omarchy: run a local build.** `reportBinary` (default `ai-usagebar`)
-  and `tuiBinary` (default `ai-usagebar-tui`) point the plugin at a build
-  other than the binaries on `PATH`: the first runs the report, settings
-  and the Nous login, the second opens the dashboard. They are set with
-  `omarchy bar set`; Settings has no control for them on purpose
-  (`omarchy/README.md`, Local builds).
-
-### Changed
-
-- **Omarchy: a provider error reads as a notice with its fix.** The inline
-  status box shows an icon and a translated title for the kind of problem
-  (sign-in needed, connection problem, rate limited, refresh failed, not
-  installed), then the message. When the message names a command
-  (``Run `codex login` ``), the command is shown with a Copy button; it is
-  copied with `wl-copy`, never run. Connection problems and rate limits
-  offer Try again.
-
-### Fixed
-
 - **Omarchy: no untranslated "Error" pill.** A provider in error showed a grey
   `Error` pill in every language beside refresh and settings. A red badge
   with the problem's icon and a one-word translated label replaces it, and
@@ -82,52 +121,6 @@
 - **Omarchy: window names follow the interface language.** Generic windows
   (`Session (5h)`, `Weekly (7d)`, `Weekly`, `Monthly`) stayed in English in
   the usage rows; they now use the catalog's names in all five locales.
-### Added
-
-- **Usage priorities: which AI to use first.** `usage --json --priorities`
-  adds a `ranking` of every configured provider, ordered by the weekly quota
-  projected to reset unused, and the first row worth using as
-  `recommendation`. Each provider is measured on its weekly window (the most
-  used one when there are several), so a 5-hour session never drives it; the
-  cycle average spans at least a day, and the recent pace from a local history
-  (provider and metric ids, percentages and timestamps for 25 hours, in the
-  cache directory) weighs only on the next 24 hours. `--recent-hours`,
-  `--alert-unused-percent` and `--alert-hours` tune it. Without the flag the
-  report is byte-for-byte unchanged and nothing is recorded.
-
-### Added
-
-- **Add an API key from the tray popover.** A provider that needs only an
-  API key sent you to the TUI in a terminal; its key icon in the provider
-  list now opens a dialog for the key. The tray saves it to `config.toml`
-  with the same writer the Settings overlay uses (mode 600), fetches that
-  provider alone while the dialog shows a spinner, and keeps the key only
-  when the provider accepts it. A refused key puts the previous value back
-  and the dialog says why, so you can paste another. A provider card that
-  reads "No API key" opens the same dialog instead of pointing at the TUI,
-  and "No providers enabled" opens Customize.
-
-- **Sign in to Codex, Kimi and Nous Research from the tray popover, with a
-  device code.** These three sign in by typing a one-time code on their own
-  page, so they no longer need a terminal. Their sign-in icon in the provider
-  list, and "Sign in" on a card that reads "Not signed in", open a sheet that
-  shows the code with Copy, the time it has left, and "Open page". The tray
-  runs the provider's own login: `codex login --device-auth` (with
-  `CODEX_HOME` set to the login the Codex card reads), `kimi login` (in the
-  region `config.toml` names), or this project's Nous device flow. The sheet
-  shows a check once the login is saved, and the card fetches the new login
-  right away. An expired code offers a new one. When device sign-in cannot
-  run, the sheet says why and offers the terminal:
-  - the CLI is not installed;
-  - `config.toml` points the provider at a login file of its own;
-  - device sign-in is off for the ChatGPT account.
-
-  Cancelling, or closing the sheet, stops the CLI and everything it started.
-  Quitting the tray does too. The page's address never reaches the popover:
-  the tray opens it, and only on the provider's own hosts. Claude and Copilot
-  keep their terminal sign-in.
-
-### Fixed
 
 - **A Kimi Code CLI login counts as signed in, in the provider list.** The
   list looked for the CLI's login under `~/credentials/` instead of
@@ -146,6 +139,10 @@
   another process; try again." instead of writing.
 
 ### Security
+
+- **Patched constant-time cryptographic helpers.** The locked `ctutils`
+  dependency is updated to 0.4.4, resolving RUSTSEC-2026-0385 in the hashing
+  and authenticated-encryption dependency chain.
 
 - **A provider's answer that quotes the API key is no longer written to the
   cache or shown in the report, the widget, or the CLI.** A provider that

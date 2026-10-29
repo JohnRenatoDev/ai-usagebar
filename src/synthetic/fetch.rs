@@ -208,7 +208,7 @@ mod tests {
             &Endpoints {
                 quotas: format!("{}/v2/quotas", server.url()),
             },
-            Duration::ZERO,
+            Duration::from_secs(60),
             Some("Standard"),
         )
         .await

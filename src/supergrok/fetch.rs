@@ -784,7 +784,7 @@ mod tests {
         cache.write_last_error(429, "billing limited");
         let outcome = fetch_snapshot_with(
             &cache,
-            Duration::ZERO,
+            Duration::from_secs(60),
             now(),
             || Some("scope-a".into()),
             || async { panic!("a usable cache must be served during backoff") },

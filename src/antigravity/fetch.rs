@@ -3641,7 +3641,7 @@ mod tests {
         let snap = cached_remote(&cache, &blob, false);
         cache.write_last_error(429, "quota limited");
 
-        let outcome = run(&cache, remote(&blob, &eps), Duration::ZERO)
+        let outcome = run(&cache, remote(&blob, &eps), Duration::from_secs(60))
             .await
             .unwrap();
 
@@ -3682,7 +3682,7 @@ mod tests {
                 local_bases: Some(vec![server.url().into()]),
                 ..remote(&blob, &eps)
             },
-            Duration::ZERO,
+            Duration::from_secs(60),
         )
         .await
         .unwrap();
