@@ -409,6 +409,12 @@ mod tests {
     }
 
     #[test]
+    fn icon_placeholder_matches_bar_icon() {
+        let v = build_placeholders(&snapshot(), now(), 5);
+        assert_eq!(v["icon"], VendorId::Antigravity.bar_icon());
+    }
+
+    #[test]
     fn every_row_is_labelled_by_its_model_group() {
         let v = build_placeholders(&snapshot(), now(), 5);
         assert_eq!(v["session_model"], GROUP_PRIMARY);
