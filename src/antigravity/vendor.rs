@@ -149,7 +149,7 @@ pub fn build_placeholders(
         optional(snap.third_party_weekly.as_ref(), GROUP_THIRD_PARTY);
 
     placeholders(vec![
-        ("icon", "󰧑".to_string()),
+        ("icon", VendorId::Antigravity.bar_icon().to_string()),
         (
             "vendor_short",
             VendorId::Antigravity.short_name().to_string(),
