@@ -82,7 +82,7 @@ pub fn build_placeholders(
         }
     };
     placeholders(vec![
-        ("icon", "󰚩".to_string()),
+        ("icon", VendorId::Kimi.bar_icon().to_string()),
         ("vendor_short", VendorId::Kimi.short_name().to_string()),
         // Cross-vendor aliases.
         ("plan", plan.to_string()),
@@ -378,6 +378,7 @@ mod tests {
         assert_eq!(values["weekly_pct"], "26");
         assert_eq!(values["kimi_window_pct"], "15");
         assert_eq!(values["session_pct"], "15");
+        assert_eq!(values["icon"], VendorId::Kimi.bar_icon());
     }
 
     #[test]

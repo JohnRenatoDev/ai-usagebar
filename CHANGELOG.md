@@ -46,6 +46,10 @@
   rows in the Waybar tooltip displayed the Claude icon glyph (`󰚩`) instead of
   the provider's mark (`󰇷`).
 
+- **Cross-provider `{icon}` uses each provider's own mark.** Kimi, MiniMax,
+  Moonshot, and Z.AI no longer inherit Claude's glyph; providers without a
+  distinct Nerd Font mark use their documented short name (#523).
+
 ### Added
 
 - **Omarchy: run a local build.** `reportBinary` (default `ai-usagebar`)
