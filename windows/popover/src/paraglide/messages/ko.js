@@ -160,6 +160,7 @@
 /** @typedef {{}} No_Usage_Or_Balance_Data_YetInputs */
 /** @typedef {{}} NoneInputs */
 /** @typedef {{}} Not_Checked_YetInputs */
+/** @typedef {{}} Not_Signed_InInputs */
 /** @typedef {{}} NotificationsInputs */
 /** @typedef {{}} Notify_MeInputs */
 /** @typedef {{}} NowInputs */
@@ -232,7 +233,29 @@
 /** @typedef {{}} Show_On_DemandInputs */
 /** @typedef {{}} Show_Usage_AsInputs */
 /** @typedef {{}} Show_Usage_As_HintInputs */
+/** @typedef {{ issuer: NonNullable<unknown> }} Sign_In_AskingInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Sign_In_Cli_MissingInputs */
+/** @typedef {{}} Sign_In_Code_ExpiredInputs */
+/** @typedef {{}} Sign_In_CopiedInputs */
+/** @typedef {{}} Sign_In_CopyInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Sign_In_Custom_PathInputs */
+/** @typedef {{}} Sign_In_DeniedInputs */
+/** @typedef {{ account: NonNullable<unknown> }} Sign_In_Device_OffInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Sign_In_Dialog_TitleInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Sign_In_DoneInputs */
+/** @typedef {{}} Sign_In_Enter_CodeInputs */
 /** @typedef {{}} Sign_In_ExpiredInputs */
+/** @typedef {{ time: NonNullable<unknown> }} Sign_In_Expires_InInputs */
+/** @typedef {{}} Sign_In_FailedInputs */
+/** @typedef {{}} Sign_In_FetchingInputs */
+/** @typedef {{}} Sign_In_New_CodeInputs */
+/** @typedef {{}} Sign_In_No_AnswerInputs */
+/** @typedef {{}} Sign_In_Open_PageInputs */
+/** @typedef {{ account: NonNullable<unknown> }} Sign_In_To_Track_UsageInputs */
+/** @typedef {{}} Sign_In_Try_AgainInputs */
+/** @typedef {{}} Sign_In_Use_TerminalInputs */
+/** @typedef {{}} Sign_In_WaitingInputs */
+/** @typedef {{ account: NonNullable<unknown> }} Sign_In_With_AccountInputs */
 /** @typedef {{}} Source_CodeInputs */
 /** @typedef {{}} Source_On_GithubInputs */
 /** @typedef {{}} StaleInputs */
@@ -936,6 +959,10 @@ export const not_checked_yet = /** @type {(inputs: Not_Checked_YetInputs) => Loc
 	return /** @type {LocalizedString} */ (`아직 확인 안 함`)
 };
 
+export const not_signed_in = /** @type {(inputs: Not_Signed_InInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`로그인되지 않음`)
+};
+
 export const notifications = /** @type {(inputs: NotificationsInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`알림`)
 };
@@ -1224,8 +1251,96 @@ export const show_usage_as_hint = /** @type {(inputs: Show_Usage_As_HintInputs) 
 	return /** @type {LocalizedString} */ (`사용은 쓴 만큼 막대를 채웁니다. 남은 양은 남은 만큼 채웁니다.`)
 };
 
+export const sign_in_asking = /** @type {(inputs: Sign_In_AskingInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`${i?.issuer}에 로그인 코드를 요청하는 중…`)
+};
+
+export const sign_in_cli_missing = /** @type {(inputs: Sign_In_Cli_MissingInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`${i?.provider} 명령줄 도구가 설치되어 있지 않습니다. 설치하거나 터미널에서 로그인하세요.`)
+};
+
+export const sign_in_code_expired = /** @type {(inputs: Sign_In_Code_ExpiredInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`승인되기 전에 코드가 만료되었습니다.`)
+};
+
+export const sign_in_copied = /** @type {(inputs: Sign_In_CopiedInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`복사됨`)
+};
+
+export const sign_in_copy = /** @type {(inputs: Sign_In_CopyInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`복사`)
+};
+
+export const sign_in_custom_path = /** @type {(inputs: Sign_In_Custom_PathInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`config.toml이 ${i?.provider}에 별도 로그인 파일을 지정하고 있어 터미널에서 로그인해야 합니다.`)
+};
+
+export const sign_in_denied = /** @type {(inputs: Sign_In_DeniedInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`브라우저에서 로그인이 거부되었습니다.`)
+};
+
+export const sign_in_device_off = /** @type {(inputs: Sign_In_Device_OffInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`이 계정은 기기 로그인이 꺼져 있습니다. ${i?.account} 보안 설정에서 켜거나 터미널에서 로그인하세요.`)
+};
+
+export const sign_in_dialog_title = /** @type {(inputs: Sign_In_Dialog_TitleInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`${i?.provider}에 로그인`)
+};
+
+export const sign_in_done = /** @type {(inputs: Sign_In_DoneInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`${i?.provider}에 로그인됨`)
+};
+
+export const sign_in_enter_code = /** @type {(inputs: Sign_In_Enter_CodeInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`페이지를 열고 이 코드를 입력하세요:`)
+};
+
 export const sign_in_expired = /** @type {(inputs: Sign_In_ExpiredInputs) => LocalizedString} */ () => {
 	return /** @type {LocalizedString} */ (`로그인 만료`)
+};
+
+export const sign_in_expires_in = /** @type {(inputs: Sign_In_Expires_InInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`${i?.time} 후 만료`)
+};
+
+export const sign_in_failed = /** @type {(inputs: Sign_In_FailedInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`로그인하지 못했습니다.`)
+};
+
+export const sign_in_fetching = /** @type {(inputs: Sign_In_FetchingInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`사용량을 가져오는 중…`)
+};
+
+export const sign_in_new_code = /** @type {(inputs: Sign_In_New_CodeInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`새 코드 받기`)
+};
+
+export const sign_in_no_answer = /** @type {(inputs: Sign_In_No_AnswerInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`트레이가 응답하지 않습니다. 닫고 다시 시도하세요.`)
+};
+
+export const sign_in_open_page = /** @type {(inputs: Sign_In_Open_PageInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`페이지 열기`)
+};
+
+export const sign_in_to_track_usage = /** @type {(inputs: Sign_In_To_Track_UsageInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`사용량을 보려면 ${i?.account} 계정으로 로그인하세요.`)
+};
+
+export const sign_in_try_again = /** @type {(inputs: Sign_In_Try_AgainInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`다시 시도`)
+};
+
+export const sign_in_use_terminal = /** @type {(inputs: Sign_In_Use_TerminalInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`터미널 사용`)
+};
+
+export const sign_in_waiting = /** @type {(inputs: Sign_In_WaitingInputs) => LocalizedString} */ () => {
+	return /** @type {LocalizedString} */ (`브라우저에서 승인하기를 기다리는 중…`)
+};
+
+export const sign_in_with_account = /** @type {(inputs: Sign_In_With_AccountInputs) => LocalizedString} */ (i) => {
+	return /** @type {LocalizedString} */ (`${i?.account} 계정으로`)
 };
 
 export const source_code = /** @type {(inputs: Source_CodeInputs) => LocalizedString} */ () => {

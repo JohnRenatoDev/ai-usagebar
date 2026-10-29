@@ -121,6 +121,7 @@ export function ProviderSection({
   onToggleShowAs,
 }: ProviderSectionProps) {
   const { language } = useI18n();
+  const actions = usePopoverActions();
   // A provider with several accounts titles its card after itself; the single-account
   // screen — including the per-account desktop title — reads the card's own title.
   const grouped = group && group.cards.length > 1;
@@ -199,7 +200,7 @@ export function ProviderSection({
           lifted ? "lifted-surface" : "card-surface",
         )}
       >
-        {card.errorTitle ? <ErrorRow explained={explainError(card.errorDetail, card.id, language)} /> : null}
+        {card.errorTitle ? <ErrorRow explained={explainError(card.errorDetail, card.id, language, actions.deviceProvider(card.id))} /> : null}
         {alwaysRows.map((row, index) => renderRow(row, index, condensedAlways, false))}
         {showExpander ? (
           <button
@@ -588,9 +589,10 @@ interface ErrorRowProps {
 
 /**
  * A provider with nothing to show: the verdict, the one-line hint, and — when there is a fix to
- * offer — a small action button. A missing key opens the key dialog and no provider switched on
- * opens Customize, both inside the popover; the rest are host commands. Terminal-side fixes
- * (sign-in) and waits (429) get no button.
+ * offer — a small action button. A missing key opens the key dialog, a device-code provider that
+ * is not signed in opens the sign-in sheet, and no provider switched on opens Customize, all
+ * inside the popover; the rest are host commands. Terminal-side fixes (the other sign-ins) and
+ * waits (429) get no button.
  */
 export function ErrorRow({ explained }: ErrorRowProps) {
   const actions = usePopoverActions();
@@ -598,6 +600,7 @@ export function ErrorRow({ explained }: ErrorRowProps) {
     const action = explained.action;
     if (!action) return;
     if (action.cmd === "add-key" && action.id) actions.addKey(action.id, trigger);
+    else if (action.cmd === "sign-in" && action.id) actions.signIn(action.id, trigger);
     else if (action.cmd === "customize") actions.openCustomize();
     else sendCommand(action.cmd);
   }
@@ -610,7 +613,7 @@ export function ErrorRow({ explained }: ErrorRowProps) {
       {explained.action ? (
         <ErrorActionButton
           label={explained.action.label}
-          providerId={explained.action.cmd === "add-key" ? explained.action.id : undefined}
+          providerId={explained.action.cmd === "add-key" || explained.action.cmd === "sign-in" ? explained.action.id : undefined}
           onClick={run}
         />
       ) : null}

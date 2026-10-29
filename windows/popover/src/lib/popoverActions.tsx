@@ -2,19 +2,35 @@ import { createContext, useContext } from "react";
 
 /**
  * The fixes the popover makes itself instead of sending the user elsewhere:
- * the key dialog for a key-only provider, and the Customize screen where a
- * provider is switched on. Provided by the App, used by the provider list and
+ * the key dialog for a key-only provider, the sign-in sheet for a device-code
+ * provider, and the Customize screen where a provider is switched on. Provided by the App, used by the provider list and
  * by a card's error row.
  */
 export interface PopoverActions {
   /** Open the key dialog for `providerId`; focus goes back to `trigger` when it closes. */
   addKey: (providerId: string, trigger: HTMLElement | null) => void;
+  /**
+   * A card's device-code provider, or null: the card whose id is the provider's
+   * own (not an `@account`), when the provider signs in from the popover.
+   */
+  deviceProvider: (cardId: string) => DeviceProvider | null;
   openCustomize: () => void;
+  /** Open the sign-in sheet for `providerId`; focus goes back to `trigger` when it closes. */
+  signIn: (providerId: string, trigger: HTMLElement | null) => void;
+}
+
+/** What a card needs to offer the sign-in sheet. */
+export interface DeviceProvider {
+  account: string;
+  configured: boolean;
+  id: string;
 }
 
 const PopoverActionsContext = createContext<PopoverActions>({
   addKey: () => {},
+  deviceProvider: () => null,
   openCustomize: () => {},
+  signIn: () => {},
 });
 
 export const PopoverActionsProvider = PopoverActionsContext.Provider;

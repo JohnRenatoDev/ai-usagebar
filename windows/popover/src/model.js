@@ -60,6 +60,7 @@ export function emptyPayload(hostError) {
     providersError: "",
     accent: null,
     keyCheck: null,
+    signIn: null,
   };
 }
 
@@ -112,6 +113,7 @@ function normalizePayload(parsed) {
     providersError: clean(parsed.providers_error, 300),
     accent: normalizeAccent(parsed.accent),
     keyCheck: normalizeKeyCheck(parsed.key_check),
+    signIn: normalizeSignIn(parsed.sign_in),
   };
 }
 
@@ -157,7 +159,60 @@ export function keyDialogPhase(keyCheck, pendingSeq, sentAtMs, nowMs) {
   return Number(nowMs) - Number(sentAtMs) >= KEY_CHECK_NO_ANSWER_MS ? "no-answer" : "checking";
 }
 
-const SIGN_IN_ACTIONS = ["terminal", "app", "settings"];
+// The host's device-code sign-in (`sign_in` in the payload). As with the key
+// check, an unknown state or a malformed fact means "no fact", never a guess.
+const SIGN_IN_STATES = ["starting", "waiting", "ok", "expired", "unavailable", "failed"];
+const SIGN_IN_REASONS = ["device-off", "cli-missing", "custom-path", "denied"];
+
+/** @returns {import("./lib/types").SignInFact | null} */
+function normalizeSignIn(value) {
+  if (!isPlainObject(value)) return null;
+  const state = SIGN_IN_STATES.includes(value.state) ? value.state : null;
+  if (!state) return null;
+  const id = clean(value.id, 64).trim();
+  const seq = Number(value.seq);
+  if (!id || !Number.isInteger(seq) || seq < 0) return null;
+  // The code is typed on the provider's page; anything but its shape is dropped.
+  const code = /^[A-Za-z0-9-]{4,24}$/.test(String(value.code || "")) ? String(value.code) : "";
+  const expiresAt = Number(value.expires_at);
+  return {
+    id,
+    seq,
+    state,
+    code,
+    expiresAt: Number.isFinite(expiresAt) && expiresAt > 0 ? expiresAt : 0,
+    reason: SIGN_IN_REASONS.includes(value.reason) ? value.reason : "",
+    error: clean(value.error, 300),
+  };
+}
+
+/** A start the host has not acknowledged by then is reported, not left spinning. */
+export const SIGN_IN_NO_ANSWER_MS = 15_000;
+
+/**
+ * The sign-in sheet's phase for one start. Only the fact for `pendingSeq`
+ * belongs to the sheet. A code past its expiry on this clock reads as
+ * expired at once, though the host only gives up on it a little later.
+ *
+ * @returns {"idle" | "starting" | "waiting" | "ok" | "expired" | "unavailable" | "failed" | "no-answer"}
+ */
+export function signInPhase(fact, pendingSeq, sentAtMs, nowMs) {
+  if (pendingSeq === null || pendingSeq === undefined) return "idle";
+  const mine = fact && fact.seq === pendingSeq ? fact : null;
+  if (!mine) return Number(nowMs) - Number(sentAtMs) >= SIGN_IN_NO_ANSWER_MS ? "no-answer" : "starting";
+  if (mine.state === "waiting" && mine.expiresAt > 0 && Number(nowMs) >= mine.expiresAt) return "expired";
+  return mine.state;
+}
+
+/** "14:32": what is left of a code, floored at zero. */
+export function countdownText(expiresAt, nowMs) {
+  const left = Math.max(0, Math.floor((Number(expiresAt) - Number(nowMs)) / 1000));
+  const minutes = Math.floor(left / 60);
+  const seconds = left % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+const SIGN_IN_ACTIONS = ["device", "terminal", "app", "settings"];
 const ADD_ACCOUNT_KINDS = ["code", "desktop", "codex"];
 
 // Every built-in provider from the host's catalog (Settings → Providers).
@@ -178,6 +233,8 @@ function normalizeProviders(value) {
       signIn: clean(raw.sign_in, 200),
       keyLabel: clean(raw.key_label, 120),
       keyNote: clean(raw.key_note, 300),
+      signInAccount: clean(raw.sign_in_account, 60),
+      signInIssuer: clean(raw.sign_in_issuer, 60),
       action: SIGN_IN_ACTIONS.includes(raw.action) ? raw.action : "",
       addAccounts: Array.isArray(raw.add_accounts) ? ADD_ACCOUNT_KINDS.filter((kind) => raw.add_accounts.includes(kind)) : [],
     });
@@ -1641,6 +1698,8 @@ export function providerListRows(providers, cards, layout) {
     state: provider ? providerState(provider) : "",
     signIn: provider ? provider.signIn : "",
     action: provider ? provider.action : "",
+    signInAccount: provider ? provider.signInAccount || "" : "",
+    signInIssuer: provider ? provider.signInIssuer || "" : "",
     keyLabel: provider ? provider.keyLabel || "" : "",
     keyNote: provider ? provider.keyNote || "" : "",
     addAccounts: provider ? provider.addAccounts : [],
@@ -1987,11 +2046,20 @@ function shortenDiagnostic(raw, locale) {
 // can offer (a host command) when there is one. Errors whose fix is a terminal
 // command (sign-in) or waiting (429 backoff) carry no action.
 /** @returns {ExplainedError} */
-export function explainError(text, entry, locale) {
+export function explainError(text, entry, locale, device) {
   const raw = clean(text, 1200);
   const options = { locale: lang(locale) };
   const refresh = { cmd: "refresh", label: m.refresh({}, options) };
   if (raw === "") return { title: "", hint: "" };
+  // A device-code provider signs in from here: the card that has no login, or
+  // whose login the provider refused, offers the sheet instead of a terminal.
+  if (device && device.id && (!device.configured || SIGN_IN_TROUBLE.test(raw))) {
+    return {
+      title: device.configured ? m.sign_in_expired({}, options) : m.not_signed_in({}, options),
+      hint: m.sign_in_to_track_usage({ account: device.account }, options),
+      action: { cmd: "sign-in", id: device.id, label: m.provider_sign_in({}, options) },
+    };
+  }
   if (/no vendors enabled/i.test(raw)) {
     return { title: m.no_providers_enabled({}, options), hint: m.turn_one_on_in_customize({}, options), action: { cmd: "customize", label: m.customize({}, options) } };
   }
@@ -2064,6 +2132,9 @@ function dropRedundantResetRows(rows) {
 function isWarningSection(section) {
   return section.type === "text" && (section.label === "Warning" || /schema drift/i.test(section.label));
 }
+
+// A login the provider refused, or one that is gone: what a sign-in fixes.
+const SIGN_IN_TROUBLE = /HTTP 401|HTTP 403|authentication rejected|not signed in|no credentials|token refresh failed|re-auth|log in again|login is required|run `claude`|run `codex|run `kimi|auth nous login/i;
 
 export function friendlyError(text, entry, locale) {
   return joinError(explainError(text, entry, locale));

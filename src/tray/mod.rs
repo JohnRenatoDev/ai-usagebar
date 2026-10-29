@@ -6,6 +6,7 @@
 
 mod accent;
 mod browse;
+mod device_login;
 pub mod hotkey;
 mod icon;
 // Which origin the tray's IPC bridge and the WebView accept. Pure decisions, compiled

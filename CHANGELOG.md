@@ -92,7 +92,32 @@
   reads "No API key" opens the same dialog instead of pointing at the TUI,
   and "No providers enabled" opens Customize.
 
+- **Sign in to Codex, Kimi and Nous Research from the tray popover, with a
+  device code.** These three sign in by typing a one-time code on their own
+  page, so they no longer need a terminal. Their sign-in icon in the provider
+  list, and "Sign in" on a card that reads "Not signed in", open a sheet that
+  shows the code with Copy, the time it has left, and "Open page". The tray
+  runs the provider's own login: `codex login --device-auth` (with
+  `CODEX_HOME` set to the login the Codex card reads), `kimi login` (in the
+  region `config.toml` names), or this project's Nous device flow. The sheet
+  shows a check once the login is saved, and the card fetches the new login
+  right away. An expired code offers a new one. When device sign-in cannot
+  run, the sheet says why and offers the terminal:
+  - the CLI is not installed;
+  - `config.toml` points the provider at a login file of its own;
+  - device sign-in is off for the ChatGPT account.
+
+  Cancelling, or closing the sheet, stops the CLI and everything it started.
+  Quitting the tray does too. The page's address never reaches the popover:
+  the tray opens it, and only on the provider's own hosts. Claude and Copilot
+  keep their terminal sign-in.
+
 ### Fixed
+
+- **A Kimi Code CLI login counts as signed in, in the provider list.** The
+  list looked for the CLI's login under `~/credentials/` instead of
+  `~/.kimi-code/credentials/`. So a provider whose card read the login fine
+  still showed the sign-in alert.
 
 - **Saving `config.toml` from the tray, the TUI, and the CLI waits for the
   other instead of overwriting it.** Their saves are read-modify-writes of

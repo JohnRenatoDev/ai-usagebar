@@ -267,8 +267,8 @@ export interface Accent {
 
 /** One built-in provider from the host catalog, enabled or not. */
 export interface ProviderInfo {
-  /** "terminal" | "app" | "settings" | "": what Sign in does on this host. */
-  action: "" | "app" | "settings" | "terminal";
+  /** "device" | "terminal" | "app" | "settings" | "": what Sign in does on this host. */
+  action: "" | "app" | "device" | "settings" | "terminal";
   /** Account kinds this row can add (macOS): Claude Code, Claude Desktop, Codex. */
   addAccounts: Array<"code" | "codex" | "desktop">;
   configured: boolean;
@@ -281,6 +281,10 @@ export interface ProviderInfo {
   keyNote?: string;
   name: string;
   signIn: string;
+  /** A device-code provider's account, for the sign-in sheet ("ChatGPT"); "" otherwise. */
+  signInAccount?: string;
+  /** Who hands out a device-code provider's code ("OpenAI"); "" otherwise. */
+  signInIssuer?: string;
 }
 
 /** One row of the single provider list, as built by `providerListRows`. */
@@ -299,7 +303,10 @@ export interface ProviderListRow {
   state: string;
   /** The catalog's sign-in hint; the alert icon's tooltip while `state` is "needs". */
   signIn: string;
-  action: "" | "app" | "settings" | "terminal";
+  action: "" | "app" | "device" | "settings" | "terminal";
+  /** A device-code provider's account and code issuer, for the sign-in sheet; "" otherwise. */
+  signInAccount: string;
+  signInIssuer: string;
   /** The credential's label and note for a key-only provider ("API key"); "" otherwise. */
   keyLabel: string;
   keyNote: string;
@@ -311,6 +318,21 @@ export interface ProviderListRow {
 }
 
 /** The host's verdict for one key send, matched to it by `seq`. */
+/** The host's device-code sign-in (`sign_in` in the payload); see `device_login.rs`. */
+export interface SignInFact {
+  /** The provider slug the flow runs for. */
+  id: string;
+  /** The one-time code to type on the provider's page; "" until there is one. */
+  code: string;
+  error: string;
+  /** Wall-clock ms when the code stops working; 0 while unknown. */
+  expiresAt: number;
+  /** "device-off" | "cli-missing" | "custom-path" | "denied" | "". */
+  reason: string;
+  seq: number;
+  state: "expired" | "failed" | "ok" | "starting" | "unavailable" | "waiting";
+}
+
 export interface KeyCheck {
   /** The provider slug the check ran for. */
   id: string;
@@ -328,6 +350,7 @@ export interface Payload {
   hostError: string;
   /** The host's last key-check verdict; null before the first send. */
   keyCheck: KeyCheck | null;
+  signIn: SignInFact | null;
   /** macOS menu-bar look the host draws. */
   menuBarLook: MenuBarLook;
   /** Whether the Quattro look draws the short name beside the logo. */

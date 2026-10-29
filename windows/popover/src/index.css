@@ -1196,6 +1196,39 @@ body:has(.native-panel[data-os="windows"]) {
   color: var(--label-3);
 }
 
+/* The sign-in sheet's one-time code: a filled box, the code large enough to
+   read across the room, Copy at its end. Dimmed once the code expired. */
+.sign-in-code {
+  display: flex;
+  min-height: calc(var(--control-h) + 22px);
+  align-items: center;
+  gap: var(--gap-item);
+  padding: 8px 8px 8px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--control-fill);
+}
+
+.sign-in-code-text {
+  min-width: 0;
+  flex: 1;
+  color: var(--label-1);
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  overflow-wrap: anywhere;
+}
+
+.sign-in-code[data-dimmed] .sign-in-code-text {
+  color: var(--label-3);
+}
+
+.sign-in-done {
+  width: 36px;
+  height: 36px;
+  color: var(--green);
+}
+
 .threshold-input::-webkit-inner-spin-button,
 .threshold-input::-webkit-outer-spin-button {
   appearance: none;

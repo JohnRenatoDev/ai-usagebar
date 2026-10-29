@@ -18,6 +18,9 @@ use crate::vendor::{AuthKind, VendorId};
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SignIn {
+    /// A device-code login the popover runs itself ([`super::device_login`]);
+    /// the command is the terminal fallback the sheet offers when it cannot.
+    Device(&'static str),
     /// Run the provider's own login command in a terminal.
     Terminal(&'static str),
     /// Bring a desktop app forward; its window is where the login happens.
@@ -30,6 +33,7 @@ pub(crate) enum SignIn {
 impl SignIn {
     fn kind(self) -> &'static str {
         match self {
+            SignIn::Device(_) => "device",
             SignIn::Terminal(_) => "terminal",
             SignIn::App(_) => "app",
             SignIn::Settings => "settings",
@@ -43,6 +47,9 @@ pub(crate) fn sign_in_for(vendor: VendorId, macos: bool) -> SignIn {
     match vendor {
         VendorId::Cursor if macos => SignIn::App("Cursor"),
         VendorId::Antigravity if macos => SignIn::App("Antigravity"),
+        _ if super::device_login::Flow::for_vendor(vendor).is_some() => {
+            SignIn::Device(vendor.login_command())
+        }
         _ if !vendor.login_command().is_empty() => SignIn::Terminal(vendor.login_command()),
         _ if vendor.auth_kind() == AuthKind::ApiKey => SignIn::Settings,
         _ => SignIn::None,
@@ -75,6 +82,15 @@ pub(crate) fn rows_json(rows: &[VendorStatus], macos: bool) -> Value {
                 ) {
                     obj.insert("key_label".into(), json!(key.secret_label));
                     obj.insert("key_note".into(), json!(key.note));
+                }
+                // The sign-in sheet's words: whose account the page signs in
+                // and who hands out the code, product knowledge kept here.
+                if let (Some(flow), Some(obj)) = (
+                    super::device_login::Flow::for_vendor(vendor),
+                    entry.as_object_mut(),
+                ) {
+                    obj.insert("sign_in_account".into(), json!(flow.account()));
+                    obj.insert("sign_in_issuer".into(), json!(flow.issuer()));
                 }
                 Some(entry)
             })
@@ -185,7 +201,11 @@ pub(crate) fn sign_in(value: &Value) {
     };
     #[cfg(any(windows, target_os = "macos"))]
     match sign_in_for(vendor, cfg!(target_os = "macos")) {
-        SignIn::Terminal(command) => super::tui_launch::run_in_terminal(&login_line(command)),
+        // `sign-in-provider` is the sheet's "Use the terminal" for a device
+        // provider: its own login command, in a terminal.
+        SignIn::Device(command) | SignIn::Terminal(command) => {
+            super::tui_launch::run_in_terminal(&login_line(command))
+        }
         SignIn::App(name) => open_app(name),
         SignIn::Settings => super::tui_launch::open(),
         SignIn::None => {}
@@ -700,7 +720,10 @@ mod tests {
         for &vendor in VendorId::all() {
             let action = sign_in_for(vendor, true);
             match vendor.auth_kind() {
-                AuthKind::Oauth => assert!(matches!(action, SignIn::Terminal(_)), "{vendor:?}"),
+                AuthKind::Oauth => assert!(
+                    matches!(action, SignIn::Terminal(_) | SignIn::Device(_)),
+                    "{vendor:?}"
+                ),
                 AuthKind::ApiKey if vendor.login_command().is_empty() => {
                     assert_eq!(action, SignIn::Settings, "{vendor:?}")
                 }
@@ -715,7 +738,7 @@ mod tests {
         assert_eq!(sign_in_for(VendorId::Cursor, false), SignIn::None);
         assert_eq!(
             sign_in_for(VendorId::Openai, false),
-            SignIn::Terminal("codex login")
+            SignIn::Device("codex login")
         );
         assert_eq!(sign_in_for(VendorId::Zai, false), SignIn::Settings);
     }
@@ -746,6 +769,30 @@ mod tests {
         assert_eq!(cursor["configured"], false);
         assert_eq!(cursor["action"], "app");
         assert_eq!(cursor["sign_in"], VendorId::Cursor.sign_in_hint());
+    }
+
+    #[test]
+    fn device_providers_sign_in_from_the_popover_with_their_words() {
+        let rows = default_rows();
+        let json = rows_json(&rows, true);
+        let list = json.as_array().unwrap();
+        let row = |id: &str| list.iter().find(|row| row["id"] == id).unwrap().clone();
+        for (id, account, issuer) in [
+            ("openai", "ChatGPT", "OpenAI"),
+            ("kimi", "Kimi", "Kimi"),
+            ("nous", "Nous Portal", "Nous Research"),
+        ] {
+            let row = row(id);
+            assert_eq!(row["action"], "device", "{id}");
+            assert_eq!(row["sign_in_account"], account, "{id}");
+            assert_eq!(row["sign_in_issuer"], issuer, "{id}");
+        }
+        // The terminal providers keep the terminal, and carry no sheet words.
+        for id in ["anthropic", "copilot"] {
+            let row = row(id);
+            assert_eq!(row["action"], "terminal", "{id}");
+            assert!(row.get("sign_in_account").is_none(), "{id}");
+        }
     }
 
     #[test]

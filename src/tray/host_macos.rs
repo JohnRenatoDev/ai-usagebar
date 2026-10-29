@@ -18,9 +18,10 @@ use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSColor,
     NSCompositingOperation, NSEvent, NSEventMask, NSFont, NSFontAttributeName,
     NSFontWeightSemibold, NSForegroundColorAttributeName, NSGlassEffectView,
-    NSGlassEffectViewStyle, NSImage, NSImageScaling, NSPasteboard, NSPasteboardTypePNG, NSScreen,
-    NSStringDrawing, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode,
+    NSGlassEffectViewStyle, NSImage, NSImageScaling, NSPasteboard, NSPasteboardTypePNG,
+    NSPasteboardTypeString, NSScreen, NSStringDrawing, NSView, NSVisualEffectBlendingMode,
+    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
+    NSWindowOrderingMode,
 };
 use objc2_foundation::{
     MainThreadMarker, NSAttributedStringKey, NSData, NSDictionary, NSPoint, NSRect, NSSize,
@@ -354,6 +355,8 @@ fn run_loop() -> Result<(), String> {
             } => hide_popover(&mut state),
             Event::LoopDestroyed => {
                 let _ = state.worker.send(WorkerCmd::Shutdown);
+                // A sign-in CLI would otherwise outlive the tray, polling.
+                super::device_login::stop_all();
             }
             _ => {}
         }
@@ -593,21 +596,8 @@ fn stamp_facts(state: &mut TrayState) {
     let Some(obj) = state.payload.as_object_mut() else {
         return;
     };
-    for key in [
-        "shortcut",
-        "shortcut_error",
-        "refresh_minutes",
-        "updates",
-        "update",
-        "update_checked_at",
-        "repository",
-        "version",
-        "accounts",
-        "providers",
-        "providers_error",
-        "key_check",
-    ] {
-        obj.insert(key.into(), stamped[key].clone());
+    for key in super::payload::STAMPED_FACTS {
+        obj.insert((*key).into(), stamped[*key].clone());
     }
 }
 
@@ -825,6 +815,15 @@ fn copy_png_to_clipboard(bytes: &[u8]) -> bool {
     let data = NSData::with_bytes(bytes);
     // SAFETY: AppKit exports the PNG pasteboard type name for the lifetime of the process.
     unsafe { pasteboard.setData_forType(Some(&data), NSPasteboardTypePNG) }
+}
+
+/// Puts plain text on the general pasteboard: the sign-in sheet's one-time code.
+fn copy_text_to_clipboard(text: &str) -> bool {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+    let string = NSString::from_str(text);
+    // SAFETY: AppKit exports the string pasteboard type name for the lifetime of the process.
+    unsafe { pasteboard.setString_forType(&string, NSPasteboardTypeString) }
 }
 
 fn popover_payload(state: &TrayState) -> String {
@@ -1108,6 +1107,32 @@ fn handle_ipc(state: &mut TrayState, body: &str, control_flow: &mut ControlFlow)
                     with_facts(&state.facts, |f| f.key_check = Some(fact));
                     apply_facts(state);
                 }
+            }
+        }
+        "start-sign-in" => {
+            let push = state.proxy.clone();
+            let worker = state.worker.clone();
+            super::device_login::start(
+                &state.facts,
+                &value,
+                move || {
+                    let _ = push.send_event(UserEvent::Facts);
+                },
+                move || {
+                    let _ = worker.send(WorkerCmd::Refresh);
+                },
+            );
+            apply_facts(state);
+        }
+        "cancel-sign-in" => {
+            if super::device_login::cancel(&state.facts, &value) {
+                apply_facts(state);
+            }
+        }
+        "open-sign-in-page" => super::device_login::open_page(&state.facts, &value),
+        "copy-sign-in-code" => {
+            if let Some(code) = super::device_login::code_to_copy(&state.facts, &value) {
+                copy_text_to_clipboard(&code);
             }
         }
         "add-account" => super::providers::add_account(&value),

@@ -162,6 +162,7 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{}} No_Usage_Or_Balance_Data_YetInputs */
 /** @typedef {{}} NoneInputs */
 /** @typedef {{}} Not_Checked_YetInputs */
+/** @typedef {{}} Not_Signed_InInputs */
 /** @typedef {{}} NotificationsInputs */
 /** @typedef {{}} Notify_MeInputs */
 /** @typedef {{}} NowInputs */
@@ -234,7 +235,29 @@ import { getLocale, experimentalStaticLocale } from "../runtime.js"
 /** @typedef {{}} Show_On_DemandInputs */
 /** @typedef {{}} Show_Usage_AsInputs */
 /** @typedef {{}} Show_Usage_As_HintInputs */
+/** @typedef {{ issuer: NonNullable<unknown> }} Sign_In_AskingInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Sign_In_Cli_MissingInputs */
+/** @typedef {{}} Sign_In_Code_ExpiredInputs */
+/** @typedef {{}} Sign_In_CopiedInputs */
+/** @typedef {{}} Sign_In_CopyInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Sign_In_Custom_PathInputs */
+/** @typedef {{}} Sign_In_DeniedInputs */
+/** @typedef {{ account: NonNullable<unknown> }} Sign_In_Device_OffInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Sign_In_Dialog_TitleInputs */
+/** @typedef {{ provider: NonNullable<unknown> }} Sign_In_DoneInputs */
+/** @typedef {{}} Sign_In_Enter_CodeInputs */
 /** @typedef {{}} Sign_In_ExpiredInputs */
+/** @typedef {{ time: NonNullable<unknown> }} Sign_In_Expires_InInputs */
+/** @typedef {{}} Sign_In_FailedInputs */
+/** @typedef {{}} Sign_In_FetchingInputs */
+/** @typedef {{}} Sign_In_New_CodeInputs */
+/** @typedef {{}} Sign_In_No_AnswerInputs */
+/** @typedef {{}} Sign_In_Open_PageInputs */
+/** @typedef {{ account: NonNullable<unknown> }} Sign_In_To_Track_UsageInputs */
+/** @typedef {{}} Sign_In_Try_AgainInputs */
+/** @typedef {{}} Sign_In_Use_TerminalInputs */
+/** @typedef {{}} Sign_In_WaitingInputs */
+/** @typedef {{ account: NonNullable<unknown> }} Sign_In_With_AccountInputs */
 /** @typedef {{}} Source_CodeInputs */
 /** @typedef {{}} Source_On_GithubInputs */
 /** @typedef {{}} StaleInputs */
@@ -2872,6 +2895,22 @@ export const not_checked_yet = /** @type {((inputs?: Not_Checked_YetInputs, opti
 /**
 * | output |
 * | --- |
+* | "Not signed in" |
+*
+* @param {Not_Signed_InInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const not_signed_in = /** @type {((inputs?: Not_Signed_InInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Not_Signed_InInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.not_signed_in(inputs)
+	if (locale === "ko") return __ko.not_signed_in(inputs)
+	if (locale === "es") return __es.not_signed_in(inputs)
+	return __en.not_signed_in(inputs)
+});
+/**
+* | output |
+* | --- |
 * | "Notifications" |
 *
 * @param {NotificationsInputs} inputs
@@ -4024,6 +4063,182 @@ export const show_usage_as_hint = /** @type {((inputs?: Show_Usage_As_HintInputs
 /**
 * | output |
 * | --- |
+* | "Asking {issuer} for a sign-in code…" |
+*
+* @param {Sign_In_AskingInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_asking = /** @type {((inputs: Sign_In_AskingInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_AskingInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_asking(inputs)
+	if (locale === "ko") return __ko.sign_in_asking(inputs)
+	if (locale === "es") return __es.sign_in_asking(inputs)
+	return __en.sign_in_asking(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "{provider}'s command-line tool isn't installed here. Install it, or sign in from the terminal." |
+*
+* @param {Sign_In_Cli_MissingInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_cli_missing = /** @type {((inputs: Sign_In_Cli_MissingInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_Cli_MissingInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_cli_missing(inputs)
+	if (locale === "ko") return __ko.sign_in_cli_missing(inputs)
+	if (locale === "es") return __es.sign_in_cli_missing(inputs)
+	return __en.sign_in_cli_missing(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "The code expired before it was approved." |
+*
+* @param {Sign_In_Code_ExpiredInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_code_expired = /** @type {((inputs?: Sign_In_Code_ExpiredInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_Code_ExpiredInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_code_expired(inputs)
+	if (locale === "ko") return __ko.sign_in_code_expired(inputs)
+	if (locale === "es") return __es.sign_in_code_expired(inputs)
+	return __en.sign_in_code_expired(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Copied" |
+*
+* @param {Sign_In_CopiedInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_copied = /** @type {((inputs?: Sign_In_CopiedInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_CopiedInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_copied(inputs)
+	if (locale === "ko") return __ko.sign_in_copied(inputs)
+	if (locale === "es") return __es.sign_in_copied(inputs)
+	return __en.sign_in_copied(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Copy" |
+*
+* @param {Sign_In_CopyInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_copy = /** @type {((inputs?: Sign_In_CopyInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_CopyInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_copy(inputs)
+	if (locale === "ko") return __ko.sign_in_copy(inputs)
+	if (locale === "es") return __es.sign_in_copy(inputs)
+	return __en.sign_in_copy(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "config.toml points {provider} at a login file of its own, so sign in from the terminal." |
+*
+* @param {Sign_In_Custom_PathInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_custom_path = /** @type {((inputs: Sign_In_Custom_PathInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_Custom_PathInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_custom_path(inputs)
+	if (locale === "ko") return __ko.sign_in_custom_path(inputs)
+	if (locale === "es") return __es.sign_in_custom_path(inputs)
+	return __en.sign_in_custom_path(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "The sign-in was turned down in the browser." |
+*
+* @param {Sign_In_DeniedInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_denied = /** @type {((inputs?: Sign_In_DeniedInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_DeniedInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_denied(inputs)
+	if (locale === "ko") return __ko.sign_in_denied(inputs)
+	if (locale === "es") return __es.sign_in_denied(inputs)
+	return __en.sign_in_denied(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Device sign-in is off for this account. Turn it on in {account}'s security settings, or sign in from the terminal." |
+*
+* @param {Sign_In_Device_OffInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_device_off = /** @type {((inputs: Sign_In_Device_OffInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_Device_OffInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_device_off(inputs)
+	if (locale === "ko") return __ko.sign_in_device_off(inputs)
+	if (locale === "es") return __es.sign_in_device_off(inputs)
+	return __en.sign_in_device_off(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Sign in to {provider}" |
+*
+* @param {Sign_In_Dialog_TitleInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_dialog_title = /** @type {((inputs: Sign_In_Dialog_TitleInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_Dialog_TitleInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_dialog_title(inputs)
+	if (locale === "ko") return __ko.sign_in_dialog_title(inputs)
+	if (locale === "es") return __es.sign_in_dialog_title(inputs)
+	return __en.sign_in_dialog_title(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Signed in to {provider}" |
+*
+* @param {Sign_In_DoneInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_done = /** @type {((inputs: Sign_In_DoneInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_DoneInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_done(inputs)
+	if (locale === "ko") return __ko.sign_in_done(inputs)
+	if (locale === "es") return __es.sign_in_done(inputs)
+	return __en.sign_in_done(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Open the page and enter this code:" |
+*
+* @param {Sign_In_Enter_CodeInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_enter_code = /** @type {((inputs?: Sign_In_Enter_CodeInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_Enter_CodeInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_enter_code(inputs)
+	if (locale === "ko") return __ko.sign_in_enter_code(inputs)
+	if (locale === "es") return __es.sign_in_enter_code(inputs)
+	return __en.sign_in_enter_code(inputs)
+});
+/**
+* | output |
+* | --- |
 * | "Sign-in expired" |
 *
 * @param {Sign_In_ExpiredInputs} inputs
@@ -4036,6 +4251,182 @@ export const sign_in_expired = /** @type {((inputs?: Sign_In_ExpiredInputs, opti
 	if (locale === "ko") return __ko.sign_in_expired(inputs)
 	if (locale === "es") return __es.sign_in_expired(inputs)
 	return __en.sign_in_expired(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Expires in {time}" |
+*
+* @param {Sign_In_Expires_InInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_expires_in = /** @type {((inputs: Sign_In_Expires_InInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_Expires_InInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_expires_in(inputs)
+	if (locale === "ko") return __ko.sign_in_expires_in(inputs)
+	if (locale === "es") return __es.sign_in_expires_in(inputs)
+	return __en.sign_in_expires_in(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Couldn't sign in." |
+*
+* @param {Sign_In_FailedInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_failed = /** @type {((inputs?: Sign_In_FailedInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_FailedInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_failed(inputs)
+	if (locale === "ko") return __ko.sign_in_failed(inputs)
+	if (locale === "es") return __es.sign_in_failed(inputs)
+	return __en.sign_in_failed(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Fetching your usage…" |
+*
+* @param {Sign_In_FetchingInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_fetching = /** @type {((inputs?: Sign_In_FetchingInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_FetchingInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_fetching(inputs)
+	if (locale === "ko") return __ko.sign_in_fetching(inputs)
+	if (locale === "es") return __es.sign_in_fetching(inputs)
+	return __en.sign_in_fetching(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Get a new code" |
+*
+* @param {Sign_In_New_CodeInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_new_code = /** @type {((inputs?: Sign_In_New_CodeInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_New_CodeInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_new_code(inputs)
+	if (locale === "ko") return __ko.sign_in_new_code(inputs)
+	if (locale === "es") return __es.sign_in_new_code(inputs)
+	return __en.sign_in_new_code(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "The tray hasn't answered. Close this and try again." |
+*
+* @param {Sign_In_No_AnswerInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_no_answer = /** @type {((inputs?: Sign_In_No_AnswerInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_No_AnswerInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_no_answer(inputs)
+	if (locale === "ko") return __ko.sign_in_no_answer(inputs)
+	if (locale === "es") return __es.sign_in_no_answer(inputs)
+	return __en.sign_in_no_answer(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Open page" |
+*
+* @param {Sign_In_Open_PageInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_open_page = /** @type {((inputs?: Sign_In_Open_PageInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_Open_PageInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_open_page(inputs)
+	if (locale === "ko") return __ko.sign_in_open_page(inputs)
+	if (locale === "es") return __es.sign_in_open_page(inputs)
+	return __en.sign_in_open_page(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Sign in with your {account} account to track usage." |
+*
+* @param {Sign_In_To_Track_UsageInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_to_track_usage = /** @type {((inputs: Sign_In_To_Track_UsageInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_To_Track_UsageInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_to_track_usage(inputs)
+	if (locale === "ko") return __ko.sign_in_to_track_usage(inputs)
+	if (locale === "es") return __es.sign_in_to_track_usage(inputs)
+	return __en.sign_in_to_track_usage(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Try again" |
+*
+* @param {Sign_In_Try_AgainInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_try_again = /** @type {((inputs?: Sign_In_Try_AgainInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_Try_AgainInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_try_again(inputs)
+	if (locale === "ko") return __ko.sign_in_try_again(inputs)
+	if (locale === "es") return __es.sign_in_try_again(inputs)
+	return __en.sign_in_try_again(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Use the terminal" |
+*
+* @param {Sign_In_Use_TerminalInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_use_terminal = /** @type {((inputs?: Sign_In_Use_TerminalInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_Use_TerminalInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_use_terminal(inputs)
+	if (locale === "ko") return __ko.sign_in_use_terminal(inputs)
+	if (locale === "es") return __es.sign_in_use_terminal(inputs)
+	return __en.sign_in_use_terminal(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "Waiting for you to approve it in the browser…" |
+*
+* @param {Sign_In_WaitingInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_waiting = /** @type {((inputs?: Sign_In_WaitingInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_WaitingInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs = {}, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_waiting(inputs)
+	if (locale === "ko") return __ko.sign_in_waiting(inputs)
+	if (locale === "es") return __es.sign_in_waiting(inputs)
+	return __en.sign_in_waiting(inputs)
+});
+/**
+* | output |
+* | --- |
+* | "With your {account} account" |
+*
+* @param {Sign_In_With_AccountInputs} inputs
+* @param {{ locale?: "en" | "pt-BR" | "ko" | "es" }} options
+* @returns {LocalizedString}
+*/
+export const sign_in_with_account = /** @type {((inputs: Sign_In_With_AccountInputs, options?: { locale?: "en" | "pt-BR" | "ko" | "es" }) => LocalizedString) & import('../runtime.js').MessageMetadata<Sign_In_With_AccountInputs, { locale?: "en" | "pt-BR" | "ko" | "es" }, {}>} */ ((inputs, options = {}) => {
+	const locale = experimentalStaticLocale ?? options.locale ?? getLocale()
+	if (locale === "pt-BR") return __pt_br2.sign_in_with_account(inputs)
+	if (locale === "ko") return __ko.sign_in_with_account(inputs)
+	if (locale === "es") return __es.sign_in_with_account(inputs)
+	return __en.sign_in_with_account(inputs)
 });
 /**
 * | output |
