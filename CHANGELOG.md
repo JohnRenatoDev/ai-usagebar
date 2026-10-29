@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+### Fixed
+
+- **Rejected quota caches no longer bypass an active HTTP 429 backoff.**
+  SuperGrok and Antigravity's remote fallback keep the five-minute wait after
+  a cached window ends, and Synthetic keeps it when upgrading from its old
+  quota format. SuperGrok also starts the wait when a 429 arrives with no
+  usable cached figure. Valid snapshots remain available as stale data;
+  otherwise the entry shows the rate-limit countdown instead of retrying
+  immediately (#522).
+
 ## [1.45.0] — 2026-10-27
 
 ### Added
