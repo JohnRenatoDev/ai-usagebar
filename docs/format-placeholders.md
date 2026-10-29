@@ -22,6 +22,25 @@ reset counts down to the next regeneration tick. `{synthetic_requests}` and
 `{synthetic_limit}` carry the weekly credits used and budget when the plan
 reports them, and expand to an empty string on percentage-only plans.
 
+DeepRelay (`--vendor deeprelay`, short name `drl`) supplies
+`{deeprelay_pct}`, `{deeprelay_reset}`, `{deeprelay_elapsed}`,
+`{deeprelay_pace}`, `{deeprelay_pace_indicator}`,
+`{deeprelay_monthly_input_pct}`, `{deeprelay_monthly_input}` (the raw
+`used / limit` in weighted tokens), `{deeprelay_monthly_output_pct}`,
+`{deeprelay_monthly_output}`, `{deeprelay_weekly_input_pct}`,
+`{deeprelay_weekly_input}`, `{deeprelay_weekly_output_pct}`,
+`{deeprelay_weekly_output}`, `{deeprelay_weekly_pace}`,
+`{deeprelay_weekly_pace_indicator}`, `{deeprelay_backstop_pct}`,
+`{deeprelay_backstop}` (`$used / $ceiling`), `{deeprelay_balance}`,
+`{deeprelay_payg}` (wallet-billed calls in the last 24 h), and
+`{deeprelay_searches}`, plus the generic `{icon}`, `{plan}`, `{vendor_short}`,
+`{session_pct}`, `{session_reset}`, `{session_elapsed}`, `{weekly_pct}`,
+`{weekly_reset}`, and `{weekly_elapsed}`. `{deeprelay_pct}` is the **monthly**
+meter closest to its ceiling, which is also the bar's headline; the generic
+`session_*` aliases carry that same monthly window because DeepRelay has no
+5-hour session, and `weekly_*` carries the rolling 7-day caps. The weekly caps
+slide rather than reset, so every weekly reset placeholder is empty by design.
+
 ## Cross-provider formats
 
 `{vendor_short}` identifies the active provider:
@@ -42,7 +61,7 @@ reports them, and expand to an empty string on percentage-only plans.
 | Ollama Cloud | `oll` | SuperGrok | `sgk` |
 | Devin | `dvn` | Cline | `cln` |
 | Muse Code | `msc` | Synthetic | `syn` |
-| Droid | `drd` | | |
+| Droid | `drd` | DeepRelay | `drl` |
 
 The same codes ride the `ai-usagebar usage --json` report as each entry's
 `short_name`, so a native frontend can draw a Waybar-style provider tag without
