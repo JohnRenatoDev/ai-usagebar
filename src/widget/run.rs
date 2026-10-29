@@ -196,7 +196,7 @@ fn validate_vendor_options(cli: &Cli, vendor: Vendor) -> Result<()> {
         return Err(AppError::Other(
             "--account is supported only for Claude, Codex (OpenAI), GitHub Copilot, Devin, and \
              the API-key vendors with a [[<vendor>.accounts]] array: Z.AI, OpenRouter, \
-             DeepSeek, DeepInfra, Kilo, Novita, Moonshot, Grok, MiniMax, and OrcaRouter"
+             DeepSeek, DeepInfra, Kilo, Novita, Moonshot, Grok, MiniMax, OrcaRouter, and Lyceum"
                 .into(),
         ));
     }
