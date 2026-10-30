@@ -65,6 +65,7 @@ desktop-test:
 	node gnome-extension/layout.test.mjs
 	node gnome-extension/report-model.test.mjs
 	node gnome-extension/prefs.test.mjs
+	node gnome-extension/terminal.test.mjs
 	node kde-plasmoid/plasmoid-logic.test.mjs
 	node windows/popover/popover.test.mjs
 
@@ -76,6 +77,7 @@ popover-ssr-test:
 
 plugin-test:
 	node omarchy/model.test.mjs
+	node omarchy/priority.test.mjs
 	node omarchy/notice.test.mjs
 
 # Renders the real SettingsView twice through Quickshell's offscreen backend.

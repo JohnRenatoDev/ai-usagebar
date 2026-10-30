@@ -2,6 +2,18 @@
 
 ### Added
 
+- **Omarchy: a usage priorities view.** Settings → Priorities turns on a
+  second view of the popup that lists every provider in the order worth using
+  it, from `usage --json --priorities`: a card per provider with its state
+  and the projected unused quota, and on hover or click the numbers behind its
+  position. A switcher at the bottom of the panel, or `p`, opens it. An urgent
+  quota (one that resets soon with a large share projected unused) shows in
+  red in the bar even when the optional bar shortcut is off; the thresholds
+  are in the same section. Off by default, and while off the plugin runs the
+  plain `usage --json` and nothing is recorded. A provider hidden from the bar
+  neither alerts nor is recommended there. On a vertical bar the alert is the
+  bar's own icon, and no hidden chip takes clicks.
+
 - **DeepRelay.** The monthly plan's four weighted-token meters — monthly input
   and output allowance, plus the rolling 7-day caps that slide instead of
   resetting — from `GET /v1/billing/subscription` (scope `billing:read`), with
@@ -12,6 +24,11 @@
   tooltip. Key from `DEEPRELAY_API_KEY` or an inline `api_key`.
 
 ### Fixed
+
+- **GNOME Shell 51 and Ptyxis terminal support.** The extension now declares
+  Shell 51 compatibility, opens commands in Fedora's Ptyxis terminal, and
+  restores `~/.local/bin` when GNOME starts preferences with a minimal `PATH`
+  (#550, #551, #552).
 
 - **Google Antigravity `{icon}` placeholder uses the vendor bar icon.**
   The generic `{icon}` placeholder now outputs Antigravity's bar icon (`agy`)
