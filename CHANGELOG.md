@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+### Added
+
+- **Omarchy: a usage priorities view.** Settings → Priorities turns on a
+  second view of the popup that lists every provider in the order worth using
+  it, from `usage --json --priorities`: a card per provider with its state
+  and the projected unused quota, and on hover or click the numbers behind its
+  position. A switcher at the bottom of the panel, or `p`, opens it. An urgent
+  quota (one that resets soon with a large share projected unused) shows in
+  red in the bar even when the optional bar shortcut is off; the thresholds
+  are in the same section. Off by default, and while off the plugin runs the
+  plain `usage --json` and nothing is recorded. A provider hidden from the bar
+  neither alerts nor is recommended there. On a vertical bar the alert is the
+  bar's own icon, and no hidden chip takes clicks.
+
 ### Fixed
 
 - **Google Antigravity `{icon}` placeholder uses the vendor bar icon.**

@@ -339,7 +339,7 @@ assert.match(barWidgetSource, /function\s+triggerPress\s*\(buttonCode\)/);
 assert.match(barWidgetSource, /root\.panelItem\.openEntry\(chipHit\.chip\.id\s*\|\|\s*""\)/);
 // Classic alarm chrome when colour-coding is off; RAG colours replace it when on.
 assert.match(barWidgetSource, /active:\s*!root\.colorCodeUsage\s*&&\s*root\.alarming/);
-assert.match(barWidgetSource, /text:\s*root\.alarming\s*\?\s*"󰅙"\s*:\s*"󰚩"/);
+assert.match(barWidgetSource, /text:\s*root\.urgentPriority\s*\?\s*"󰀦"\s*:\s*root\.alarming\s*\?\s*"󰅙"\s*:\s*"󰚩"/);
 assert.doesNotMatch(barWidgetSource, /\bIpcHandler\s*\{/);
 
 const panelSource = fs.readFileSync(new URL('./Panel.qml', import.meta.url), 'utf8');
@@ -490,7 +490,7 @@ assert.match(panelSource, /I18n\.displayLabel\(/);
 assert.match(panelSource, /I18n\.displayDetail\(/);
 assert.match(panelSource, /I18n\.tipPoolLine\(/);
 // Settings hero: long copy wraps under the hero, not inside the detail pill.
-assert.match(panelSource, /detail:\s*root\.settingsOpen\s*\?\s*""/);
+assert.match(panelSource, /detail:\s*root\.settingsOpen\s*\|\|\s*root\.priorityOpen\s*\?\s*""/);
 assert.match(panelSource, /root\.tr\("hero\.settings_detail"\)/);
 assert.match(panelSource, /I18n\.displayLabel\(root\.uiLocale,\s*detailRow\.row\.label\)/);
 assert.match(settingsViewSource, /I18n\.displaySecretLabel\(/);
@@ -1045,7 +1045,7 @@ assert.equal(model.launchErrorMessage(0, ''), 'The usage command failed without 
 // The usage command must stay behind a helper that can emit exit 127 when the
 // binary is absent, without opening a shell-injection boundary.
 assert.match(panelSource,
-  /command:\s*\["\/usr\/bin\/env",\s*root\.reportBinary,\s*"usage",\s*"--json"\]/);
+  /command:\s*\["\/usr\/bin\/env",\s*root\.reportBinary,\s*"usage",\s*"--json"\]\.concat\(root\.showPriorities\s*\?\s*\["--priorities",\s*"--recent-hours",\s*String\(root\.recentHours\),\s*"--alert-unused-percent",\s*String\(root\.alertUnusedPercent\),\s*"--alert-hours",\s*String\(root\.alertHours\)\]\s*:\s*\[\]\)/);
 // reportBinary/tuiBinary default to the binaries on PATH and reach a shell
 // only through Util.shellQuote.
 assert.match(panelSource, /setting\("reportBinary", "ai-usagebar"\)/);
@@ -2155,8 +2155,8 @@ assert.equal(model.cursorPoolOf(null), '');
   assert.match(panel, /readonly property var valueView:\s*Model\.metricValueView\(row,\s*root\.showAs\)/);
   assert.match(settingsForm, /property string openSection:\s*"display"/);
   assert.match(settingsForm, /function toggleSection\(id\) \{\s*openSection = openSection === id \? "" : id\s*\}/);
-  assert.equal((settingsForm.match(/^    Disclosure \{/gm) || []).length, 8);
-  for (const id of ['display', 'language', 'barWindow', 'showAs', 'metrics', 'primary', 'providers', 'credentials']) {
+  assert.equal((settingsForm.match(/^    Disclosure \{/gm) || []).length, 9);
+  for (const id of ['display', 'priorities', 'language', 'barWindow', 'showAs', 'metrics', 'primary', 'providers', 'credentials']) {
     assert.match(settingsForm, new RegExp(`onToggled: root\\.toggleSection\\("${id}"\\)`), `${id} folds`);
     assert.match(settingsForm, new RegExp(`visible: root\\.openSection === "${id}"`), `${id} body`);
   }
@@ -2168,7 +2168,7 @@ assert.equal(model.cursorPoolOf(null), '');
   // the one custom pointer target (Disclosure) must keep equivalent keyboard
   // activation and visibly claim focus on click.
   const buttons = qmlBlocks(settingsForm, 'Button');
-  assert.equal(buttons.length, 5, 'all settings action buttons are covered');
+  assert.equal(buttons.length, 6, 'all settings action buttons are covered');
   for (const button of buttons)
     assert.match(button, /\bfocusable:\s*true\b/, 'every settings Button is in the tab order');
   const panelActionButtons = qmlBlocks(settingsForm, 'PanelActionButton');
@@ -2197,7 +2197,7 @@ assert.equal(model.cursorPoolOf(null), '');
   assert.match(panel, /Model\.booleanSetting\(setting\("brandIcons",\s*true\),\s*true\)/);
   assert.match(panel, /barWindow,\s*showAs,\s*brandIcons\)/);
   assert.match(panel, /persistWidgetSettings\(\{\s*brandIcons:\s*next\s*\}\)/);
-  assert.match(panel, /brand: root\.settingsOpen \|\| !root\.brandIcons \? "" : Model\.brandIconFile\(root\.entry\)/);
+  assert.match(panel, /brand: root\.priorityOpen \|\| root\.settingsOpen \|\| !root\.brandIcons \? "" : Model\.brandIconFile\(root\.entry\)/);
   assert.match(settingsForm, /signal brandIconsRequested\(bool enabled\)/);
   const displayKeys = ['showValue', 'brandIcons', 'showProvider', 'colorCodeUsage', 'showAll'];
   assert.deepEqual(displayKeys.map(key => manifest.barWidget.defaults[key]), [true, true, false, false, false]);
@@ -2291,7 +2291,7 @@ assert.equal(model.cursorPoolOf(null), '');
 // Qualifying the singleton is the form Omarchy's own plugin documentation
 // asks for, and it reads the same on every Qt version.
 {
-  for (const file of ['Panel.qml', 'BarWidget.qml', 'BrandMark.qml', 'SettingsView.qml']) {
+  for (const file of ['Panel.qml', 'BarWidget.qml', 'BrandMark.qml', 'SettingsView.qml', 'PriorityCard.qml']) {
     const source = fs.readFileSync(new URL(`./${file}`, import.meta.url), 'utf8');
     assert.match(source, /^import qs\.Commons as Commons$/m, `${file} imports the palette with an alias`);
     assert.doesNotMatch(source, /(^|[^.\w])Color\.[a-zA-Z]/, `${file} has no bare Color. reference`);
@@ -2315,5 +2315,64 @@ assert.match(panelSource, /root\.tr\("notice\.short\." \+ errorBadge\.notice\.ca
 assert.equal(i18n.displayLabel('pt-BR', 'Weekly (7d)'), i18n.t('pt-BR', 'metrics.window_weekly'));
 assert.equal(i18n.displayLabel('es', 'Session (5h)'), i18n.t('es', 'metrics.window_session'));
 assert.equal(i18n.displayLabel('en', 'Weekly (7d)'), 'Weekly (7d)');
+
+// Usage priorities stay opt-in and inside the same native popup.
+assert.equal(manifest.barWidget.defaults.showPriorities, false);
+assert.match(panelSource, /Model\.booleanSetting\(setting\("showPriorities", false\), false\)/);
+assert.match(panelSource, /visible: root\.priorityOpen && !root\.settingsOpen/);
+assert.match(panelSource, /Keys\.onEscapePressed: root\.priorityOpen = false/);
+assert.match(panelSource, /\(text === "p" \|\| text === "P"\)\) root\.openPriorities\(\)/);
+assert.match(settingsViewSource, /signal showPrioritiesRequested\(bool enabled\)/);
+for (const key of ['showPriorities', 'showPriorityShortcut', 'recentHours', 'priorityAlert', 'alertUnusedPercent', 'alertHours'])
+  assert.ok(manifest.barWidget.schema.some(row => row.key === key), `${key} is a documented setting`);
+assert.deepEqual(['priorityAlert', 'alertUnusedPercent', 'alertHours'].map(k => manifest.barWidget.defaults[k]), [true, 50, 24]);
+// A ranking computed with other settings is dropped, never shown as current.
+assert.match(panelSource, /alert\.unused_percent === alertUnusedPercent && alert\.hours === alertHours/);
+assert.match(panelSource, /ranking = current \? \(priorityReport\.ranking \|\| \[\]\) : \[\]/);
+// The report's recommendation is not read: the bar derives its own from the
+// ranking, minus the providers hidden from the bar (#487).
+assert.doesNotMatch(panelSource, /property var recommendation|priorityReport\.recommendation/);
+assert.match(panelSource, /Priority\.stateKey\(ranking\[i\]\) === "urgent" && !hiddenFromBar\(ranking\[i\]\.entry_id\)/);
+assert.match(panelSource, /ranking\[i\]\.status === "priority" && !hiddenFromBar\(ranking\[i\]\.entry_id\)/);
+assert.match(panelSource, /if \(!showPriorities \|\| !priorityAlert\) return null/);
+// The view switcher is a footer outside the scrolling content.
+assert.match(panelSource, /id: viewFooter[\s\S]*?visible: root\.showPriorities && !root\.settingsOpen[\s\S]*?anchors\.bottom: parent\.bottom/);
+assert.ok(panelSource.indexOf('id: viewSwitcher') < panelSource.indexOf('id: panelFlick'), 'footer is not inside the Flickable');
+assert.match(panelSource, /anchors\.bottom: viewFooter\.visible \? viewFooter\.top : parent\.bottom/);
+assert.match(panelSource, /fittedContentHeight\(column\.implicitHeight \+ viewFooter\.reserved/);
+// Cards: facts and notes from Priority.js, the accessible text built from both.
+{
+  const card = fs.readFileSync(new URL('./PriorityCard.qml', import.meta.url), 'utf8');
+  assert.match(panelSource, /facts: root\.priorityFacts\(modelData\)\s*notes: root\.priorityNotes\(modelData\)/);
+  assert.match(panelSource, /function priorityDetail\(row\) \{\s*var lines = priorityFacts\(row\)/);
+  assert.match(card, /model: root\.facts/);
+  assert.match(card, /model: root\.notes/);
+  assert.match(card, /text: root\.statusText/);
+}
+// Bar: usage chips first, then the priority chip. An urgent quota shows even
+// without the shortcut, and the chip presses like a provider chip.
+assert.ok(barWidgetSource.indexOf('id: chipRepeater') < barWidgetSource.indexOf('id: priorityHit'), 'usage chips precede the priority indicator');
+assert.match(barWidgetSource, /showPriorityShortcut \|\| urgentPriority/);
+assert.match(barWidgetSource, /color: root\.urgentPriority \? root\.priorityAlertColor : button\.foreground/);
+assert.match(barWidgetSource, /id: priorityHit[\s\S]*?buttonCode === Qt\.RightButton\) root\.launchDashboard\(\)[\s\S]*?root\.panelItem\.togglePriorities\(\)/);
+assert.match(panelSource, /function togglePriorities\(\) \{\s*if \(opened && priorityOpen\) close\(\)\s*else openPriorities\(\)/);
+// A vertical bar hides the chip row, so the priority chip carries the same
+// guard and is never registered as a click target there (#293).
+assert.match(barWidgetSource, /readonly property bool priorityChipShown: !\(root\.bar && root\.bar\.vertical\)\s*&& /);
+assert.match(barWidgetSource, /id: priorityHit\s*visible: root\.priorityChipShown/);
+assert.match(barWidgetSource, /if \(host && root\.priorityChipShown\) \{\s*host\.registerClickTarget\(priorityHit\)\s*priorityTargetHost = host/);
+assert.doesNotMatch(barWidgetSource, /(?<!un)registerClickTarget\(priorityHit\)[\s\S]*(?<!un)registerClickTarget\(priorityHit\)/);
+assert.match(barWidgetSource, /onPriorityChipShownChanged: Qt\.callLater\(root\.syncChipTargets\)/);
+// The slot hands the widget a placeholder api first and the plugin's own
+// later, and the api that registered a target keeps owning it. The chip is
+// static, so it leaves the api it joined before joining another, the way
+// WidgetButton tracks registeredBar; otherwise the bar ignores it and its
+// clicks land on the button.
+assert.match(barWidgetSource, /function syncPriorityTarget\(host\) \{\s*if \(priorityTargetHost\) priorityTargetHost\.unregisterClickTarget\(priorityHit\)\s*priorityTargetHost = null/);
+assert.match(barWidgetSource, /syncPriorityTarget\(null\)\s*return\s*\}/, 'losing the bar releases the chip');
+assert.match(barWidgetSource, /Component\.onDestruction: syncPriorityTarget\(null\)/);
+// A provider chip pressed while priorities show switches to its usage view
+// instead of closing the panel.
+assert.match(panelSource, /if \(opened && i === entryIndex && !priorityOpen\) \{\s*close\(\)/);
 
 console.log('Omarchy model tests passed');
