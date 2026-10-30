@@ -14,6 +14,12 @@
   neither alerts nor is recommended there. On a vertical bar the alert is the
   bar's own icon, and no hidden chip takes clicks.
 
+### Fixed
+
+- **Google Antigravity `{icon}` placeholder uses the vendor bar icon.**
+  The generic `{icon}` placeholder now outputs Antigravity's bar icon (`agy`)
+  rather than inheriting DeepSeek's mark (`󰧑`) (#543).
+
 ## [1.46.0] — 2026-10-29
 
 ### Added
