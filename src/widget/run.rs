@@ -193,12 +193,15 @@ fn validate_vendor_options(cli: &Cli, vendor: Vendor) -> Result<()> {
         )
         && !Config::API_KEY_ACCOUNT_VENDORS.contains(&vendor.to_id())
     {
-        return Err(AppError::Other(
-            "--account is supported only for Claude, Codex (OpenAI), GitHub Copilot, Devin, and \
-             the API-key vendors with a [[<vendor>.accounts]] array: Z.AI, OpenRouter, \
-             DeepSeek, DeepInfra, Kilo, Novita, Moonshot, Grok, MiniMax, and OrcaRouter"
-                .into(),
-        ));
+        let api_key_vendors = Config::API_KEY_ACCOUNT_VENDORS
+            .iter()
+            .map(|vendor| vendor.display_name())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(AppError::Other(format!(
+            "--account is supported only for Claude, Codex (OpenAI), GitHub Copilot, Devin, \
+                 and the API-key vendors with a [[<vendor>.accounts]] array: {api_key_vendors}"
+        )));
     }
     if cli.desktop && vendor != Vendor::Anthropic {
         return Err(AppError::Other(
@@ -1838,6 +1841,21 @@ mod tests {
             })
             .collect();
         assert_eq!(accepted, Config::API_KEY_ACCOUNT_VENDORS);
+    }
+
+    #[test]
+    fn account_flag_error_lists_every_api_key_account_vendor() {
+        let cli = cli_with(Some("work"), None, Some("/tmp/cache"));
+        let err = validate_vendor_options(&cli, Vendor::Ollama)
+            .unwrap_err()
+            .to_string();
+        for vendor in Config::API_KEY_ACCOUNT_VENDORS {
+            assert!(
+                err.contains(vendor.display_name()),
+                "expected {err} to list {}",
+                vendor.display_name()
+            );
+        }
     }
 
     #[test]

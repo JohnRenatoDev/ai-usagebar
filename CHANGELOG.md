@@ -16,6 +16,10 @@
 
 ### Fixed
 
+- **`--account` error message lists Lyceum.** The validation error for
+  unsupported `--account` providers now includes Lyceum among the
+  accepted API-key account vendors (#545).
+
 - **GNOME Shell 51 and Ptyxis terminal support.** The extension now declares
   Shell 51 compatibility, opens commands in Fedora's Ptyxis terminal, and
   restores `~/.local/bin` when GNOME starts preferences with a minimal `PATH`
