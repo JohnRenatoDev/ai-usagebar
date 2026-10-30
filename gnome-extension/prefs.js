@@ -113,8 +113,10 @@ function vendorConfigured(v) {
 }
 
 // Open the user's terminal running `command` (login shell, so claude/codex are on PATH).
+// Fedora's default (ptyxis) leads the list; all candidates take `-- command`.
 function spawnInTerminal(command) {
     for (const argv of [
+        ['ptyxis', '--', 'bash', '-lc', command],
         ['kgx', '--', 'bash', '-lc', command],
         ['gnome-terminal', '--', 'bash', '-lc', command],
         ['xterm', '-e', 'bash', '-lc', command],
@@ -130,10 +132,15 @@ function spawnInTerminal(command) {
 }
 
 function spawnArgvInTerminal(commandArgv) {
+    // The prefs/GNOME process PATH is minimal, so run through a login shell
+    // and put ~/.local/bin (agy, ai-usagebar-tui) first, like spawnInTerminal.
+    const quoted = commandArgv.map(a => GLib.shell_quote(a)).join(' ');
+    const line = `export PATH="$HOME/.local/bin:$PATH" && ${quoted}`;
     for (const argv of [
-        ['kgx', '--', ...commandArgv],
-        ['gnome-terminal', '--', ...commandArgv],
-        ['xterm', '-e', ...commandArgv],
+        ['ptyxis', '--', 'bash', '-lc', line],
+        ['kgx', '--', 'bash', '-lc', line],
+        ['gnome-terminal', '--', 'bash', '-lc', line],
+        ['xterm', '-e', 'bash', '-lc', line],
     ]) {
         if (!GLib.find_program_in_path(argv[0]))
             continue;

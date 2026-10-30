@@ -688,10 +688,12 @@ class AiUsageBarIndicator extends PanelMenu.Button {
     _openTui() {
         const tui = GLib.find_program_in_path('ai-usagebar-tui') ||
             `${GLib.get_home_dir()}/.cargo/bin/ai-usagebar-tui`;
+        const line = `export PATH="$HOME/.local/bin:$PATH" && ${GLib.shell_quote(tui)}`;
         const candidates = [
-            ['kgx', '--', tui],
-            ['gnome-terminal', '--', tui],
-            ['xterm', '-e', tui],
+            ['ptyxis', '--', 'bash', '-lc', line],
+            ['kgx', '--', 'bash', '-lc', line],
+            ['gnome-terminal', '--', 'bash', '-lc', line],
+            ['xterm', '-e', 'bash', '-lc', line],
         ];
         for (const argv of candidates) {
             if (!GLib.find_program_in_path(argv[0]))
