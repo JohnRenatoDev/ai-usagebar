@@ -355,7 +355,12 @@ make omarchy-visual-test
 tests in `omarchy/priority.test.mjs` and the notice tests in
 `omarchy/notice.test.mjs`. The visual test renders the real settings component,
 the usage view's notices and the priority cards (English and pt-BR) in dark and light fixture
-themes through Quickshell's offscreen backend. It does not open a window or
+themes through Quickshell's offscreen backend. It also renders the whole panel
+(`panel-*.png`): tabs, header, meters near and at the limit, a balance and the
+priorities view, from a synthetic report that `visual-tests/fake-ai-usagebar`
+serves, with a stand-in for the layer-shell window. The brand marks need an
+OpenGL context; without a GPU, set `AI_USAGEBAR_VISUAL_BACKEND=software` and the
+logos render blank. It does not open a window, run the real `ai-usagebar` or
 read credentials. Review the generated PNGs under
 `target/omarchy-visual-scenarios/`; they are local test artifacts, not golden
 pixel snapshots.
