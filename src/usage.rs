@@ -1169,7 +1169,8 @@ pub struct DeepRelayModelUsage {
 
 impl DeepRelayModelUsage {
     pub fn weighted_total(&self) -> i64 {
-        self.weighted_input_tokens + self.weighted_output_tokens
+        self.weighted_input_tokens
+            .saturating_add(self.weighted_output_tokens)
     }
 }
 

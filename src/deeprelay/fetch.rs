@@ -255,7 +255,7 @@ mod tests {
             .with_status(200)
             .with_body(
                 r#"{"subscribed":false,"plan":null,"quota":null,
-                    "usage":{"recent_payg_calls_24h":0}}"#,
+                    "usage":null}"#,
             )
             .create_async()
             .await;

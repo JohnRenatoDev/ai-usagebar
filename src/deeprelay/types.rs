@@ -81,15 +81,10 @@ pub struct Quota {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Usage {
-    #[serde(default)]
     pub weighted_input_tokens: i64,
-    #[serde(default)]
     pub weighted_output_tokens: i64,
-    #[serde(default)]
     pub weekly_weighted_input_tokens: i64,
-    #[serde(default)]
     pub weekly_weighted_output_tokens: i64,
-    #[serde(default)]
     pub cost_micro_cents: i64,
     #[serde(default)]
     pub recent_payg_calls_24h: Option<i64>,
@@ -158,8 +153,9 @@ impl CachedPayload {
 
 impl Subscription {
     pub fn snapshot(&self) -> Result<DeepRelaySnapshot> {
-        let period_start = parse_instant(self.current_period_start.as_deref());
-        let period_end = parse_instant(self.current_period_end.as_deref());
+        let period_start =
+            parse_instant(self.current_period_start.as_deref(), "current_period_start")?;
+        let period_end = parse_instant(self.current_period_end.as_deref(), "current_period_end")?;
         let usage = self.usage.as_ref();
         let quota = self.quota.as_ref();
 
@@ -284,9 +280,13 @@ fn cents_to_dollars(value: i64) -> f64 {
     value as f64 / 100.0
 }
 
-fn parse_instant(raw: Option<&str>) -> Option<DateTime<Utc>> {
-    raw.and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
-        .map(|when| when.with_timezone(&Utc))
+fn parse_instant(raw: Option<&str>, field: &str) -> Result<Option<DateTime<Utc>>> {
+    raw.map(|raw| {
+        DateTime::parse_from_rfc3339(raw)
+            .map(|when| when.with_timezone(&Utc))
+            .map_err(|_| AppError::Schema(format!("DeepRelay {field} is not an RFC 3339 instant")))
+    })
+    .transpose()
 }
 
 /// The heaviest models of the billing period, for the tooltip. The wire ids
@@ -307,11 +307,20 @@ fn top_models(usage: Option<&Usage>) -> Vec<DeepRelayModelUsage> {
             weighted_input_tokens: model.weighted_input_tokens.max(0),
             weighted_output_tokens: model.weighted_output_tokens.max(0),
         })
-        .filter(|model| model.weighted_input_tokens + model.weighted_output_tokens > 0)
+        .filter(|model| {
+            model
+                .weighted_input_tokens
+                .saturating_add(model.weighted_output_tokens)
+                > 0
+        })
         .collect();
     models.sort_by(|a, b| {
-        let a_total = a.weighted_input_tokens + a.weighted_output_tokens;
-        let b_total = b.weighted_input_tokens + b.weighted_output_tokens;
+        let a_total = a
+            .weighted_input_tokens
+            .saturating_add(a.weighted_output_tokens);
+        let b_total = b
+            .weighted_input_tokens
+            .saturating_add(b.weighted_output_tokens);
         b_total.cmp(&a_total)
     });
     models.truncate(MODEL_ROWS);
@@ -375,17 +384,16 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_weekly_block_is_no_data_not_zero() {
-        let snapshot = parsed(
+    fn an_incomplete_usage_object_is_rejected_instead_of_fabricating_zero() {
+        let error = serde_json::from_str::<Subscription>(
             r#"{"subscribed":true,"plan":{"name":"Base"},
                 "quota":{"input_tokens_monthly":500000000,"output_tokens_monthly":50000000,
                          "weekly_input_tokens":125000000,"weekly_output_tokens":12500000,
                          "max_usage_micro_cents":10000000000},
                 "usage":{"weighted_input_tokens":500000000,"weighted_output_tokens":0}}"#,
-        );
-        assert_eq!(snapshot.monthly_input.and_then(|m| m.pct()), Some(100));
-        assert_eq!(snapshot.weekly_input.and_then(|m| m.pct()), Some(0));
-        assert_eq!(snapshot.models.len(), 0);
+        )
+        .expect_err("missing usage meters are unknown, not zero");
+        assert!(error.to_string().contains("weekly_weighted_input_tokens"));
     }
 
     #[test]
@@ -395,7 +403,9 @@ mod tests {
                 "quota":{"input_tokens_monthly":0,"output_tokens_monthly":0,
                          "weekly_input_tokens":0,"weekly_output_tokens":0,
                          "max_usage_micro_cents":0},
-                "usage":{}}"#,
+                "usage":{"weighted_input_tokens":0,"weighted_output_tokens":0,
+                         "weekly_weighted_input_tokens":0,"weekly_weighted_output_tokens":0,
+                         "cost_micro_cents":0}}"#,
         );
         assert!(snapshot.monthly_input.is_none());
         assert_eq!(snapshot.backstop_limit_usd, None);
@@ -403,7 +413,9 @@ mod tests {
         let error = serde_json::from_str::<Subscription>(
             r#"{"subscribed":true,"quota":{"input_tokens_monthly":10,"output_tokens_monthly":10,
                 "weekly_input_tokens":10,"weekly_output_tokens":10,
-                "max_usage_micro_cents":10},"usage":{"weighted_input_tokens":-1}}"#,
+                "max_usage_micro_cents":10},"usage":{"weighted_input_tokens":-1,
+                "weighted_output_tokens":0,"weekly_weighted_input_tokens":0,
+                "weekly_weighted_output_tokens":0,"cost_micro_cents":0}}"#,
         )
         .unwrap()
         .snapshot()
@@ -414,6 +426,32 @@ mod tests {
     #[test]
     fn a_body_that_is_not_a_subscription_is_a_schema_mismatch() {
         assert!(serde_json::from_str::<Subscription>(r#"{"error":"unauthorized"}"#).is_err());
+    }
+
+    #[test]
+    fn a_malformed_period_instant_is_rejected() {
+        let subscription: Subscription = serde_json::from_str(
+            r#"{"subscribed":false,"current_period_end":"tomorrow","usage":null}"#,
+        )
+        .unwrap();
+        let error = subscription.snapshot().expect_err("invalid period instant");
+        assert!(matches!(error, AppError::Schema(_)));
+        assert!(error.to_string().contains("current_period_end"));
+    }
+
+    #[test]
+    fn model_totals_saturate_at_the_wire_integer_limit() {
+        let usage = Usage {
+            by_model: vec![ModelUsage {
+                model: "deeprelay/large".into(),
+                weighted_input_tokens: i64::MAX,
+                weighted_output_tokens: i64::MAX,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let models = top_models(Some(&usage));
+        assert_eq!(models[0].weighted_total(), i64::MAX);
     }
 
     #[test]
