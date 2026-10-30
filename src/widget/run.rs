@@ -193,11 +193,16 @@ fn validate_vendor_options(cli: &Cli, vendor: Vendor) -> Result<()> {
         )
         && !Config::API_KEY_ACCOUNT_VENDORS.contains(&vendor.to_id())
     {
+        let api_key_vendors = Config::API_KEY_ACCOUNT_VENDORS
+            .iter()
+            .map(|vendor| vendor.display_name())
+            .collect::<Vec<_>>()
+            .join(", ");
         return Err(AppError::Other(
-            "--account is supported only for Claude, Codex (OpenAI), GitHub Copilot, Devin, and \
-             the API-key vendors with a [[<vendor>.accounts]] array: Z.AI, OpenRouter, \
-             DeepSeek, DeepInfra, Kilo, Novita, Moonshot, Grok, MiniMax, OrcaRouter, and Lyceum"
-                .into(),
+            format!(
+                "--account is supported only for Claude, Codex (OpenAI), GitHub Copilot, Devin, \
+                 and the API-key vendors with a [[<vendor>.accounts]] array: {api_key_vendors}"
+            ),
         ));
     }
     if cli.desktop && vendor != Vendor::Anthropic {
