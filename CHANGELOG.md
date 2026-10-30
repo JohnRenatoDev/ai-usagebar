@@ -16,6 +16,11 @@
 
 ### Fixed
 
+- **GNOME Shell 51 and Ptyxis terminal support.** The extension now declares
+  Shell 51 compatibility, opens commands in Fedora's Ptyxis terminal, and
+  restores `~/.local/bin` when GNOME starts preferences with a minimal `PATH`
+  (#550, #551, #552).
+
 - **Google Antigravity `{icon}` placeholder uses the vendor bar icon.**
   The generic `{icon}` placeholder now outputs Antigravity's bar icon (`agy`)
   rather than inheriting DeepSeek's mark (`󰧑`) (#543).
