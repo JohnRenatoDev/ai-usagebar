@@ -6,6 +6,10 @@
   unsupported `--account` providers now includes Lyceum among the
   accepted API-key account vendors (#545).
 
+- **Google Antigravity `{icon}` placeholder uses the vendor bar icon.**
+  The generic `{icon}` placeholder now outputs Antigravity's bar icon (`agy`)
+  rather than inheriting DeepSeek's mark (`󰧑`) (#543).
+
 ## [1.46.0] — 2026-10-29
 
 ### Added
