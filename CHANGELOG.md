@@ -11,6 +11,12 @@
   ceiling; the weekly caps, ceiling and wallet are rows in the report and the
   tooltip. Key from `DEEPRELAY_API_KEY` or an inline `api_key`.
 
+### Fixed
+
+- **Google Antigravity `{icon}` placeholder uses the vendor bar icon.**
+  The generic `{icon}` placeholder now outputs Antigravity's bar icon (`agy`)
+  rather than inheriting DeepSeek's mark (`󰧑`) (#543).
+
 ## [1.46.0] — 2026-10-29
 
 ### Added
