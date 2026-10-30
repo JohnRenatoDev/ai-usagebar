@@ -21,6 +21,7 @@ import {barMarkup, colorForDelta, colorForPct, disambiguateTags, field, FIELD, F
     isGrouped, MARKER, markerElapsed, paceGlyph, plainTextFromPango, selectPools,
     splitFormatOutput} from './marker-logic.js';
 import {commandFailure, errorLine, parseReport} from './report-model.js';
+import {terminalCandidates} from './terminal.js';
 
 const ROLE = 'ai-usagebar';
 
@@ -689,13 +690,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
         const tui = GLib.find_program_in_path('ai-usagebar-tui') ||
             `${GLib.get_home_dir()}/.cargo/bin/ai-usagebar-tui`;
         const line = `export PATH="$HOME/.local/bin:$PATH" && ${GLib.shell_quote(tui)}`;
-        const candidates = [
-            ['ptyxis', '--', 'bash', '-lc', line],
-            ['kgx', '--', 'bash', '-lc', line],
-            ['gnome-terminal', '--', 'bash', '-lc', line],
-            ['xterm', '-e', 'bash', '-lc', line],
-        ];
-        for (const argv of candidates) {
+        for (const argv of terminalCandidates(line)) {
             if (!GLib.find_program_in_path(argv[0]))
                 continue;
             try {
@@ -705,7 +700,7 @@ class AiUsageBarIndicator extends PanelMenu.Button {
                 // try the next terminal
             }
         }
-        Main.notify('AI Usage Bar', 'No terminal found (kgx / gnome-terminal / xterm).');
+        Main.notify('AI Usage Bar', 'No terminal found (ptyxis / kgx / gnome-terminal / xterm).');
     }
 
     destroy() {

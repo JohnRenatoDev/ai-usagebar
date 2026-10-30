@@ -7,6 +7,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
 import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
+import {terminalCandidates} from './terminal.js';
 
 // ── Vendor login / config ────────────────────────────────────────────────
 const VENDOR_AUTH = [
@@ -113,14 +114,8 @@ function vendorConfigured(v) {
 }
 
 // Open the user's terminal running `command` (login shell, so claude/codex are on PATH).
-// Fedora's default (ptyxis) leads the list; all candidates take `-- command`.
 function spawnInTerminal(command) {
-    for (const argv of [
-        ['ptyxis', '--', 'bash', '-lc', command],
-        ['kgx', '--', 'bash', '-lc', command],
-        ['gnome-terminal', '--', 'bash', '-lc', command],
-        ['xterm', '-e', 'bash', '-lc', command],
-    ]) {
+    for (const argv of terminalCandidates(command)) {
         if (!GLib.find_program_in_path(argv[0]))
             continue;
         try {
@@ -136,12 +131,7 @@ function spawnArgvInTerminal(commandArgv) {
     // and put ~/.local/bin (agy, ai-usagebar-tui) first, like spawnInTerminal.
     const quoted = commandArgv.map(a => GLib.shell_quote(a)).join(' ');
     const line = `export PATH="$HOME/.local/bin:$PATH" && ${quoted}`;
-    for (const argv of [
-        ['ptyxis', '--', 'bash', '-lc', line],
-        ['kgx', '--', 'bash', '-lc', line],
-        ['gnome-terminal', '--', 'bash', '-lc', line],
-        ['xterm', '-e', 'bash', '-lc', line],
-    ]) {
+    for (const argv of terminalCandidates(line)) {
         if (!GLib.find_program_in_path(argv[0]))
             continue;
         try {
