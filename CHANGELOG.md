@@ -14,6 +14,15 @@
   neither alerts nor is recommended there. On a vertical bar the alert is the
   bar's own icon, and no hidden chip takes clicks.
 
+- **DeepRelay.** The monthly plan's four weighted-token meters — monthly input
+  and output allowance, plus the rolling 7-day caps that slide instead of
+  resetting — from `GET /v1/billing/subscription` (scope `billing:read`), with
+  the per-period dollar usage ceiling, included web searches, and the
+  pay-as-you-go wallet read only for an account that has one or has started
+  billing past the plan. The bar headlines the monthly meter closest to its
+  ceiling; the weekly caps, ceiling and wallet are rows in the report and the
+  tooltip. Key from `DEEPRELAY_API_KEY` or an inline `api_key`.
+
 ### Fixed
 
 - **`--account` error message lists Lyceum.** The validation error for

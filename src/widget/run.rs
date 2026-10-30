@@ -16,6 +16,7 @@ use crate::config::Config;
 use crate::copilot;
 use crate::cursor;
 use crate::deepinfra;
+use crate::deeprelay;
 use crate::deepseek;
 use crate::error::{AppError, Result};
 use crate::grok;
@@ -182,6 +183,7 @@ async fn build_output(cli: &Cli) -> Result<WaybarOutput> {
         Vendor::Droid => droid_output(cli, &config).await,
         Vendor::MuseCode => muse_output(cli, &config).await,
         Vendor::Cline => cline_output(cli, &config).await,
+        Vendor::DeepRelay => deeprelay_output(cli, &config).await,
     }
 }
 
@@ -753,6 +755,35 @@ async fn synthetic_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
     let snapshot = outcome.snapshot.clone();
     let vendor_outcome: VendorOutcome = outcome.into();
     Ok(synthetic::vendor::render(
+        &vendor_outcome,
+        &snapshot,
+        &theme_from_cli(cli),
+        &RenderOpts::from_cli(cli),
+        Utc::now(),
+    ))
+}
+
+async fn deeprelay_output(cli: &Cli, config: &Config) -> Result<WaybarOutput> {
+    let (api_key, cache) = api_key_target(cli, config, VendorId::DeepRelay)?;
+    let client = http_client()?;
+    let endpoints = deeprelay::fetch::Endpoints::default();
+    let outcome = match fetch_api_keyed(
+        async {
+            deeprelay::fetch_snapshot(&client, &api_key, &cache, &endpoints, DEFAULT_TTL).await
+        },
+        &api_key,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) if error.is_transient() => {
+            return Ok(WaybarOutput::loading(cli.icon.as_deref()));
+        }
+        Err(error) => return Err(error),
+    };
+    let snapshot = outcome.snapshot.clone();
+    let vendor_outcome: VendorOutcome = outcome.into();
+    Ok(deeprelay::vendor::render(
         &vendor_outcome,
         &snapshot,
         &theme_from_cli(cli),
